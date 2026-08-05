@@ -34,6 +34,13 @@ public abstract class Annotation
     /// <summary>该标注影响到的区域，用于局部重绘与命中测试。</summary>
     public abstract Rect Bounds { get; }
 
+    /// <summary>
+    /// 平移一份副本。选区被移动时，标注要跟着「内容」走而不是跟着选框走 ——
+    /// 坐标是选区局部的，选区往右挪一格，标注的局部坐标就得往左挪一格，
+    /// 才能仍然盖在原来那块画面上。标注本身不可变，所以返回新对象。
+    /// </summary>
+    public abstract Annotation Translate(double dx, double dy);
+
     protected Pen CreatePen()
     {
         var brush = new SolidColorBrush(Stroke);
@@ -70,12 +77,20 @@ public sealed class RectangleAnnotation : Annotation
         dc.DrawRectangle(fill, Filled ? null : CreatePen(), Area);
     }
 
+    public override Annotation Translate(double dx, double dy) => new RectangleAnnotation
+    {
+        Area = Shift(Area, dx, dy), Filled = Filled, Stroke = Stroke, Thickness = Thickness,
+    };
+
     internal static Rect Inflate(Rect r, double by)
     {
         var result = r;
         result.Inflate(by, by);
         return result;
     }
+
+    internal static Rect Shift(Rect r, double dx, double dy)
+        => new(r.X + dx, r.Y + dy, r.Width, r.Height);
 }
 
 public sealed class EllipseAnnotation : Annotation
@@ -88,6 +103,11 @@ public sealed class EllipseAnnotation : Annotation
         => dc.DrawEllipse(null, CreatePen(),
             new Point(Area.X + Area.Width / 2, Area.Y + Area.Height / 2),
             Area.Width / 2, Area.Height / 2);
+
+    public override Annotation Translate(double dx, double dy) => new EllipseAnnotation
+    {
+        Area = RectangleAnnotation.Shift(Area, dx, dy), Stroke = Stroke, Thickness = Thickness,
+    };
 }
 
 public sealed class ArrowAnnotation : Annotation
@@ -136,6 +156,14 @@ public sealed class ArrowAnnotation : Annotation
         fill.Freeze();
         dc.DrawGeometry(fill, null, geometry);
     }
+
+    public override Annotation Translate(double dx, double dy) => new ArrowAnnotation
+    {
+        From = new Point(From.X + dx, From.Y + dy),
+        To = new Point(To.X + dx, To.Y + dy),
+        Stroke = Stroke,
+        Thickness = Thickness,
+    };
 }
 
 public sealed class InkAnnotation : Annotation
@@ -182,6 +210,15 @@ public sealed class InkAnnotation : Annotation
 
         dc.DrawGeometry(null, CreatePen(), geometry);
     }
+
+    public override Annotation Translate(double dx, double dy)
+    {
+        var moved = new Point[Points.Count];
+        for (int i = 0; i < Points.Count; i++)
+            moved[i] = new Point(Points[i].X + dx, Points[i].Y + dy);
+
+        return new InkAnnotation { Points = moved, Stroke = Stroke, Thickness = Thickness };
+    }
 }
 
 public sealed class TextAnnotation : Annotation
@@ -206,6 +243,16 @@ public sealed class TextAnnotation : Annotation
     public override void Draw(DrawingContext dc, IAnnotationContext context)
         => dc.DrawText(Build(), Origin);
 
+    public override Annotation Translate(double dx, double dy) => new TextAnnotation
+    {
+        Origin = new Point(Origin.X + dx, Origin.Y + dy),
+        Text = Text,
+        FontSize = FontSize,
+        PixelsPerDip = PixelsPerDip,
+        Stroke = Stroke,
+        Thickness = Thickness,
+    };
+
     private FormattedText Build()
     {
         var brush = new SolidColorBrush(Stroke);
@@ -224,4 +271,12 @@ public sealed class MosaicAnnotation : Annotation
 
     public override void Draw(DrawingContext dc, IAnnotationContext context)
         => context.DrawMosaic(dc, Area, Block);
+
+    public override Annotation Translate(double dx, double dy) => new MosaicAnnotation
+    {
+        Area = RectangleAnnotation.Shift(Area, dx, dy),
+        Block = Block,
+        Stroke = Stroke,
+        Thickness = Thickness,
+    };
 }
