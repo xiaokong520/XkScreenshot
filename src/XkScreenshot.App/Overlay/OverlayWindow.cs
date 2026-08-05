@@ -132,24 +132,25 @@ public sealed class OverlayWindow : Window
     {
         base.OnMouseMove(e);
         var pt = Cursor2Pixel();
-        if (_capturing) _session.UpdateDrag(pt);
+        if (_capturing) _session.UpdatePress(pt);
         else _session.UpdateHover(pt);
     }
 
     protected override void OnMouseLeftButtonDown(MouseButtonEventArgs e)
     {
         base.OnMouseLeftButtonDown(e);
+        var cursor = Cursor2Pixel();
 
         // 已确定选区后，双击选区内部 = 确认
         if (e.ClickCount == 2 && _session.Phase == SelectionPhase.Settled
-            && _session.Selection.Contains(Cursor2Pixel()))
+            && _session.Selection.Contains(cursor))
         {
             _session.Confirm();
             return;
         }
 
         _capturing = CaptureMouse();
-        _session.BeginDrag(Cursor2Pixel());
+        _session.BeginPress(cursor);
     }
 
     protected override void OnMouseLeftButtonUp(MouseButtonEventArgs e)
@@ -159,7 +160,21 @@ public sealed class OverlayWindow : Window
 
         _capturing = false;
         ReleaseMouseCapture();
-        _session.EndDrag(Cursor2Pixel());
+        _session.EndPress(Cursor2Pixel());
+    }
+
+    /// <summary>
+    /// 系统可能在任何时候强制收回鼠标捕获（另一个窗口抢了捕获、Alt+Tab、显示器热插拔等）。
+    /// 不跟着复位 _capturing 的话，标志会和实际状态脱节：后续的 MouseUp 会被
+    /// 「if (!_capturing) return」吞掉，状态机永远停在按下状态，鼠标再也不响应。
+    /// </summary>
+    protected override void OnLostMouseCapture(MouseEventArgs e)
+    {
+        base.OnLostMouseCapture(e);
+        if (!_capturing) return;
+
+        _capturing = false;
+        _session.EndPress(Cursor2Pixel());
     }
 
     protected override void OnMouseRightButtonUp(MouseButtonEventArgs e)
