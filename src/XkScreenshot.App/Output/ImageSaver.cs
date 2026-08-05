@@ -46,5 +46,5 @@ public static class ImageSaver
     }
 
     private static string SuggestFileName()
-        => "Snip_" + DateTime.Now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture) + ".png";
+        => "XkScreenshot_" + DateTime.Now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture) + ".png";
 }
