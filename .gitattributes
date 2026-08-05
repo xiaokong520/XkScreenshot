@@ -1,0 +1,17 @@
+# 仓库内统一存 LF，检出到工作区时由 core.autocrlf 决定，避免行尾变动淹没真实 diff
+* text=auto eol=lf
+
+*.sln    text eol=crlf
+*.csproj text eol=lf
+*.props  text eol=lf
+*.config text eol=lf
+*.manifest text eol=lf
+*.cs     text eol=lf
+*.xaml   text eol=lf
+*.md     text eol=lf
+
+*.png binary
+*.jpg binary
+*.ico binary
+*.dll binary
+*.exe binary

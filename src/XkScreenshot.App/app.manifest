@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
+  <assemblyIdentity version="1.0.0.0" name="XkScreenshot.App" />
+
+  <!--
+    整个截图工具的正确性地基。PerMonitorV2 必须在清单里声明 —— 进程启动后再用
+    SetProcessDpiAwarenessContext 已经来不及，WPF 早已按旧模式初始化完毕。
+    没有它，在 125%/150% 缩放或多屏混合 DPI 下：截出来的图会糊、选区会偏、
+    坐标会对不上，而且是那种「看起来差不多但就是不对」的偏差，事后极难排查。
+  -->
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2</dpiAwareness>
+      <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true/pm</dpiAware>
+      <longPathAware xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">true</longPathAware>
+    </windowsSettings>
+  </application>
+
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <!-- Windows 10/11 -->
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}" />
+      <!-- Windows 8.1 -->
+      <supportedOS Id="{1f676c76-80e1-4239-95bb-83d0f6d0da78}" />
+    </application>
+  </compatibility>
+
+  <!--
+    保持 asInvoker。提权运行会让贴图窗口无法接收普通程序的拖放，
+    弊大于利；需要对提权窗口发送滚轮（长截图）时再单独引导用户。
+  -->
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v2">
+    <security>
+      <requestedPrivileges xmlns="urn:schemas-microsoft-com:asm.v3">
+        <requestedExecutionLevel level="asInvoker" uiAccess="false" />
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+
+</assembly>
