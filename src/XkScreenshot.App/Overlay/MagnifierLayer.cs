@@ -29,11 +29,9 @@ public sealed class MagnifierLayer : FrameworkElement
     private const double LineHeight = 19;
     private const double SwatchSize = 12;
 
-    private static readonly Brush PanelBrush = Freeze(new SolidColorBrush(Color.FromArgb(0xF2, 0x15, 0x16, 0x1A)));
     private static readonly Brush TextBrush = Freeze(new SolidColorBrush(Color.FromRgb(0xEC, 0xEF, 0xF3)));
-    private static readonly Brush DimTextBrush = Freeze(new SolidColorBrush(Color.FromRgb(0x6E, 0x76, 0x82)));
-    private static readonly Pen PanelBorder = Freeze(new Pen(new SolidColorBrush(Color.FromArgb(0x22, 0xFF, 0xFF, 0xFF)), 1));
-    private static readonly Pen ViewBorder = Freeze(new Pen(new SolidColorBrush(Color.FromArgb(0x28, 0xFF, 0xFF, 0xFF)), 1));
+    private static readonly Brush DimTextBrush = Freeze(new SolidColorBrush(Color.FromRgb(0x88, 0x90, 0x9C)));
+    private static readonly Pen ViewBorder = Freeze(new Pen(new SolidColorBrush(Color.FromArgb(0x30, 0xFF, 0xFF, 0xFF)), 1));
     // 宽度必须是整数 1：本层开了 EdgeMode.Aliased，0.5px 的笔会被整像素对齐直接吃掉，
     // 结果就是网格线在纯色区域完全不可见 —— 而那恰恰是最需要网格来数像素的场景。
     private static readonly Pen GridPen = Freeze(new Pen(new SolidColorBrush(Color.FromArgb(0x26, 0xFF, 0xFF, 0xFF)), 1));
@@ -45,14 +43,18 @@ public sealed class MagnifierLayer : FrameworkElement
 
     public MagnifierLayer()
     {
-        // 放大镜的全部意义就是让人看清单个像素，绝不能让 WPF 做任何插值
-        RenderOptions.SetBitmapScalingMode(this, BitmapScalingMode.NearestNeighbor);
+        // 只关掉几何图元的抗锯齿，让网格线和准星落在整像素上。
+        // 位图缩放模式这里刻意保持默认（平滑）—— 放大后的像素块是自己按设备像素
+        // 展开好再 1:1 绘制的，不经过任何缩放；而同一层上的毛玻璃背景需要平滑插值。
         RenderOptions.SetEdgeMode(this, EdgeMode.Aliased);
         IsHitTestVisible = false;
     }
 
     /// <summary>本屏的冻结帧，像素从这里取。</summary>
     public CapturedFrame? Frame { get; set; }
+
+    /// <summary>毛玻璃背景。为 null 时面板退回不透明底色。</summary>
+    public FrostedBackdrop? Backdrop { get; set; }
 
     /// <summary>光标位置（虚拟屏幕物理像素）。null 表示光标不在本屏，本层什么都不画。</summary>
     public PixelPoint? CursorPixel { get; set; }
@@ -69,17 +71,28 @@ public sealed class MagnifierLayer : FrameworkElement
     {
         if (CursorPixel is not { } cursor || Frame is null) return;
 
-        double panelW = ViewWidth + PanelPadding * 2;
-        double panelH = ViewHeight + PanelPadding * 2 + LineHeight * 3 + 4;
+        // 一个源像素占多少个设备像素。取整保证所有方块大小一致 —— 125% 这类分数缩放下
+        // 若直接用 Zoom*scale，方块会时大时小，网格看起来就是歪的。
+        var dpi = VisualTreeHelper.GetDpi(this);
+        int blockW = Math.Max(1, (int)Math.Round(Zoom * dpi.DpiScaleX));
+        int blockH = Math.Max(1, (int)Math.Round(Zoom * dpi.DpiScaleY));
+
+        // 取整之后取景框的 DIP 尺寸会与标称的 Zoom*Cols 略有出入，面板尺寸随之算出来
+        double cellW = blockW / dpi.DpiScaleX;
+        double cellH = blockH / dpi.DpiScaleY;
+        double viewW = cellW * SourceCols;
+        double viewH = cellH * SourceRows;
+
+        double panelW = viewW + PanelPadding * 2;
+        double panelH = viewH + PanelPadding * 2 + LineHeight * 3 + 4;
         var panel = PlacePanel(panelW, panelH);
 
-        PanelChrome.DrawShadow(dc, panel, CornerRadius);
-        dc.DrawRoundedRectangle(PanelBrush, PanelBorder, panel, CornerRadius, CornerRadius);
+        PanelChrome.DrawGlassPanel(dc, panel, CornerRadius, Backdrop, new Size(ActualWidth, ActualHeight));
 
-        var view = new Rect(panel.X + PanelPadding, panel.Y + PanelPadding, ViewWidth, ViewHeight);
-        DrawPixels(dc, cursor, view);
-        DrawGrid(dc, view);
-        DrawCrosshair(dc, view);
+        var view = new Rect(panel.X + PanelPadding, panel.Y + PanelPadding, viewW, viewH);
+        DrawPixels(dc, cursor, view, blockW, blockH, dpi);
+        DrawGrid(dc, view, cellW, cellH);
+        DrawCrosshair(dc, view, cellW, cellH);
         dc.DrawRectangle(null, ViewBorder, new Rect(view.X - 0.5, view.Y - 0.5, view.Width + 1, view.Height + 1));
         DrawReadout(dc, cursor, new Point(panel.X + PanelPadding, view.Bottom + 6));
     }
@@ -102,42 +115,47 @@ public sealed class MagnifierLayer : FrameworkElement
         return new Rect(x, y, w, h);
     }
 
-    private void DrawPixels(DrawingContext dc, PixelPoint cursor, Rect view)
+    private void DrawPixels(DrawingContext dc, PixelPoint cursor, Rect view,
+        int blockW, int blockH, DpiScale dpi)
     {
-        var block = Frame!.SampleBlock(cursor, SourceCols, SourceRows, OutOfBoundsFill);
-        var bmp = BitmapSource.Create(SourceCols, SourceRows, 96, 96,
-            PixelFormats.Bgra32, null, block, SourceCols * 4);
+        // 直接取出已按设备像素展开好的方块阵列，绘制时严格 1:1，不经过任何缩放
+        var block = Frame!.SampleBlock(cursor, SourceCols, SourceRows, OutOfBoundsFill, blockW, blockH);
+        int w = SourceCols * blockW;
+        int h = SourceRows * blockH;
+
+        var bmp = BitmapSource.Create(w, h, 96 * dpi.DpiScaleX, 96 * dpi.DpiScaleY,
+            PixelFormats.Bgra32, null, block, w * 4);
         bmp.Freeze();
         dc.DrawImage(bmp, view);
     }
 
-    private static void DrawGrid(DrawingContext dc, Rect view)
+    private static void DrawGrid(DrawingContext dc, Rect view, double cellW, double cellH)
     {
         // 网格让「一个方块 = 一个像素」变得可数，否则纯色区域里根本看不出粒度
         for (int c = 1; c < SourceCols; c++)
         {
-            double x = view.X + c * Zoom;
+            double x = view.X + c * cellW;
             dc.DrawLine(GridPen, new Point(x, view.Top), new Point(x, view.Bottom));
         }
         for (int r = 1; r < SourceRows; r++)
         {
-            double y = view.Y + r * Zoom;
+            double y = view.Y + r * cellH;
             dc.DrawLine(GridPen, new Point(view.Left, y), new Point(view.Right, y));
         }
     }
 
-    private static void DrawCrosshair(DrawingContext dc, Rect view)
+    private static void DrawCrosshair(DrawingContext dc, Rect view, double cellW, double cellH)
     {
-        double cx = view.X + (SourceCols / 2) * Zoom;
-        double cy = view.Y + (SourceRows / 2) * Zoom;
+        double cx = view.X + (SourceCols / 2) * cellW;
+        double cy = view.Y + (SourceRows / 2) * cellH;
 
-        dc.DrawLine(CrossPen, new Point(view.Left, cy + Zoom / 2), new Point(cx, cy + Zoom / 2));
-        dc.DrawLine(CrossPen, new Point(cx + Zoom, cy + Zoom / 2), new Point(view.Right, cy + Zoom / 2));
-        dc.DrawLine(CrossPen, new Point(cx + Zoom / 2, view.Top), new Point(cx + Zoom / 2, cy));
-        dc.DrawLine(CrossPen, new Point(cx + Zoom / 2, cy + Zoom), new Point(cx + Zoom / 2, view.Bottom));
+        dc.DrawLine(CrossPen, new Point(view.Left, cy + cellH / 2), new Point(cx, cy + cellH / 2));
+        dc.DrawLine(CrossPen, new Point(cx + cellW, cy + cellH / 2), new Point(view.Right, cy + cellH / 2));
+        dc.DrawLine(CrossPen, new Point(cx + cellW / 2, view.Top), new Point(cx + cellW / 2, cy));
+        dc.DrawLine(CrossPen, new Point(cx + cellW / 2, cy + cellH), new Point(cx + cellW / 2, view.Bottom));
 
         // 正中那一个像素单独描白框：取色取的就是它，不能有歧义
-        dc.DrawRectangle(null, CenterPen, new Rect(cx - 0.5, cy - 0.5, Zoom + 1, Zoom + 1));
+        dc.DrawRectangle(null, CenterPen, new Rect(cx - 0.5, cy - 0.5, cellW + 1, cellH + 1));
     }
 
     private void DrawReadout(DrawingContext dc, PixelPoint cursor, Point origin)

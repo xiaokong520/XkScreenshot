@@ -48,9 +48,7 @@ public sealed class HintLayer : FrameworkElement
     private const double EdgeInset = 24;
     private const double CornerRadius = 9;
 
-    private static readonly Brush PanelBrush = Freeze(new SolidColorBrush(Color.FromArgb(0xF2, 0x15, 0x16, 0x1A)));
-    private static readonly Pen PanelBorder = Freeze(new Pen(new SolidColorBrush(Color.FromArgb(0x22, 0xFF, 0xFF, 0xFF)), 1));
-    private static readonly Brush ChipBrush = Freeze(new SolidColorBrush(Color.FromArgb(0x1C, 0xFF, 0xFF, 0xFF)));
+    private static readonly Brush ChipBrush = Freeze(new SolidColorBrush(Color.FromArgb(0x22, 0xFF, 0xFF, 0xFF)));
     private static readonly Pen ChipBorder = Freeze(new Pen(new SolidColorBrush(Color.FromArgb(0x38, 0xFF, 0xFF, 0xFF)), 1));
     private static readonly Pen ChipShade = Freeze(new Pen(new SolidColorBrush(Color.FromArgb(0x40, 0x00, 0x00, 0x00)), 1));
     private static readonly Brush KeyTextBrush = Freeze(new SolidColorBrush(Color.FromRgb(0xEC, 0xEF, 0xF3)));
@@ -67,6 +65,9 @@ public sealed class HintLayer : FrameworkElement
     private Layout? _layout;
 
     public bool Visible { get; set; }
+
+    /// <summary>毛玻璃背景。为 null 时面板退回不透明底色。</summary>
+    public FrostedBackdrop? Backdrop { get; set; }
 
     public HintLayer() => IsHitTestVisible = false;
 
@@ -85,8 +86,7 @@ public sealed class HintLayer : FrameworkElement
         double y = Math.Max(EdgeInset, ActualHeight - layout.Height - EdgeInset);
         var panel = new Rect(x, y, layout.Width, layout.Height);
 
-        PanelChrome.DrawShadow(dc, panel, CornerRadius);
-        dc.DrawRoundedRectangle(PanelBrush, PanelBorder, panel, CornerRadius, CornerRadius);
+        PanelChrome.DrawGlassPanel(dc, panel, CornerRadius, Backdrop, new Size(ActualWidth, ActualHeight));
 
         // 标题：一个强调色小方块 + 淡灰标题 + 一条发丝分隔线，给面板一个视觉锚点
         double titleY = panel.Y + PadY;
