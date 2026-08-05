@@ -26,6 +26,7 @@ public sealed class OverlayWindow : Window
     private readonly SelectionLayer _selectionLayer = new();
     private readonly MagnifierLayer _magnifierLayer = new();
     private readonly HintLayer _hintLayer = new();
+    private readonly FrostedBackdrop _backdrop;
     private bool _capturing;
     private bool _magnifierWasVisible;
     private bool _shiftConsumed;
@@ -57,7 +58,12 @@ public sealed class OverlayWindow : Window
         // 冻结图必须逐像素原样呈现，插值会让文字发虚 —— OCR 阶段尤其致命
         RenderOptions.SetBitmapScalingMode(image, BitmapScalingMode.NearestNeighbor);
 
+        // 毛玻璃背景两层共用一份：模糊一次全屏画面就够了，没必要各算各的
+        var backdrop = new FrostedBackdrop(frame.Frame);
         _magnifierLayer.Frame = frame.Frame;
+        _magnifierLayer.Backdrop = backdrop;
+        _hintLayer.Backdrop = backdrop;
+        _backdrop = backdrop;
 
         Content = new Grid
         {
