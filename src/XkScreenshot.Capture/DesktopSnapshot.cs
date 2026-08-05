@@ -7,7 +7,10 @@ using XkScreenshot.Core.Windows;
 namespace XkScreenshot.Capture;
 
 /// <summary>某台显示器的冻结画面。</summary>
-public sealed record MonitorFrame(MonitorInfo Monitor, BitmapSource Image);
+public sealed record MonitorFrame(MonitorInfo Monitor, CapturedFrame Frame)
+{
+    public BitmapSource Image => Frame.Image;
+}
 
 /// <summary>
 /// 「冻屏」快照：按下热键那一瞬间的整个桌面。
@@ -42,6 +45,10 @@ public sealed class DesktopSnapshot
             VirtualBounds = MonitorEnumerator.VirtualBounds(monitors),
         };
     }
+
+    /// <summary>取包含该点的那台显示器的冻结帧；点落在显示器之间的空隙里时返回 null。</summary>
+    public CapturedFrame? FrameAt(PixelPoint point)
+        => Frames.FirstOrDefault(f => f.Monitor.Bounds.Contains(point))?.Frame;
 
     /// <summary>
     /// 从冻结画面里裁一块出来。跨显示器的选区会被逐屏拼接，

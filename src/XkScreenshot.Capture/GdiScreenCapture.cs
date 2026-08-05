@@ -14,7 +14,7 @@ public sealed class GdiScreenCapture : IScreenCapture
 {
     public bool IsAvailable => true;
 
-    public BitmapSource CaptureRect(PixelRect rect, double dpiX, double dpiY)
+    public CapturedFrame CaptureRect(PixelRect rect, double dpiX, double dpiY)
     {
         if (rect.IsEmpty)
             throw new ArgumentException("抓取矩形为空", nameof(rect));
@@ -72,7 +72,16 @@ public sealed class GdiScreenCapture : IScreenCapture
             var bmp = BitmapSource.Create(rect.Width, rect.Height, dpiX, dpiY,
                 PixelFormats.Bgra32, null, buffer, stride);
             bmp.Freeze(); // 冻结后可跨线程使用，也免掉后续渲染的锁开销
-            return bmp;
+
+            // buffer 同时交给 CapturedFrame 保留：BitmapSource.Create 会自己拷一份，
+            // 两边互不影响，而放大镜/取色器读这份原始非预乘数据既快又准。
+            return new CapturedFrame
+            {
+                Image = bmp,
+                Bgra = buffer,
+                Stride = stride,
+                Bounds = rect,
+            };
         }
         finally
         {

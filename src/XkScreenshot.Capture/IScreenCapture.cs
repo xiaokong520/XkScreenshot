@@ -1,4 +1,3 @@
-using System.Windows.Media.Imaging;
 using XkScreenshot.Core.Geometry;
 
 namespace XkScreenshot.Capture;
@@ -16,5 +15,5 @@ public interface IScreenCapture
     /// 抓取虚拟屏幕坐标系下的一块矩形。
     /// dpi 决定返回位图的 DpiX/DpiY，让它在对应显示器上能 1 图像像素 = 1 设备像素地渲染。
     /// </summary>
-    BitmapSource CaptureRect(PixelRect rect, double dpiX, double dpiY);
+    CapturedFrame CaptureRect(PixelRect rect, double dpiX, double dpiY);
 }

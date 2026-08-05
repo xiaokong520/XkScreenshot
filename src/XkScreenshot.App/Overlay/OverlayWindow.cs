@@ -23,8 +23,12 @@ public sealed class OverlayWindow : Window
 {
     private readonly CaptureSession _session;
     private readonly MonitorFrame _frame;
-    private readonly SelectionLayer _layer = new();
+    private readonly SelectionLayer _selectionLayer = new();
+    private readonly MagnifierLayer _magnifierLayer = new();
+    private readonly HintLayer _hintLayer = new();
     private bool _capturing;
+    private bool _magnifierWasVisible;
+    private bool _shiftConsumed;
 
     public OverlayWindow(CaptureSession session, MonitorFrame frame)
     {
@@ -42,6 +46,8 @@ public sealed class OverlayWindow : Window
         Cursor = Cursors.Cross;
         UseLayoutRounding = true;
         SnapsToDevicePixels = true;
+        // Tab 要留给「切换检测模式」，不能被 WPF 拿去做焦点跳转
+        KeyboardNavigation.SetTabNavigation(this, KeyboardNavigationMode.None);
 
         var image = new Image
         {
@@ -51,11 +57,21 @@ public sealed class OverlayWindow : Window
         // 冻结图必须逐像素原样呈现，插值会让文字发虚 —— OCR 阶段尤其致命
         RenderOptions.SetBitmapScalingMode(image, BitmapScalingMode.NearestNeighbor);
 
-        Content = new Grid { Children = { image, _layer } };
+        _magnifierLayer.Frame = frame.Frame;
+
+        Content = new Grid
+        {
+            Children = { image, _selectionLayer, _hintLayer, _magnifierLayer },
+        };
 
         _session.Changed += OnSessionChanged;
+        _session.CursorMoved += OnCursorMoved;
         SourceInitialized += OnSourceInitialized;
-        Closed += (_, _) => _session.Changed -= OnSessionChanged;
+        Closed += (_, _) =>
+        {
+            _session.Changed -= OnSessionChanged;
+            _session.CursorMoved -= OnCursorMoved;
+        };
     }
 
     public MonitorInfo Monitor => _frame.Monitor;
@@ -85,17 +101,18 @@ public sealed class OverlayWindow : Window
 
         if (!highlight.IsEmpty && highlight.IntersectsWith(bounds))
         {
-            _layer.HighlightLocal = ToLocalDip(highlight.Intersect(bounds));
-            _layer.HighlightPixels = highlight;
-            _layer.ShowSizeLabel = OwnsLabelAnchor(highlight);
+            _selectionLayer.HighlightLocal = ToLocalDip(highlight.Intersect(bounds));
+            _selectionLayer.HighlightPixels = highlight;
+            _selectionLayer.ShowSizeLabel = OwnsLabelAnchor(highlight);
         }
         else
         {
-            _layer.HighlightLocal = null;
-            _layer.ShowSizeLabel = false;
+            _selectionLayer.HighlightLocal = null;
+            _selectionLayer.ShowSizeLabel = false;
         }
 
-        _layer.Refresh();
+        _selectionLayer.Refresh();
+        UpdateHintVisibility();
     }
 
     /// <summary>
@@ -114,6 +131,48 @@ public sealed class OverlayWindow : Window
         return fallback?.Monitor.Handle == _frame.Monitor.Handle;
     }
 
+    /// <summary>
+    /// 光标移动是高频事件，而多屏时只有一块屏需要画放大镜。
+    /// 其余的屏在「上一帧也没画」时直接跳过重绘，省掉大量无效的 InvalidateVisual。
+    /// </summary>
+    private void OnCursorMoved()
+    {
+        bool onThisMonitor = _frame.Monitor.Bounds.Contains(_session.Cursor)
+                             && _session.CursorOnScreen
+                             // 选区定下来之后放大镜就该退场，别挡着看结果
+                             && _session.Phase != SelectionPhase.Settled;
+
+        if (!onThisMonitor && !_magnifierWasVisible) return;
+        _magnifierWasVisible = onThisMonitor;
+
+        if (onThisMonitor)
+        {
+            _magnifierLayer.CursorPixel = _session.Cursor;
+            _magnifierLayer.CursorLocal = ToLocalDipPoint(_session.Cursor);
+            _magnifierLayer.Color = _session.CursorColor;
+            _magnifierLayer.Format = _session.ColorFormat;
+        }
+        else
+        {
+            _magnifierLayer.CursorPixel = null;
+        }
+
+        _magnifierLayer.Refresh();
+        UpdateHintVisibility();
+    }
+
+    private void UpdateHintVisibility()
+    {
+        // 提示面板只在光标所在那块屏、且选区还没定下来时显示
+        bool visible = _session.ShowHints
+                       && _session.Phase != SelectionPhase.Settled
+                       && _frame.Monitor.Bounds.Contains(_session.Cursor);
+
+        if (visible == _hintLayer.Visible) return;
+        _hintLayer.Visible = visible;
+        _hintLayer.Refresh();
+    }
+
     /// <summary>虚拟屏幕物理像素 → 本窗口局部 DIP。整个项目里唯一做 DPI 换算的地方。</summary>
     private Rect ToLocalDip(PixelRect r)
     {
@@ -121,6 +180,12 @@ public sealed class OverlayWindow : Window
         double sx = _frame.Monitor.ScaleX;
         double sy = _frame.Monitor.ScaleY;
         return new Rect((r.X - b.X) / sx, (r.Y - b.Y) / sy, r.Width / sx, r.Height / sy);
+    }
+
+    private Point ToLocalDipPoint(PixelPoint p)
+    {
+        var b = _frame.Monitor.Bounds;
+        return new Point((p.X - b.X) / _frame.Monitor.ScaleX, (p.Y - b.Y) / _frame.Monitor.ScaleY);
     }
 
     // 鼠标位置一律走 GetCursorPos 取虚拟屏幕物理坐标，而不是 WPF 的 e.GetPosition：
@@ -132,6 +197,8 @@ public sealed class OverlayWindow : Window
     {
         base.OnMouseMove(e);
         var pt = Cursor2Pixel();
+
+        _session.UpdateCursor(pt);
         if (_capturing) _session.UpdatePress(pt);
         else _session.UpdateHover(pt);
     }
@@ -186,22 +253,96 @@ public sealed class OverlayWindow : Window
     protected override void OnKeyDown(KeyEventArgs e)
     {
         base.OnKeyDown(e);
+
+        // Shift 单独按下才切换颜色格式；Shift 作为组合键修饰符时不能触发。
+        // 记下「Shift 按住期间还按过别的键」，抬起时据此决定是不是一次纯粹的 Shift。
+        if (e.Key is not (Key.LeftShift or Key.RightShift))
+            _shiftConsumed = true;
+
         int step = (Keyboard.Modifiers & ModifierKeys.Shift) != 0 ? 10 : 1;
+        bool ctrl = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
 
         switch (e.Key)
         {
             case Key.Escape:
                 _session.Escape();
-                e.Handled = true;
                 break;
+
             case Key.Enter:
                 _session.Confirm();
-                e.Handled = true;
                 break;
-            case Key.Left: _session.NudgeSelection(-step, 0); e.Handled = true; break;
-            case Key.Right: _session.NudgeSelection(step, 0); e.Handled = true; break;
-            case Key.Up: _session.NudgeSelection(0, -step); e.Handled = true; break;
-            case Key.Down: _session.NudgeSelection(0, step); e.Handled = true; break;
+
+            case Key.A when ctrl:
+                _session.SelectWholeScreen();
+                break;
+
+            case Key.C:
+                CopyColor();
+                break;
+
+            case Key.H:
+                _session.ToggleHints();
+                UpdateHintVisibility();
+                break;
+
+            // WASD 精确移动光标一个像素。鼠标在高分屏上很难点准单个像素，
+            // 而取色和选区边界恰恰要求像素级精度。
+            case Key.W: MoveCursorBy(0, -step); break;
+            case Key.S: MoveCursorBy(0, step); break;
+            case Key.A: MoveCursorBy(-step, 0); break;
+            case Key.D: MoveCursorBy(step, 0); break;
+
+            case Key.Left: _session.NudgeSelection(-step, 0); break;
+            case Key.Right: _session.NudgeSelection(step, 0); break;
+            case Key.Up: _session.NudgeSelection(0, -step); break;
+            case Key.Down: _session.NudgeSelection(0, step); break;
+
+            default:
+                return;
+        }
+
+        e.Handled = true;
+    }
+
+    protected override void OnKeyUp(KeyEventArgs e)
+    {
+        base.OnKeyUp(e);
+
+        if (e.Key is Key.LeftShift or Key.RightShift)
+        {
+            if (!_shiftConsumed) _session.ToggleColorFormat();
+            _shiftConsumed = false;
+            e.Handled = true;
+        }
+    }
+
+    private void MoveCursorBy(int dx, int dy)
+    {
+        var target = _session.Cursor;
+        var clamped = new PixelPoint(
+            Math.Clamp(target.X + dx, _session.Snapshot.VirtualBounds.X, _session.Snapshot.VirtualBounds.Right - 1),
+            Math.Clamp(target.Y + dy, _session.Snapshot.VirtualBounds.Y, _session.Snapshot.VirtualBounds.Bottom - 1));
+
+        NativeMethods.SetCursorPos(clamped.X, clamped.Y);
+
+        // SetCursorPos 会产生 WM_MOUSEMOVE，但那是异步的；这里直接同步刷一次，
+        // 免得连按 WASD 时读数跟不上手速。
+        _session.UpdateCursor(clamped);
+        if (_capturing) _session.UpdatePress(clamped);
+        else _session.UpdateHover(clamped);
+    }
+
+    private void CopyColor()
+    {
+        if (!_session.CursorOnScreen) return;
+
+        try
+        {
+            Clipboard.SetText(_session.FormatCursorColor());
+        }
+        catch (Exception)
+        {
+            // 剪贴板被别的进程占着是常事，取色失败不该打断截图流程
         }
     }
 }

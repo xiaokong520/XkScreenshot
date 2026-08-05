@@ -1,12 +1,20 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
+using System.Windows.Media;
 using XkScreenshot.Capture;
 using XkScreenshot.Core.Geometry;
 using XkScreenshot.Core.Monitors;
 using XkScreenshot.Core.Windows;
 
 namespace XkScreenshot.App.Overlay;
+
+public enum ColorFormat
+{
+    Rgb,
+    Hex,
+}
 
 public enum SelectionPhase
 {
@@ -52,11 +60,88 @@ public sealed class CaptureSession
     public PixelRect Selection { get; private set; } = PixelRect.Empty;
     public PixelRect HoverWindow { get; private set; } = PixelRect.Empty;
 
+    /// <summary>光标当前所在的虚拟屏幕物理坐标。</summary>
+    public PixelPoint Cursor { get; private set; }
+
+    /// <summary>光标下那一个像素的颜色（取自冻结帧，非预乘，精确到位）。</summary>
+    public Color CursorColor { get; private set; }
+
+    /// <summary>光标是否落在某台显示器上（多屏非矩形排布时可能落在空隙里）。</summary>
+    public bool CursorOnScreen { get; private set; }
+
+    public ColorFormat ColorFormat { get; private set; } = ColorFormat.Rgb;
+
+    public bool ShowHints { get; private set; } = true;
+
+    /// <summary>选区/悬停变化 —— 低频，会触发所有覆盖层重绘遮罩层。</summary>
     public event Action? Changed;
+
+    /// <summary>
+    /// 光标移动 —— 高频。单独一个事件是为了让放大镜层自己重绘，
+    /// 不必带着遮罩层、控制点、尺寸标签一起重算。
+    /// </summary>
+    public event Action? CursorMoved;
+
     /// <summary>用户确认了选区。</summary>
     public event Action<PixelRect>? Confirmed;
     /// <summary>用户放弃了本次截图。</summary>
     public event Action? Cancelled;
+
+    public void UpdateCursor(PixelPoint cursor)
+    {
+        Cursor = cursor;
+
+        var frame = Snapshot.FrameAt(cursor);
+        if (frame is not null && frame.TryGetColor(cursor, out var color))
+        {
+            CursorOnScreen = true;
+            CursorColor = color;
+        }
+        else
+        {
+            CursorOnScreen = false;
+            CursorColor = default;
+        }
+
+        CursorMoved?.Invoke();
+    }
+
+    public void ToggleColorFormat()
+    {
+        ColorFormat = ColorFormat == ColorFormat.Rgb ? ColorFormat.Hex : ColorFormat.Rgb;
+        CursorMoved?.Invoke();
+    }
+
+    public void ToggleHints()
+    {
+        ShowHints = !ShowHints;
+        Changed?.Invoke();
+    }
+
+    /// <summary>按当前格式把光标处的颜色格式化成可复制的文本。</summary>
+    public string FormatCursorColor() => ColorFormat switch
+    {
+        ColorFormat.Hex => string.Format(CultureInfo.InvariantCulture,
+            "#{0:X2}{1:X2}{2:X2}", CursorColor.R, CursorColor.G, CursorColor.B),
+        _ => string.Format(CultureInfo.InvariantCulture,
+            "{0}, {1}, {2}", CursorColor.R, CursorColor.G, CursorColor.B),
+    };
+
+    /// <summary>
+    /// 选中一整块屏幕。第一次取光标所在的那台显示器，
+    /// 已经是单屏全屏时再按一次扩展到整个虚拟桌面。
+    /// </summary>
+    public void SelectWholeScreen()
+    {
+        var monitor = Snapshot.Frames.FirstOrDefault(f => f.Monitor.Bounds.Contains(Cursor))?.Monitor
+                      ?? Snapshot.Frames[0].Monitor;
+
+        Selection = Selection == monitor.Bounds ? Snapshot.VirtualBounds : monitor.Bounds;
+        Phase = SelectionPhase.Settled;
+        HoverWindow = PixelRect.Empty;
+        _press = PressKind.None;
+        Changed?.Invoke();
+    }
 
     public void UpdateHover(PixelPoint cursor)
     {
