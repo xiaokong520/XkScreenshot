@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <RootNamespace>XkScreenshot.App</RootNamespace>
+    <AssemblyName>XkScreenshot</AssemblyName>
+    <UseWPF>true</UseWPF>
+    <!-- 只为托盘图标用 WinForms 的 NotifyIcon，省掉一个 NuGet 依赖，让 M0 能完全离线构建 -->
+    <UseWindowsForms>true</UseWindowsForms>
+    <!-- WinForms 的隐式 using 会把 System.Drawing 引进来，和 System.Windows 的
+         Point/Size/Rectangle 大面积撞名，这里关掉，全部显式 using -->
+    <ImplicitUsings>disable</ImplicitUsings>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- WFAC010 让我们改用 Application.SetHighDpiMode 配置 DPI，那是 WinForms 的建议。
+         本项目是 WPF：WPF 在启动早期就读走了进程的 DPI 感知模式，运行期再设已经晚了，
+         必须留在清单里。这里只是因为引了 WinForms（托盘图标）才触发了这条分析器。 -->
+    <NoWarn>$(NoWarn);WFAC010</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\XkScreenshot.Core\XkScreenshot.Core.csproj" />
+    <ProjectReference Include="..\XkScreenshot.Capture\XkScreenshot.Capture.csproj" />
+  </ItemGroup>
+
+</Project>

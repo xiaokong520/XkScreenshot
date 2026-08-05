@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>XkScreenshot.Core</RootNamespace>
+    <UseWPF>true</UseWPF>
+  </PropertyGroup>
+
+</Project>

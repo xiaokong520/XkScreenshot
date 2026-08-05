@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>XkScreenshot.Capture</RootNamespace>
+    <UseWPF>true</UseWPF>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\XkScreenshot.Core\XkScreenshot.Core.csproj" />
+  </ItemGroup>
+
+</Project>
