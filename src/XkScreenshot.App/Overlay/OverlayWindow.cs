@@ -137,10 +137,10 @@ public sealed class OverlayWindow : Window
     /// </summary>
     private void OnCursorMoved()
     {
+        // 选区确定后放大镜依然保留：这时候用户往往正要核对选区边界是否压住了想要的那一行像素，
+        // 或者只是想再取一个颜色 —— 恰恰是最需要它的时候。
         bool onThisMonitor = _frame.Monitor.Bounds.Contains(_session.Cursor)
-                             && _session.CursorOnScreen
-                             // 选区定下来之后放大镜就该退场，别挡着看结果
-                             && _session.Phase != SelectionPhase.Settled;
+                             && _session.CursorOnScreen;
 
         if (!onThisMonitor && !_magnifierWasVisible) return;
         _magnifierWasVisible = onThisMonitor;
@@ -163,9 +163,9 @@ public sealed class OverlayWindow : Window
 
     private void UpdateHintVisibility()
     {
-        // 提示面板只在光标所在那块屏、且选区还没定下来时显示
+        // 提示面板只在光标所在那块屏显示。选区确定后照样留着 ——
+        // Enter / Esc / 方向键这些恰恰是那之后才会用到的。
         bool visible = _session.ShowHints
-                       && _session.Phase != SelectionPhase.Settled
                        && _frame.Monitor.Bounds.Contains(_session.Cursor);
 
         if (visible == _hintLayer.Visible) return;

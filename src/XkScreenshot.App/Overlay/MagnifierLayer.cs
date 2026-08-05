@@ -18,21 +18,25 @@ public sealed class MagnifierLayer : FrameworkElement
     private const int SourceCols = 15;
     private const int SourceRows = 11;
     /// <summary>一个源像素放大成多少 DIP。</summary>
-    private const double Zoom = 8;
+    private const double Zoom = 10;
 
     private const double ViewWidth = SourceCols * Zoom;
     private const double ViewHeight = SourceRows * Zoom;
-    private const double PanelPadding = 6;
-    private const double CursorGap = 22;
-    private const double FontSize = 11.5;
-    private const double LineHeight = 16;
-    private const double SwatchSize = 11;
+    private const double PanelPadding = 8;
+    private const double CursorGap = 24;
+    private const double CornerRadius = 7;
+    private const double FontSize = 12;
+    private const double LineHeight = 19;
+    private const double SwatchSize = 12;
 
-    private static readonly Brush PanelBrush = Freeze(new SolidColorBrush(Color.FromArgb(0xE0, 0x14, 0x14, 0x14)));
-    private static readonly Brush TextBrush = Freeze(new SolidColorBrush(Color.FromRgb(0xF0, 0xF0, 0xF0)));
-    private static readonly Brush DimTextBrush = Freeze(new SolidColorBrush(Color.FromRgb(0x9A, 0x9A, 0x9A)));
-    private static readonly Pen PanelBorder = Freeze(new Pen(new SolidColorBrush(Color.FromArgb(0x60, 0xFF, 0xFF, 0xFF)), 1));
-    private static readonly Pen GridPen = Freeze(new Pen(new SolidColorBrush(Color.FromArgb(0x30, 0xFF, 0xFF, 0xFF)), 0.5));
+    private static readonly Brush PanelBrush = Freeze(new SolidColorBrush(Color.FromArgb(0xF2, 0x15, 0x16, 0x1A)));
+    private static readonly Brush TextBrush = Freeze(new SolidColorBrush(Color.FromRgb(0xEC, 0xEF, 0xF3)));
+    private static readonly Brush DimTextBrush = Freeze(new SolidColorBrush(Color.FromRgb(0x6E, 0x76, 0x82)));
+    private static readonly Pen PanelBorder = Freeze(new Pen(new SolidColorBrush(Color.FromArgb(0x22, 0xFF, 0xFF, 0xFF)), 1));
+    private static readonly Pen ViewBorder = Freeze(new Pen(new SolidColorBrush(Color.FromArgb(0x28, 0xFF, 0xFF, 0xFF)), 1));
+    // 宽度必须是整数 1：本层开了 EdgeMode.Aliased，0.5px 的笔会被整像素对齐直接吃掉，
+    // 结果就是网格线在纯色区域完全不可见 —— 而那恰恰是最需要网格来数像素的场景。
+    private static readonly Pen GridPen = Freeze(new Pen(new SolidColorBrush(Color.FromArgb(0x26, 0xFF, 0xFF, 0xFF)), 1));
     private static readonly Pen CrossPen = Freeze(new Pen(new SolidColorBrush(Color.FromArgb(0xE0, 0x3B, 0x9E, 0xFF)), 1));
     private static readonly Pen CenterPen = Freeze(new Pen(Brushes.White, 1));
     private static readonly Pen SwatchPen = Freeze(new Pen(new SolidColorBrush(Color.FromArgb(0x80, 0xFF, 0xFF, 0xFF)), 1));
@@ -66,16 +70,18 @@ public sealed class MagnifierLayer : FrameworkElement
         if (CursorPixel is not { } cursor || Frame is null) return;
 
         double panelW = ViewWidth + PanelPadding * 2;
-        double panelH = ViewHeight + PanelPadding * 2 + LineHeight * 3;
+        double panelH = ViewHeight + PanelPadding * 2 + LineHeight * 3 + 4;
         var panel = PlacePanel(panelW, panelH);
 
-        dc.DrawRoundedRectangle(PanelBrush, PanelBorder, panel, 4, 4);
+        PanelChrome.DrawShadow(dc, panel, CornerRadius);
+        dc.DrawRoundedRectangle(PanelBrush, PanelBorder, panel, CornerRadius, CornerRadius);
 
         var view = new Rect(panel.X + PanelPadding, panel.Y + PanelPadding, ViewWidth, ViewHeight);
         DrawPixels(dc, cursor, view);
         DrawGrid(dc, view);
         DrawCrosshair(dc, view);
-        DrawReadout(dc, cursor, new Point(panel.X + PanelPadding, view.Bottom + 3));
+        dc.DrawRectangle(null, ViewBorder, new Rect(view.X - 0.5, view.Y - 0.5, view.Width + 1, view.Height + 1));
+        DrawReadout(dc, cursor, new Point(panel.X + PanelPadding, view.Bottom + 6));
     }
 
     /// <summary>
@@ -143,17 +149,17 @@ public sealed class MagnifierLayer : FrameworkElement
 
         dc.DrawText(Text($"({cursor.X}, {cursor.Y})", TextBrush), origin);
 
-        var swatchRect = new Rect(origin.X, origin.Y + LineHeight + 2, SwatchSize, SwatchSize);
+        var swatchRect = new Rect(origin.X + 0.5, origin.Y + LineHeight + 3.5, SwatchSize, SwatchSize);
         var swatchBrush = new SolidColorBrush(Color);
         swatchBrush.Freeze();
-        dc.DrawRectangle(swatchBrush, SwatchPen, swatchRect);
+        dc.DrawRoundedRectangle(swatchBrush, SwatchPen, swatchRect, 2, 2);
 
         string value = Format == ColorFormat.Hex
             ? string.Format(CultureInfo.InvariantCulture, "#{0:X2}{1:X2}{2:X2}", Color.R, Color.G, Color.B)
             : string.Format(CultureInfo.InvariantCulture, "{0}, {1}, {2}", Color.R, Color.G, Color.B);
-        dc.DrawText(Text(value, TextBrush), new Point(swatchRect.Right + 6, origin.Y + LineHeight));
+        dc.DrawText(Text(value, TextBrush), new Point(swatchRect.Right + 8, origin.Y + LineHeight));
 
-        dc.DrawText(Text("C 复制  Shift 切换", DimTextBrush), new Point(origin.X, origin.Y + LineHeight * 2 + 2));
+        dc.DrawText(Text("C 复制   Shift 切换", DimTextBrush), new Point(origin.X, origin.Y + LineHeight * 2 + 3));
     }
 
     private static T Freeze<T>(T freezable) where T : Freezable
