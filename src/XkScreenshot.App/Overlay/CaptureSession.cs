@@ -195,7 +195,7 @@ public sealed class CaptureSession
         var monitor = Snapshot.Frames.FirstOrDefault(f => f.Monitor.Bounds.Contains(Cursor))?.Monitor
                       ?? Snapshot.Frames[0].Monitor;
 
-        Selection = Selection == monitor.Bounds ? Snapshot.VirtualBounds : monitor.Bounds;
+        StartFreshSelection(Selection == monitor.Bounds ? Snapshot.VirtualBounds : monitor.Bounds);
         Phase = SelectionPhase.Settled;
         HoverWindow = PixelRect.Empty;
         _press = PressKind.None;
@@ -239,7 +239,7 @@ public sealed class CaptureSession
 
         _press = PressKind.Selecting;
         Phase = SelectionPhase.Dragging;
-        Selection = PixelRect.Empty;
+        StartFreshSelection(PixelRect.Empty);
         Changed?.Invoke();
     }
 
@@ -248,18 +248,40 @@ public sealed class CaptureSession
         switch (_press)
         {
             case PressKind.Selecting:
-                Selection = PixelRect.FromPoints(_anchor, cursor).Intersect(Snapshot.VirtualBounds);
+                StartFreshSelection(PixelRect.FromPoints(_anchor, cursor).Intersect(Snapshot.VirtualBounds));
                 break;
 
             case PressKind.Moving:
                 var delta = cursor - _anchor;
-                Selection = _moveOrigin.Offset(delta.X, delta.Y).ClampInto(Snapshot.VirtualBounds);
+                MoveSelectionTo(_moveOrigin.Offset(delta.X, delta.Y).ClampInto(Snapshot.VirtualBounds));
                 break;
 
             default:
                 return;
         }
         Changed?.Invoke();
+    }
+
+    /// <summary>
+    /// 换成一块全新的选区。旧标注必须整个丢掉 —— 它们的坐标是相对旧选区左上角的，
+    /// 留着的话会按新原点重新画出来，落到完全不相干的位置上。
+    /// </summary>
+    private void StartFreshSelection(PixelRect next)
+    {
+        Selection = next;
+        ActiveTool = ToolKind.None;
+        Annotations.Reset();
+    }
+
+    /// <summary>
+    /// 平移选区。标注要跟着画面内容走而不是跟着选框走，所以坐标反向重基。
+    /// </summary>
+    private void MoveSelectionTo(PixelRect next)
+    {
+        if (next == Selection) return;
+
+        Annotations.Rebase(Selection.X - next.X, Selection.Y - next.Y);
+        Selection = next;
     }
 
     public void EndPress(PixelPoint cursor)
@@ -271,13 +293,14 @@ public sealed class CaptureSession
                 if (cursor.ManhattanTo(_anchor) <= ClickThresholdPx)
                 {
                     var hit = WindowEnumerator.HitTest(Snapshot.Windows, cursor);
-                    Selection = hit is null
+                    StartFreshSelection(hit is null
                         ? PixelRect.Empty
-                        : hit.Bounds.Intersect(Snapshot.VirtualBounds);
+                        : hit.Bounds.Intersect(Snapshot.VirtualBounds));
                 }
                 else
                 {
-                    Selection = PixelRect.FromPoints(_anchor, cursor).Intersect(Snapshot.VirtualBounds);
+                    StartFreshSelection(
+                        PixelRect.FromPoints(_anchor, cursor).Intersect(Snapshot.VirtualBounds));
                 }
 
                 if (Selection.IsEmpty)
@@ -343,7 +366,7 @@ public sealed class CaptureSession
         if (Phase == SelectionPhase.Settled && !Selection.IsEmpty)
         {
             Phase = SelectionPhase.Idle;
-            Selection = PixelRect.Empty;
+            StartFreshSelection(PixelRect.Empty);
             Changed?.Invoke();
             return;
         }
@@ -354,7 +377,7 @@ public sealed class CaptureSession
     public void NudgeSelection(int dx, int dy)
     {
         if (Selection.IsEmpty) return;
-        Selection = Selection.Offset(dx, dy).ClampInto(Snapshot.VirtualBounds);
+        MoveSelectionTo(Selection.Offset(dx, dy).ClampInto(Snapshot.VirtualBounds));
         Changed?.Invoke();
     }
 }

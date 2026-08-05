@@ -54,6 +54,52 @@ public sealed class AnnotationDocument
         Changed?.Invoke();
     }
 
+    /// <summary>
+    /// 彻底丢弃全部标注与历史。
+    ///
+    /// 重新框选时必须调用它。标注坐标是选区局部的，换了选区之后旧标注会按新的原点
+    /// 重新画出来，画到完全不相干的位置上。这里连撤销历史一并清掉 —— 留着的话，
+    /// 用户撤销一步就会把属于上一个选区的标注捞回来，状态直接对不上。
+    /// </summary>
+    public void Reset()
+    {
+        bool had = _items.Count > 0 || _undo.Count > 0 || _redo.Count > 0;
+
+        _items.Clear();
+        _undo.Clear();
+        _redo.Clear();
+
+        if (had) Changed?.Invoke();
+    }
+
+    /// <summary>
+    /// 整体平移全部标注，连同撤销历史一起。
+    ///
+    /// 选区被移动时调用：坐标是选区局部的，选区往右挪一格，标注就得往左挪一格，
+    /// 才能仍然盖在原来那块画面上。历史快照也必须一起平移 —— 否则撤销一步之后，
+    /// 标注会跳回按旧选区原点算出来的位置。
+    /// 这是纯粹的坐标重基，不是一次编辑，所以不产生新的撤销点。
+    /// </summary>
+    public void Rebase(double dx, double dy)
+    {
+        if (dx == 0 && dy == 0) return;
+        if (_items.Count == 0 && _undo.Count == 0 && _redo.Count == 0) return;
+
+        for (int i = 0; i < _items.Count; i++) _items[i] = _items[i].Translate(dx, dy);
+        for (int i = 0; i < _undo.Count; i++) _undo[i] = ShiftSnapshot(_undo[i]);
+        for (int i = 0; i < _redo.Count; i++) _redo[i] = ShiftSnapshot(_redo[i]);
+
+        Changed?.Invoke();
+
+        Annotation[] ShiftSnapshot(Annotation[] snapshot)
+        {
+            var moved = new Annotation[snapshot.Length];
+            for (int i = 0; i < snapshot.Length; i++)
+                moved[i] = snapshot[i].Translate(dx, dy);
+            return moved;
+        }
+    }
+
     public bool Undo()
     {
         if (_undo.Count == 0) return false;
