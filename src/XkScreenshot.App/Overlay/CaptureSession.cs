@@ -12,7 +12,7 @@ public enum SelectionPhase
 {
     /// <summary>还没框选，鼠标悬停哪个窗口就高亮哪个。</summary>
     Idle,
-    /// <summary>正在拖拽。</summary>
+    /// <summary>正在拉出一个新选区。</summary>
     Dragging,
     /// <summary>选区已确定，等待用户确认或调整。</summary>
     Settled,
@@ -28,7 +28,19 @@ public sealed class CaptureSession
     /// <summary>小于这个距离视为「点击」而不是「拖拽」，用来触发窗口整窗选取。</summary>
     private const int ClickThresholdPx = 4;
 
+    /// <summary>一次按下-移动-抬起到底在干什么。</summary>
+    private enum PressKind
+    {
+        None,
+        /// <summary>拉出一个新选区。</summary>
+        Selecting,
+        /// <summary>整体平移已有的选区。</summary>
+        Moving,
+    }
+
+    private PressKind _press = PressKind.None;
     private PixelPoint _anchor;
+    private PixelRect _moveOrigin;
 
     public CaptureSession(DesktopSnapshot snapshot)
     {
@@ -60,47 +72,90 @@ public sealed class CaptureSession
         Changed?.Invoke();
     }
 
-    public void BeginDrag(PixelPoint cursor)
+    /// <summary>
+    /// 鼠标按下。
+    ///
+    /// 关键：选区已确定后，在选区**内部**按下绝不能开始一次新的框选。
+    /// 那样的话双击确认会自毁 —— 双击的消息序列是 Down(1)/Up/Down(2)/Up，
+    /// 第一次 Down 会清空选区，紧接着的 Up 因为光标没动而被判成单击，
+    /// 于是选区被替换成光标下那个窗口，等第二次 Down 真的触发确认时，
+    /// 截下来的已经是整个窗口而不是用户辛苦拖出来的区域了。
+    /// 在选区内按下的正确语义是「准备平移选区」（或只是即将双击）。
+    /// </summary>
+    public void BeginPress(PixelPoint cursor)
     {
         _anchor = cursor;
+
+        if (Phase == SelectionPhase.Settled && Selection.Contains(cursor))
+        {
+            _press = PressKind.Moving;
+            _moveOrigin = Selection;
+            return; // 选区原样保留，什么都还没变，不必通知重绘
+        }
+
+        _press = PressKind.Selecting;
         Phase = SelectionPhase.Dragging;
         Selection = PixelRect.Empty;
         Changed?.Invoke();
     }
 
-    public void UpdateDrag(PixelPoint cursor)
+    public void UpdatePress(PixelPoint cursor)
     {
-        if (Phase != SelectionPhase.Dragging) return;
-        Selection = PixelRect.FromPoints(_anchor, cursor).Intersect(Snapshot.VirtualBounds);
+        switch (_press)
+        {
+            case PressKind.Selecting:
+                Selection = PixelRect.FromPoints(_anchor, cursor).Intersect(Snapshot.VirtualBounds);
+                break;
+
+            case PressKind.Moving:
+                var delta = cursor - _anchor;
+                Selection = _moveOrigin.Offset(delta.X, delta.Y).ClampInto(Snapshot.VirtualBounds);
+                break;
+
+            default:
+                return;
+        }
         Changed?.Invoke();
     }
 
-    public void EndDrag(PixelPoint cursor)
+    public void EndPress(PixelPoint cursor)
     {
-        if (Phase != SelectionPhase.Dragging) return;
+        switch (_press)
+        {
+            case PressKind.Selecting:
+                // 没拖动就是单击：直接选中光标下的整个窗口
+                if (cursor.ManhattanTo(_anchor) <= ClickThresholdPx)
+                {
+                    var hit = WindowEnumerator.HitTest(Snapshot.Windows, cursor);
+                    Selection = hit is null
+                        ? PixelRect.Empty
+                        : hit.Bounds.Intersect(Snapshot.VirtualBounds);
+                }
+                else
+                {
+                    Selection = PixelRect.FromPoints(_anchor, cursor).Intersect(Snapshot.VirtualBounds);
+                }
 
-        // 没拖动就是单击：直接选中光标下的整个窗口
-        if (cursor.ManhattanTo(_anchor) <= ClickThresholdPx)
-        {
-            var hit = WindowEnumerator.HitTest(Snapshot.Windows, cursor);
-            Selection = hit is null
-                ? PixelRect.Empty
-                : hit.Bounds.Intersect(Snapshot.VirtualBounds);
-        }
-        else
-        {
-            Selection = PixelRect.FromPoints(_anchor, cursor).Intersect(Snapshot.VirtualBounds);
+                if (Selection.IsEmpty)
+                {
+                    Phase = SelectionPhase.Idle;
+                }
+                else
+                {
+                    Phase = SelectionPhase.Settled;
+                    HoverWindow = PixelRect.Empty;
+                }
+                break;
+
+            case PressKind.Moving:
+                Phase = SelectionPhase.Settled;
+                break;
+
+            default:
+                return;
         }
 
-        if (Selection.IsEmpty)
-        {
-            Phase = SelectionPhase.Idle;
-        }
-        else
-        {
-            Phase = SelectionPhase.Settled;
-            HoverWindow = PixelRect.Empty;
-        }
+        _press = PressKind.None;
         Changed?.Invoke();
     }
 
@@ -116,6 +171,8 @@ public sealed class CaptureSession
     /// </summary>
     public void Escape()
     {
+        _press = PressKind.None;
+
         if (Phase == SelectionPhase.Settled && !Selection.IsEmpty)
         {
             Phase = SelectionPhase.Idle;
@@ -126,7 +183,7 @@ public sealed class CaptureSession
         Cancelled?.Invoke();
     }
 
-    /// <summary>方向键微调选区边界，按住 Shift 时步长放大。</summary>
+    /// <summary>方向键微调选区位置，按住 Shift 时步长放大。</summary>
     public void NudgeSelection(int dx, int dy)
     {
         if (Selection.IsEmpty) return;
