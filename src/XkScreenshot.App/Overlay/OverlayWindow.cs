@@ -5,6 +5,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
+using XkScreenshot.Annotate;
 using XkScreenshot.Capture;
 using XkScreenshot.Core.Geometry;
 using XkScreenshot.Core.Monitors;
@@ -26,10 +27,16 @@ public sealed class OverlayWindow : Window
     private readonly SelectionLayer _selectionLayer = new();
     private readonly MagnifierLayer _magnifierLayer = new();
     private readonly HintLayer _hintLayer = new();
+    private readonly AnnotationLayer _annotationLayer = new();
+    private readonly ToolbarLayer _toolbarLayer = new();
+    private readonly AnnotationController _annotations;
+    private readonly TextBox _textInput;
     private readonly FrostedBackdrop _backdrop;
     private bool _capturing;
     private bool _magnifierWasVisible;
     private bool _shiftConsumed;
+    private bool _annotating;
+    private Point _textOrigin;
 
     public OverlayWindow(CaptureSession session, MonitorFrame frame)
     {
@@ -58,16 +65,30 @@ public sealed class OverlayWindow : Window
         // 冻结图必须逐像素原样呈现，插值会让文字发虚 —— OCR 阶段尤其致命
         RenderOptions.SetBitmapScalingMode(image, BitmapScalingMode.NearestNeighbor);
 
-        // 毛玻璃背景两层共用一份：模糊一次全屏画面就够了，没必要各算各的
+        // 毛玻璃背景三层共用一份：模糊一次全屏画面就够了，没必要各算各的
         var backdrop = new FrostedBackdrop(frame.Frame);
         _magnifierLayer.Frame = frame.Frame;
         _magnifierLayer.Backdrop = backdrop;
         _hintLayer.Backdrop = backdrop;
+        _toolbarLayer.Backdrop = backdrop;
         _backdrop = backdrop;
 
+        _annotations = new AnnotationController { Document = session.Annotations };
+        _annotationLayer.Document = session.Annotations;
+        _annotationLayer.MonitorOrigin = new PixelPoint(frame.Monitor.Bounds.X, frame.Monitor.Bounds.Y);
+        _annotationLayer.ScaleX = frame.Monitor.ScaleX;
+        _annotationLayer.ScaleY = frame.Monitor.ScaleY;
+
+        _textInput = CreateTextInput();
+
+        // 层序即绘制顺序：标注压在冻结画面上，工具条和放大镜浮在最上面
         Content = new Grid
         {
-            Children = { image, _selectionLayer, _hintLayer, _magnifierLayer },
+            Children =
+            {
+                image, _selectionLayer, _annotationLayer,
+                _hintLayer, _toolbarLayer, _textInput, _magnifierLayer,
+            },
         };
 
         _session.Changed += OnSessionChanged;
@@ -118,7 +139,44 @@ public sealed class OverlayWindow : Window
         }
 
         _selectionLayer.Refresh();
+        SyncAnnotationState();
+        SyncToolbar();
         UpdateHintVisibility();
+    }
+
+    private void SyncAnnotationState()
+    {
+        _annotations.Tool = _session.ActiveTool;
+        _annotations.Stroke = _session.StrokeColor;
+        _annotations.PixelsPerDip = VisualTreeHelper.GetDpi(this).PixelsPerDip;
+
+        _annotationLayer.Selection = _session.Selection;
+        _annotationLayer.Context = _session.Selection.IsEmpty ? null : _session.MosaicContext();
+        _annotationLayer.Preview = _annotations.Preview;
+        _annotationLayer.Refresh();
+    }
+
+    /// <summary>
+    /// 工具条只出现在「持有选区右下角」的那块屏上。跨屏选区时若每块屏都画，
+    /// 会出现两个工具条，点哪个都对不上。
+    /// </summary>
+    private void SyncToolbar()
+    {
+        var selection = _session.Selection;
+        bool visible = _session.Phase == SelectionPhase.Settled
+                       && !selection.IsEmpty
+                       && _frame.Monitor.Bounds.Contains(new PixelPoint(selection.Right - 1, selection.Bottom - 1));
+
+        _toolbarLayer.Visible = visible;
+        _toolbarLayer.ActiveTool = _session.ActiveTool;
+        _toolbarLayer.ActiveColorIndex = _session.ColorIndex;
+        _toolbarLayer.CanUndo = _session.Annotations.CanUndo;
+        _toolbarLayer.CanRedo = _session.Annotations.CanRedo;
+
+        if (visible)
+            _toolbarLayer.Layout(ToLocalDip(selection.Intersect(_frame.Monitor.Bounds)));
+
+        _toolbarLayer.Refresh();
     }
 
     /// <summary>
@@ -199,24 +257,73 @@ public sealed class OverlayWindow : Window
     // 跨屏后完全失真。GetCursorPos 永远是全局物理坐标，跨屏天然正确。
     private static PixelPoint Cursor2Pixel() => MonitorEnumerator.GetCursorPosition();
 
+    /// <summary>虚拟屏幕物理坐标 → 选区局部物理坐标（标注文档用的坐标系）。</summary>
+    private Point ToAnnotationPoint(PixelPoint p)
+        => new(p.X - _session.Selection.X, p.Y - _session.Selection.Y);
+
+    private Point ToWindowDip(PixelPoint p)
+        => ToLocalDipPoint(p);
+
     protected override void OnMouseMove(MouseEventArgs e)
     {
         base.OnMouseMove(e);
         var pt = Cursor2Pixel();
 
         _session.UpdateCursor(pt);
-        if (_capturing) _session.UpdatePress(pt);
-        else _session.UpdateHover(pt);
+
+        if (_annotating)
+        {
+            _annotations.Update(ToAnnotationPoint(pt));
+            _annotationLayer.Preview = _annotations.Preview;
+            _annotationLayer.Refresh();
+            return;
+        }
+
+        if (_capturing)
+        {
+            _session.UpdatePress(pt);
+            return;
+        }
+
+        _session.UpdateHover(pt);
+        if (_toolbarLayer.UpdateHover(ToWindowDip(pt)))
+            _toolbarLayer.Refresh();
     }
 
     protected override void OnMouseLeftButtonDown(MouseButtonEventArgs e)
     {
         base.OnMouseLeftButtonDown(e);
         var cursor = Cursor2Pixel();
+        var local = ToWindowDip(cursor);
+
+        CommitPendingText();
+
+        // 工具条最优先：它盖在选区上，点它绝不能被当成框选或标注
+        if (_toolbarLayer.Contains(local))
+        {
+            HandleToolbarClick(local);
+            return;
+        }
+
+        bool insideSelection = _session.Phase == SelectionPhase.Settled
+                               && _session.Selection.Contains(cursor);
+
+        if (insideSelection && _session.ActiveTool == ToolKind.Text)
+        {
+            BeginTextInput(cursor);
+            return;
+        }
+
+        if (insideSelection && _annotations.IsDragTool)
+        {
+            _annotating = true;
+            _capturing = CaptureMouse();
+            _annotations.Begin(ToAnnotationPoint(cursor));
+            return;
+        }
 
         // 已确定选区后，双击选区内部 = 确认
-        if (e.ClickCount == 2 && _session.Phase == SelectionPhase.Settled
-            && _session.Selection.Contains(cursor))
+        if (e.ClickCount == 2 && insideSelection)
         {
             _session.Confirm();
             return;
@@ -233,7 +340,53 @@ public sealed class OverlayWindow : Window
 
         _capturing = false;
         ReleaseMouseCapture();
+
+        if (_annotating)
+        {
+            _annotating = false;
+            _annotations.End(ToAnnotationPoint(Cursor2Pixel()));
+            _annotationLayer.Preview = null;
+            SyncAnnotationState();
+            SyncToolbar();
+            return;
+        }
+
         _session.EndPress(Cursor2Pixel());
+    }
+
+    private void HandleToolbarClick(Point local)
+    {
+        int swatch = _toolbarLayer.HitTestSwatch(local);
+        if (swatch >= 0)
+        {
+            _session.SetColorIndex(swatch);
+            return;
+        }
+
+        var item = _toolbarLayer.HitTest(local);
+        if (item is null) return;
+
+        if (item.Tool != ToolKind.None)
+        {
+            _session.SetTool(item.Tool);
+            return;
+        }
+
+        switch (item.Command)
+        {
+            case ToolbarCommand.Undo: _session.Annotations.Undo(); SyncAfterEdit(); break;
+            case ToolbarCommand.Redo: _session.Annotations.Redo(); SyncAfterEdit(); break;
+            case ToolbarCommand.Pin: _session.Confirm(CaptureAction.Pin); break;
+            case ToolbarCommand.Copy: _session.Confirm(CaptureAction.Copy); break;
+            case ToolbarCommand.Save: _session.Confirm(CaptureAction.Save); break;
+            case ToolbarCommand.Cancel: _session.Escape(); break;
+        }
+    }
+
+    private void SyncAfterEdit()
+    {
+        SyncAnnotationState();
+        SyncToolbar();
     }
 
     /// <summary>
@@ -247,7 +400,89 @@ public sealed class OverlayWindow : Window
         if (!_capturing) return;
 
         _capturing = false;
+
+        if (_annotating)
+        {
+            _annotating = false;
+            _annotations.Cancel();
+            SyncAfterEdit();
+            return;
+        }
+
         _session.EndPress(Cursor2Pixel());
+    }
+
+    // ---------------- 文字标注 ----------------
+
+    /// <summary>
+    /// 文字标注用真正的 TextBox 承接输入，而不是自己处理按键。
+    /// 中文输入法的候选窗、组合串、光标定位全部由它负责 —— 手写一套只会又难用又有 bug。
+    /// </summary>
+    private TextBox CreateTextInput()
+    {
+        var box = new TextBox
+        {
+            Visibility = Visibility.Collapsed,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            VerticalAlignment = VerticalAlignment.Top,
+            AcceptsReturn = true,
+            MinWidth = 60,
+            Background = new SolidColorBrush(Color.FromArgb(0x30, 0x00, 0x00, 0x00)),
+            BorderBrush = new SolidColorBrush(Color.FromArgb(0xC0, 0x3B, 0x9E, 0xFF)),
+            BorderThickness = new Thickness(1),
+            Padding = new Thickness(2, 0, 2, 0),
+            FontFamily = new FontFamily("Microsoft YaHei UI"),
+            CaretBrush = Brushes.White,
+        };
+
+        box.LostFocus += (_, _) => CommitPendingText();
+        box.PreviewKeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Escape)
+            {
+                box.Text = string.Empty;
+                HideTextInput();
+                e.Handled = true;
+            }
+            // 单独 Enter 提交，Shift+Enter 换行 —— 多行标注偶尔要用
+            else if (e.Key == Key.Enter && (Keyboard.Modifiers & ModifierKeys.Shift) == 0)
+            {
+                CommitPendingText();
+                e.Handled = true;
+            }
+        };
+        return box;
+    }
+
+    private void BeginTextInput(PixelPoint cursor)
+    {
+        _textOrigin = ToAnnotationPoint(cursor);
+        var local = ToWindowDip(cursor);
+
+        _textInput.Text = string.Empty;
+        _textInput.FontSize = _annotations.FontSize / _frame.Monitor.ScaleY;
+        _textInput.Foreground = new SolidColorBrush(_session.StrokeColor);
+        _textInput.Margin = new Thickness(local.X, local.Y, 0, 0);
+        _textInput.Visibility = Visibility.Visible;
+        _textInput.Focus();
+    }
+
+    private void CommitPendingText()
+    {
+        if (_textInput.Visibility != Visibility.Visible) return;
+
+        string text = _textInput.Text;
+        HideTextInput();
+
+        if (_annotations.CommitText(_textOrigin, text))
+            SyncAfterEdit();
+    }
+
+    private void HideTextInput()
+    {
+        _textInput.Visibility = Visibility.Collapsed;
+        _textInput.Text = string.Empty;
+        Focus();
     }
 
     protected override void OnMouseRightButtonUp(MouseButtonEventArgs e)
@@ -271,11 +506,31 @@ public sealed class OverlayWindow : Window
         switch (e.Key)
         {
             case Key.Escape:
-                _session.Escape();
+                // 有工具在用时，Esc 先退出工具，再按才是退回重选
+                if (_session.ActiveTool != ToolKind.None) _session.SetTool(_session.ActiveTool);
+                else _session.Escape();
                 break;
 
             case Key.Enter:
                 _session.Confirm();
+                break;
+
+            case Key.Z when ctrl:
+                _session.Annotations.Undo();
+                SyncAfterEdit();
+                break;
+
+            case Key.Y when ctrl:
+                _session.Annotations.Redo();
+                SyncAfterEdit();
+                break;
+
+            case Key.T when ctrl:
+                _session.Confirm(CaptureAction.Pin);
+                break;
+
+            case Key.S when ctrl:
+                _session.Confirm(CaptureAction.Save);
                 break;
 
             case Key.A when ctrl:

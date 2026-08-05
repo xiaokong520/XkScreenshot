@@ -3,16 +3,13 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Windows;
 using System.Windows.Interop;
-using System.Windows.Media.Imaging;
-using XkScreenshot.App.Output;
 using XkScreenshot.App.Overlay;
 using XkScreenshot.Capture;
-using XkScreenshot.Core.Geometry;
 
 namespace XkScreenshot.App;
 
 /// <summary>
-/// 一次截图的完整生命周期：冻屏 → 铺覆盖层 → 收选区 → 出图。
+/// 一次截图的完整生命周期：冻屏 → 铺覆盖层 → 收选区与标注 → 出图。
 /// 同一时刻只允许有一次会话。
 /// </summary>
 public sealed class CaptureController
@@ -25,8 +22,8 @@ public sealed class CaptureController
 
     public bool IsActive => _session is not null;
 
-    /// <summary>截图完成，参数是裁好的位图。</summary>
-    public event Action<BitmapSource>? Captured;
+    /// <summary>截图完成，参数是烧好标注的成品与用户选的去向。</summary>
+    public event Action<CaptureResult>? Captured;
 
     public void Start()
     {
@@ -59,18 +56,18 @@ public sealed class CaptureController
         active.Activate();
         active.Focus();
 
+        _session.UpdateCursor(cursor);
         _session.UpdateHover(cursor);
     }
 
-    private void OnConfirmed(PixelRect selection)
+    /// <summary>
+    /// 成品位图在 Confirm 时就已经渲染好了，所以这里可以先收掉覆盖层再派发 ——
+    /// 覆盖层必须在贴图窗口出现之前消失，否则新贴图会被压在它下面。
+    /// </summary>
+    private void OnConfirmed(CaptureResult result)
     {
-        var snapshot = _session?.Snapshot;
         Teardown();
-
-        if (snapshot is null || selection.IsEmpty) return;
-
-        var image = snapshot.Crop(selection);
-        Captured?.Invoke(image);
+        Captured?.Invoke(result);
     }
 
     public void Cancel() => Teardown();
