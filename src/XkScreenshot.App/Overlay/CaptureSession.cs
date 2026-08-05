@@ -2,7 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Windows;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
+using XkScreenshot.Annotate;
 using XkScreenshot.Capture;
 using XkScreenshot.Core.Geometry;
 using XkScreenshot.Core.Monitors;
@@ -15,6 +18,17 @@ public enum ColorFormat
     Rgb,
     Hex,
 }
+
+/// <summary>确认截图时用户选的去向。</summary>
+public enum CaptureAction
+{
+    Copy,
+    Pin,
+    Save,
+}
+
+/// <summary>一次截图的成品：已烧好标注的位图，以及它在屏幕上的原始位置（贴图要用）。</summary>
+public sealed record CaptureResult(BitmapSource Image, PixelRect Bounds, CaptureAction Action);
 
 public enum SelectionPhase
 {
@@ -56,6 +70,14 @@ public sealed class CaptureSession
     }
 
     public DesktopSnapshot Snapshot { get; }
+
+    /// <summary>本次截图的标注。坐标是选区局部物理像素。</summary>
+    public AnnotationDocument Annotations { get; } = new();
+
+    public ToolKind ActiveTool { get; private set; } = ToolKind.None;
+    public int ColorIndex { get; private set; }
+    public Color StrokeColor => ToolbarLayer.Palette[ColorIndex];
+
     public SelectionPhase Phase { get; private set; } = SelectionPhase.Idle;
     public PixelRect Selection { get; private set; } = PixelRect.Empty;
     public PixelRect HoverWindow { get; private set; } = PixelRect.Empty;
@@ -82,8 +104,8 @@ public sealed class CaptureSession
     /// </summary>
     public event Action? CursorMoved;
 
-    /// <summary>用户确认了选区。</summary>
-    public event Action<PixelRect>? Confirmed;
+    /// <summary>用户确认了截图，附带已经烧好标注的成品位图。</summary>
+    public event Action<CaptureResult>? Confirmed;
     /// <summary>用户放弃了本次截图。</summary>
     public event Action? Cancelled;
 
@@ -116,6 +138,43 @@ public sealed class CaptureSession
     {
         ShowHints = !ShowHints;
         Changed?.Invoke();
+    }
+
+    /// <summary>选同一个工具再点一次等于取消选择，回到「拖拽=移动选区」。</summary>
+    public void SetTool(ToolKind tool)
+    {
+        ActiveTool = ActiveTool == tool ? ToolKind.None : tool;
+        Changed?.Invoke();
+    }
+
+    public void SetColorIndex(int index)
+    {
+        if (index < 0 || index >= ToolbarLayer.Palette.Length) return;
+        ColorIndex = index;
+        Changed?.Invoke();
+    }
+
+    private PixelRect _mosaicKey = PixelRect.Empty;
+    private MosaicSource? _mosaicSource;
+
+    /// <summary>
+    /// 马赛克要读选区内的原始像素。裁剪结果按选区缓存 ——
+    /// 选区被平移后必须重裁，否则马赛克会取到旧位置的内容。
+    /// </summary>
+    public IAnnotationContext MosaicContext()
+    {
+        if (_mosaicSource is not null && _mosaicKey == Selection) return _mosaicSource;
+
+        var cropped = Snapshot.Crop(Selection);
+        // 统一转成非预乘 BGRA：块平均必须在非预乘数据上算，否则半透明像素会偏色
+        var converted = new FormatConvertedBitmap(cropped, PixelFormats.Bgra32, null, 0);
+        int stride = converted.PixelWidth * 4;
+        var buffer = new byte[stride * converted.PixelHeight];
+        converted.CopyPixels(buffer, stride, 0);
+
+        _mosaicKey = Selection;
+        _mosaicSource = new MosaicSource(buffer, converted.PixelWidth, converted.PixelHeight, stride);
+        return _mosaicSource;
     }
 
     /// <summary>按当前格式把光标处的颜色格式化成可复制的文本。</summary>
@@ -244,10 +303,33 @@ public sealed class CaptureSession
         Changed?.Invoke();
     }
 
-    public void Confirm()
+    public void Confirm(CaptureAction action = CaptureAction.Copy)
     {
         if (Selection.IsEmpty) return;
-        Confirmed?.Invoke(Selection);
+        Confirmed?.Invoke(new CaptureResult(RenderResult(), Selection, action));
+    }
+
+    /// <summary>
+    /// 把选区连同标注一起烧成最终位图。
+    /// 标注坐标本来就是选区局部像素，所以这里不需要任何平移或缩放。
+    /// </summary>
+    public BitmapSource RenderResult()
+    {
+        var image = Snapshot.Crop(Selection);
+        if (Annotations.IsEmpty) return image;
+
+        var visual = new DrawingVisual();
+        using (var dc = visual.RenderOpen())
+        {
+            dc.DrawImage(image, new Rect(0, 0, Selection.Width, Selection.Height));
+            Annotations.Draw(dc, MosaicContext());
+        }
+
+        var target = new RenderTargetBitmap(
+            Selection.Width, Selection.Height, 96, 96, PixelFormats.Pbgra32);
+        target.Render(visual);
+        target.Freeze();
+        return target;
     }
 
     /// <summary>

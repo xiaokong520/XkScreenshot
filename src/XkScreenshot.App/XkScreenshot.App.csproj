@@ -20,6 +20,8 @@
   <ItemGroup>
     <ProjectReference Include="..\XkScreenshot.Core\XkScreenshot.Core.csproj" />
     <ProjectReference Include="..\XkScreenshot.Capture\XkScreenshot.Capture.csproj" />
+    <ProjectReference Include="..\XkScreenshot.Pin\XkScreenshot.Pin.csproj" />
+    <ProjectReference Include="..\XkScreenshot.Annotate\XkScreenshot.Annotate.csproj" />
   </ItemGroup>
 
 </Project>

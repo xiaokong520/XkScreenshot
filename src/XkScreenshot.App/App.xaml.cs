@@ -6,7 +6,9 @@ using System.Threading;
 using System.Windows;
 using System.Windows.Media.Imaging;
 using XkScreenshot.App.Output;
+using XkScreenshot.App.Overlay;
 using XkScreenshot.Capture;
+using XkScreenshot.Pin;
 using XkScreenshot.Core.Hotkeys;
 using XkScreenshot.Core.Native;
 using WinForms = System.Windows.Forms;
@@ -16,6 +18,8 @@ namespace XkScreenshot.App;
 public partial class App : Application
 {
     private const string SingleInstanceMutexName = @"Local\XkScreenshot.SingleInstance";
+
+    private readonly PinManager _pins = new();
 
     private Mutex? _instanceMutex;
     private HotkeyManager? _hotkeys;
@@ -38,6 +42,9 @@ public partial class App : Application
 
         _controller = new CaptureController(new GdiScreenCapture());
         _controller.Captured += OnCaptured;
+
+        _pins.CopyRequested += CopyImage;
+        _pins.SaveRequested += SaveImage;
 
         SetupTrayIcon();
         SetupHotkeys();
@@ -65,6 +72,7 @@ public partial class App : Application
     {
         var menu = new WinForms.ContextMenuStrip();
         menu.Items.Add("截图 (F1)", null, (_, _) => _controller?.Start());
+        menu.Items.Add("关闭全部贴图", null, (_, _) => _pins.CloseAll());
         menu.Items.Add(new WinForms.ToolStripSeparator());
         menu.Items.Add("退出", null, (_, _) => Shutdown());
 
@@ -79,10 +87,28 @@ public partial class App : Application
         _trayIcon.DoubleClick += (_, _) => _controller?.Start();
     }
 
-    private void OnCaptured(BitmapSource image)
+    private void OnCaptured(CaptureResult result)
     {
-        _lastCapture = image;
+        _lastCapture = result.Image;
 
+        switch (result.Action)
+        {
+            case CaptureAction.Pin:
+                _pins.Create(result.Image, result.Bounds);
+                break;
+
+            case CaptureAction.Save:
+                SaveImage(result.Image);
+                break;
+
+            default:
+                CopyImage(result.Image);
+                break;
+        }
+    }
+
+    private void CopyImage(BitmapSource image)
+    {
         try
         {
             ClipboardWriter.SetImage(image);
@@ -93,6 +119,22 @@ public partial class App : Application
             ShowTrayWarning("写入剪贴板失败：" + ex.Message);
         }
     }
+
+    private void SaveImage(BitmapSource image)
+    {
+        try
+        {
+            var path = ImageSaver.SaveAs(image, DefaultSaveDirectory);
+            if (path is not null) ShowTrayInfo("已保存到 " + path);
+        }
+        catch (Exception ex)
+        {
+            ShowTrayWarning("保存失败：" + ex.Message);
+        }
+    }
+
+    private static string DefaultSaveDirectory
+        => Environment.GetFolderPath(Environment.SpecialFolder.MyPictures);
 
     private void ShowTrayInfo(string message)
         => _trayIcon?.ShowBalloonTip(2000, "XkScreenshot", message, WinForms.ToolTipIcon.Info);
