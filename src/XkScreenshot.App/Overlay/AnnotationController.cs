@@ -31,6 +31,12 @@ public sealed class AnnotationController
     /// <summary>马赛克块边长（物理像素）。</summary>
     public int MosaicBlock { get; set; } = 12;
 
+    /// <summary>马赛克是框一块还是涂抹。</summary>
+    public MosaicStyle MosaicStyle { get; set; } = MosaicStyle.Area;
+
+    /// <summary>涂抹式马赛克的笔宽。</summary>
+    public double MosaicBrushWidth { get; set; } = 30;
+
     /// <summary>正在拖拽、尚未提交的标注，用于实时预览。</summary>
     public Annotation? Preview { get; private set; }
 
@@ -51,11 +57,15 @@ public sealed class AnnotationController
         Preview = null;
     }
 
+    /// <summary>靠一串点而不是起止两点成形的工具。</summary>
+    private bool IsStrokeTool => Tool == ToolKind.Ink
+                                 || (Tool == ToolKind.Mosaic && MosaicStyle == MosaicStyle.Brush);
+
     public void Update(Point local)
     {
         if (!_active) return;
 
-        if (Tool == ToolKind.Ink)
+        if (IsStrokeTool)
         {
             // 相邻点太密只会让路径数据膨胀，抽稀一下，视觉上完全看不出差别
             var last = _inkPoints[^1];
@@ -75,7 +85,8 @@ public sealed class AnnotationController
         var shape = Build(local);
         Preview = null;
 
-        bool tooSmall = Tool != ToolKind.Ink
+        // 涂抹类工具原地点一下就该留下一个点，不能按「拖得太短」丢掉
+        bool tooSmall = !IsStrokeTool
                         && Math.Abs(local.X - _anchor.X) < MinDragPx
                         && Math.Abs(local.Y - _anchor.Y) < MinDragPx;
         if (shape is null || tooSmall) return false;
@@ -129,6 +140,14 @@ public sealed class AnnotationController
             ToolKind.Ink => new InkAnnotation
             {
                 Points = _inkPoints.ToArray(), Stroke = Stroke, Thickness = Thickness,
+            },
+            ToolKind.Mosaic when MosaicStyle == MosaicStyle.Brush => new MosaicStrokeAnnotation
+            {
+                Points = _inkPoints.ToArray(),
+                Block = MosaicBlock,
+                Stroke = Stroke,
+                // 马赛克不描边，Thickness 在这里的含义是笔宽
+                Thickness = MosaicBrushWidth,
             },
             ToolKind.Mosaic => new MosaicAnnotation
             {

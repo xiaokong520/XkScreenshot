@@ -29,6 +29,7 @@ public sealed class OverlayWindow : Window
     private readonly HintLayer _hintLayer = new();
     private readonly AnnotationLayer _annotationLayer = new();
     private readonly ToolbarLayer _toolbarLayer = new();
+    private readonly ToolOptionsLayer _toolOptionsLayer = new();
     private readonly AnnotationController _annotations;
     private readonly TextBox _textInput;
     private readonly FrostedBackdrop _backdrop;
@@ -36,6 +37,9 @@ public sealed class OverlayWindow : Window
     private bool _magnifierWasVisible;
     private bool _shiftConsumed;
     private bool _annotating;
+
+    /// <summary>正在色盘里拖着取色的那块区域；None 表示没在取色。</summary>
+    private PickerArea _picking;
     private Point _textOrigin;
 
     public OverlayWindow(CaptureSession session, MonitorFrame frame)
@@ -71,6 +75,7 @@ public sealed class OverlayWindow : Window
         _magnifierLayer.Backdrop = backdrop;
         _hintLayer.Backdrop = backdrop;
         _toolbarLayer.Backdrop = backdrop;
+        _toolOptionsLayer.Backdrop = backdrop;
         _backdrop = backdrop;
 
         _annotations = new AnnotationController { Document = session.Annotations };
@@ -87,7 +92,7 @@ public sealed class OverlayWindow : Window
             Children =
             {
                 image, _selectionLayer, _annotationLayer,
-                _hintLayer, _toolbarLayer, _textInput, _magnifierLayer,
+                _hintLayer, _toolbarLayer, _toolOptionsLayer, _textInput, _magnifierLayer,
             },
         };
 
@@ -148,6 +153,11 @@ public sealed class OverlayWindow : Window
     {
         _annotations.Tool = _session.ActiveTool;
         _annotations.Stroke = _session.StrokeColor;
+        _annotations.Thickness = _session.StrokeThickness;
+        _annotations.FontSize = _session.FontSize;
+        _annotations.MosaicBlock = _session.MosaicBlock;
+        _annotations.MosaicStyle = _session.MosaicStyle;
+        _annotations.MosaicBrushWidth = _session.MosaicBrushWidth;
         _annotations.PixelsPerDip = VisualTreeHelper.GetDpi(this).PixelsPerDip;
 
         _annotationLayer.Selection = _session.Selection;
@@ -177,15 +187,28 @@ public sealed class OverlayWindow : Window
 
         _toolbarLayer.Visible = visible;
         _toolbarLayer.ActiveTool = _session.ActiveTool;
-        _toolbarLayer.ActiveColorIndex = _session.ColorIndex;
         _toolbarLayer.CanUndo = _session.Annotations.CanUndo;
         _toolbarLayer.CanRedo = _session.Annotations.CanRedo;
         _toolbarLayer.CanDelete = _session.SelectedAnnotation >= 0;
 
+        _toolOptionsLayer.Visible = visible;
+        _toolOptionsLayer.ActiveTool = _session.ActiveTool;
+        _toolOptionsLayer.Thickness = _session.StrokeThickness;
+        _toolOptionsLayer.FontSize = _session.FontSize;
+        _toolOptionsLayer.MosaicBlock = _session.MosaicBlock;
+        _toolOptionsLayer.MosaicStyle = _session.MosaicStyle;
+        _toolOptionsLayer.Color = _session.StrokeColor;
+        _toolOptionsLayer.Hsv = _session.PickerHsv;
+        _toolOptionsLayer.PickerOpen = _session.ColorPickerOpen;
+
         if (visible)
+        {
             _toolbarLayer.Layout(ToLocalDip(selection.Intersect(_frame.Monitor.Bounds)));
+            _toolOptionsLayer.Layout(_toolbarLayer.PanelRect, _toolbarLayer.PlacedAbove);
+        }
 
         _toolbarLayer.Refresh();
+        _toolOptionsLayer.Refresh();
     }
 
     /// <summary>
@@ -280,6 +303,12 @@ public sealed class OverlayWindow : Window
 
         _session.UpdateCursor(pt);
 
+        if (_picking != PickerArea.None)
+        {
+            _session.SetPickerHsv(_toolOptionsLayer.PickAt(ToWindowDip(pt), _picking));
+            return;
+        }
+
         if (_annotating)
         {
             _annotations.Update(ToAnnotationPoint(pt));
@@ -307,7 +336,8 @@ public sealed class OverlayWindow : Window
     /// </summary>
     private void UpdateCursorShape(PixelPoint cursor)
     {
-        var hint = _toolbarLayer.Contains(ToWindowDip(cursor))
+        var local = ToWindowDip(cursor);
+        var hint = _toolbarLayer.Contains(local) || _toolOptionsLayer.Contains(local)
             ? CursorHint.Cross
             : _session.HintAt(cursor, HandleTolerance);
 
@@ -338,6 +368,15 @@ public sealed class OverlayWindow : Window
             HandleToolbarClick(local);
             return;
         }
+
+        if (_toolOptionsLayer.Contains(local))
+        {
+            HandleToolOptionsClick(local);
+            return;
+        }
+
+        // 点在别处＝收起色盘。弹层是临时的，不该一直挂在画面上挡着
+        if (_session.CloseColorPicker()) return;
 
         bool insideSelection = _session.Phase == SelectionPhase.Settled
                                && _session.Selection.Contains(cursor);
@@ -376,6 +415,17 @@ public sealed class OverlayWindow : Window
     protected override void OnMouseLeftButtonUp(MouseButtonEventArgs e)
     {
         base.OnMouseLeftButtonUp(e);
+
+        // 取色的收尾放在 _capturing 之前判断：CaptureMouse 是可能失败的，
+        // 那时候标志是 false，但拖拽状态确实开着，漏掉就再也退不出取色了
+        if (_picking != PickerArea.None)
+        {
+            _picking = PickerArea.None;
+            _capturing = false;
+            ReleaseMouseCapture();
+            return;
+        }
+
         if (!_capturing) return;
 
         _capturing = false;
@@ -394,15 +444,54 @@ public sealed class OverlayWindow : Window
         _session.EndPress(Cursor2Pixel());
     }
 
-    private void HandleToolbarClick(Point local)
+    /// <summary>
+    /// 子工具栏的点击。色盘的方块与色相条要能拖 —— 取色本来就是「按住调到满意为止」，
+    /// 只认单击的话用户得点几十次才能凑到想要的颜色。
+    /// </summary>
+    private void HandleToolOptionsClick(Point local)
     {
-        int swatch = _toolbarLayer.HitTestSwatch(local);
-        if (swatch >= 0)
+        var area = _toolOptionsLayer.HitTestPicker(local);
+        if (area != PickerArea.None)
         {
-            _session.SetColorIndex(swatch);
+            _picking = area;
+            _capturing = CaptureMouse();
+            _session.SetPickerHsv(_toolOptionsLayer.PickAt(local, area));
             return;
         }
 
+        var hit = _toolOptionsLayer.HitTest(local);
+        if (hit is null) return;
+
+        switch (hit.Kind)
+        {
+            case ToolOptionKind.Thickness:
+                _session.SetStrokeThickness(ToolOptions.Thicknesses[hit.Index]);
+                break;
+
+            case ToolOptionKind.FontSize:
+                _session.SetFontSize(ToolOptions.FontSizes[hit.Index]);
+                break;
+
+            case ToolOptionKind.MosaicBlock:
+                _session.SetMosaicBlock(ToolOptions.MosaicBlocks[hit.Index]);
+                break;
+
+            case ToolOptionKind.MosaicStyle:
+                _session.SetMosaicStyle((MosaicStyle)hit.Index);
+                break;
+
+            case ToolOptionKind.Color:
+                _session.SetColorIndex(hit.Index);
+                break;
+
+            case ToolOptionKind.ColorPicker:
+                _session.ToggleColorPicker();
+                break;
+        }
+    }
+
+    private void HandleToolbarClick(Point local)
+    {
         var item = _toolbarLayer.HitTest(local);
         if (item is null) return;
 
@@ -442,6 +531,13 @@ public sealed class OverlayWindow : Window
         if (!_capturing) return;
 
         _capturing = false;
+
+        if (_picking != PickerArea.None)
+        {
+            // 颜色已经跟着拖拽实时生效了，被强制收回捕获时保留就好，没什么要回滚的
+            _picking = PickerArea.None;
+            return;
+        }
 
         if (_annotating)
         {
