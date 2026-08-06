@@ -291,22 +291,35 @@ public sealed class InkAnnotation : Annotation
 
     public override Rect Bounds => Inflated(Frame, Thickness);
 
-    public override Rect Frame
+    public override Rect Frame => Extent(Points);
+
+    /// <summary>一串点的外接矩形。涂抹式马赛克也是一串点，共用这一份。</summary>
+    internal static Rect Extent(IReadOnlyList<Point> points)
     {
-        get
+        if (points.Count == 0) return Rect.Empty;
+
+        double minX = double.MaxValue, minY = double.MaxValue;
+        double maxX = double.MinValue, maxY = double.MinValue;
+        foreach (var p in points)
         {
-            if (Points.Count == 0) return Rect.Empty;
-            double minX = double.MaxValue, minY = double.MaxValue;
-            double maxX = double.MinValue, maxY = double.MinValue;
-            foreach (var p in Points)
-            {
-                minX = Math.Min(minX, p.X);
-                minY = Math.Min(minY, p.Y);
-                maxX = Math.Max(maxX, p.X);
-                maxY = Math.Max(maxY, p.Y);
-            }
-            return new Rect(minX, minY, maxX - minX, maxY - minY);
+            minX = Math.Min(minX, p.X);
+            minY = Math.Min(minY, p.Y);
+            maxX = Math.Max(maxX, p.X);
+            maxY = Math.Max(maxY, p.Y);
         }
+        return new Rect(minX, minY, maxX - minX, maxY - minY);
+    }
+
+    /// <summary>点是否落在这串折线附近。逐段量距离 —— 笔迹的外框往往很大而墨迹很稀。</summary>
+    internal static bool NearStroke(IReadOnlyList<Point> points, Point p, double reach)
+    {
+        if (points.Count == 0) return false;
+        if (points.Count == 1) return DistanceToSegment(p, points[0], points[0]) <= reach;
+
+        for (int i = 1; i < points.Count; i++)
+            if (DistanceToSegment(p, points[i - 1], points[i]) <= reach) return true;
+
+        return false;
     }
 
     /// <summary>整条笔迹按外框等比缩放。</summary>
@@ -320,18 +333,7 @@ public sealed class InkAnnotation : Annotation
         return new InkAnnotation { Points = mapped, Stroke = Stroke, Thickness = Thickness };
     }
 
-    /// <summary>逐段量距离。笔迹的外框往往很大而墨迹很稀，用外框会点哪儿都命中。</summary>
-    public override bool HitTest(Point p, double tolerance)
-    {
-        if (Points.Count == 0) return false;
-        if (Points.Count == 1) return DistanceToSegment(p, Points[0], Points[0]) <= Reach(tolerance);
-
-        double reach = Reach(tolerance);
-        for (int i = 1; i < Points.Count; i++)
-            if (DistanceToSegment(p, Points[i - 1], Points[i]) <= reach) return true;
-
-        return false;
-    }
+    public override bool HitTest(Point p, double tolerance) => NearStroke(Points, p, Reach(tolerance));
 
     public override void Draw(DrawingContext dc, IAnnotationContext context)
     {
@@ -472,4 +474,110 @@ public sealed class MosaicAnnotation : Annotation
         Stroke = Stroke,
         Thickness = Thickness,
     };
+}
+
+/// <summary>
+/// 涂抹式马赛克：笔迹经过的地方糊掉。
+///
+/// 框选马赛克要求先想清楚边界再拖，而实际要盖的往往是散落各处的几个头像、
+/// 一串手机号 —— 那种情况下涂过去比框三四个矩形快得多。
+///
+/// 实现上仍然复用同一套块平均：把笔迹加粗成一条通道当裁剪区，
+/// 再在通道的外框上照常铺马赛克块。块的位置是对齐全局网格的，
+/// 所以涂出来的边缘会沿着块边界走，而不是一条毛糙的手抖曲线。
+/// </summary>
+public sealed class MosaicStrokeAnnotation : Annotation
+{
+    public required IReadOnlyList<Point> Points { get; init; }
+    public required int Block { get; init; }
+
+    public override Rect Bounds => Inflated(Frame, Thickness);
+
+    public override Rect Frame => InkAnnotation.Extent(Points);
+
+    public override void Draw(DrawingContext dc, IAnnotationContext context)
+    {
+        var clip = BuildStroke();
+        if (clip is null) return;
+
+        dc.PushClip(clip);
+
+        // 逐段铺，而不是对整条笔迹的外框铺一次：斜着涂一道的话，外框面积可以是
+        // 笔迹本身的几十倍，那些块最后全被裁掉，白算。块的位置对齐全局网格，
+        // 相邻段重叠的部分算出来的颜色完全相同，重复画不会有接缝。
+        double reach = Thickness / 2 + Block;
+        if (Points.Count == 1)
+        {
+            context.DrawMosaic(dc, Inflated(new Rect(Points[0], Points[0]), reach), Block);
+        }
+        else
+        {
+            for (int i = 1; i < Points.Count; i++)
+                context.DrawMosaic(dc, Inflated(new Rect(Points[i - 1], Points[i]), reach), Block);
+        }
+
+        dc.Pop();
+    }
+
+    /// <summary>把笔迹加粗成一条有面积的通道。点太少时退化成一个圆点。</summary>
+    private Geometry? BuildStroke()
+    {
+        if (Points.Count == 0) return null;
+
+        double radius = Math.Max(1, Thickness / 2);
+        if (Points.Count == 1)
+        {
+            var dot = new EllipseGeometry(Points[0], radius, radius);
+            dot.Freeze();
+            return dot;
+        }
+
+        var path = new StreamGeometry();
+        using (var g = path.Open())
+        {
+            g.BeginFigure(Points[0], isFilled: false, isClosed: false);
+            for (int i = 1; i < Points.Count; i++)
+                g.LineTo(Points[i], true, true);
+        }
+
+        // 圆头圆角，涂抹的拐弯处才不会出现缺口
+        var pen = new Pen(Brushes.Black, Thickness)
+        {
+            StartLineCap = PenLineCap.Round,
+            EndLineCap = PenLineCap.Round,
+            LineJoin = PenLineJoin.Round,
+        };
+
+        var widened = path.GetWidenedPathGeometry(pen);
+        widened.FillRule = FillRule.Nonzero;
+        widened.Freeze();
+        return widened;
+    }
+
+    public override Annotation WithFrame(Rect frame)
+    {
+        var from = Frame;
+        var mapped = new Point[Points.Count];
+        for (int i = 0; i < Points.Count; i++)
+            mapped[i] = MapInto(Points[i], from, frame);
+
+        return new MosaicStrokeAnnotation
+        {
+            Points = mapped, Block = Block, Stroke = Stroke, Thickness = Thickness,
+        };
+    }
+
+    public override bool HitTest(Point p, double tolerance) => InkAnnotation.NearStroke(Points, p, Reach(tolerance));
+
+    public override Annotation Translate(double dx, double dy)
+    {
+        var moved = new Point[Points.Count];
+        for (int i = 0; i < Points.Count; i++)
+            moved[i] = new Point(Points[i].X + dx, Points[i].Y + dy);
+
+        return new MosaicStrokeAnnotation
+        {
+            Points = moved, Block = Block, Stroke = Stroke, Thickness = Thickness,
+        };
+    }
 }

@@ -6,6 +6,7 @@ using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using XkScreenshot.Annotate;
+using XkScreenshot.App.Ui;
 using XkScreenshot.Capture;
 using XkScreenshot.Core.Geometry;
 using XkScreenshot.Core.Monitors;
@@ -136,8 +137,30 @@ public sealed class CaptureSession
             : null;
 
     public ToolKind ActiveTool { get; private set; } = ToolKind.None;
-    public int ColorIndex { get; private set; }
-    public Color StrokeColor => ToolbarLayer.Palette[ColorIndex];
+
+    // ---------------- 画笔参数 ----------------
+    // 挂在 Session 上而不是各窗口的 AnnotationController 上：多屏时每块屏一个 Controller，
+    // 参数放那儿的话，在 A 屏调粗的线拖到 B 屏上画出来还是细的。
+
+    /// <summary>描边颜色。可能来自预设，也可能是色盘里挑的任意颜色。</summary>
+    public Color StrokeColor { get; private set; } = ToolOptions.Palette[0];
+
+    /// <summary>当前颜色在预设里的位置，-1 表示是色盘挑的自定义色。</summary>
+    public int ColorIndex => ToolOptions.IndexOf(ToolOptions.Palette, StrokeColor);
+
+    /// <summary>色盘的 HSV 状态。为什么单独存而不是从 RGB 反推，见 <see cref="Hsv"/>。</summary>
+    public Hsv PickerHsv { get; private set; } = Hsv.FromColor(ToolOptions.Palette[0]);
+
+    /// <summary>色盘弹层是否展开。</summary>
+    public bool ColorPickerOpen { get; private set; }
+
+    public double StrokeThickness { get; private set; } = ToolOptions.Thicknesses[1];
+    public double FontSize { get; private set; } = ToolOptions.FontSizes[1];
+    public int MosaicBlock { get; private set; } = ToolOptions.MosaicBlocks[1];
+    public MosaicStyle MosaicStyle { get; private set; } = MosaicStyle.Area;
+
+    /// <summary>涂抹式马赛克的笔宽，跟着粒度走，理由见 <see cref="ToolOptions.MosaicBrushWidthRatio"/>。</summary>
+    public double MosaicBrushWidth => MosaicBlock * ToolOptions.MosaicBrushWidthRatio;
 
     public SelectionPhase Phase { get; private set; } = SelectionPhase.Idle;
     public PixelRect Selection { get; private set; } = PixelRect.Empty;
@@ -207,6 +230,8 @@ public sealed class CaptureSession
         ActiveTool = ActiveTool == tool ? ToolKind.None : tool;
         // 工具一上手就该是画新图形，旧标注的控制点留在屏幕上只会挡路
         SelectedAnnotation = -1;
+        // 换工具意味着换了一整排子工具栏，色盘弹层还悬在那儿会盖住新的按钮
+        ColorPickerOpen = false;
         Changed?.Invoke();
     }
 
@@ -219,6 +244,7 @@ public sealed class CaptureSession
         if (ActiveTool == ToolKind.None) return false;
 
         ActiveTool = ToolKind.None;
+        ColorPickerOpen = false;
         Changed?.Invoke();
         return true;
     }
@@ -248,10 +274,10 @@ public sealed class CaptureSession
     }
 
     /// <summary>
-    /// 逐级返回一步：先取消标注选中，再退出工具。
-    /// 返回 false 表示这两级都没得退，该由调用方决定是退选区还是退出截图。
+    /// 逐级返回一步：色盘弹层 → 标注选中 → 工具。
+    /// 返回 false 表示这几级都没得退，该由调用方决定是退选区还是退出截图。
     /// </summary>
-    public bool StepBack() => ClearAnnotationSelection() || ClearTool();
+    public bool StepBack() => CloseColorPicker() || ClearAnnotationSelection() || ClearTool();
 
     public bool DeleteSelectedAnnotation()
     {
@@ -286,8 +312,78 @@ public sealed class CaptureSession
 
     public void SetColorIndex(int index)
     {
-        if (index < 0 || index >= ToolbarLayer.Palette.Length) return;
-        ColorIndex = index;
+        if (index < 0 || index >= ToolOptions.Palette.Length) return;
+        SetStrokeColor(ToolOptions.Palette[index]);
+    }
+
+    /// <summary>
+    /// 换颜色。色盘的 HSV 跟着同步一次，这样点了预设色再打开色盘，
+    /// 光标就落在那个颜色上，而不是停在上一次调的位置上。
+    /// </summary>
+    public void SetStrokeColor(Color color)
+    {
+        if (color == StrokeColor) return;
+
+        StrokeColor = color;
+        PickerHsv = Hsv.FromColor(color);
+        Changed?.Invoke();
+    }
+
+    /// <summary>色盘拖拽时走这里：HSV 是权威，颜色由它算出来。</summary>
+    public void SetPickerHsv(Hsv hsv)
+    {
+        if (hsv == PickerHsv) return;
+
+        PickerHsv = hsv;
+        StrokeColor = hsv.ToColor();
+        Changed?.Invoke();
+    }
+
+    public void ToggleColorPicker()
+    {
+        ColorPickerOpen = !ColorPickerOpen;
+        Changed?.Invoke();
+    }
+
+    /// <summary>关掉色盘弹层。返回值表示「刚才确实开着」，供逐级返回判断。</summary>
+    public bool CloseColorPicker()
+    {
+        if (!ColorPickerOpen) return false;
+
+        ColorPickerOpen = false;
+        Changed?.Invoke();
+        return true;
+    }
+
+    public void SetStrokeThickness(double thickness)
+    {
+        if (thickness == StrokeThickness) return;
+
+        StrokeThickness = thickness;
+        Changed?.Invoke();
+    }
+
+    public void SetFontSize(double size)
+    {
+        if (size == FontSize) return;
+
+        FontSize = size;
+        Changed?.Invoke();
+    }
+
+    public void SetMosaicBlock(int block)
+    {
+        if (block == MosaicBlock) return;
+
+        MosaicBlock = block;
+        Changed?.Invoke();
+    }
+
+    public void SetMosaicStyle(MosaicStyle style)
+    {
+        if (style == MosaicStyle) return;
+
+        MosaicStyle = style;
         Changed?.Invoke();
     }
 

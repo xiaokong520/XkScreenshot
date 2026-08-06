@@ -72,6 +72,11 @@ public static class Icons
     public static readonly Geometry Save = Build(
         paths: ["M12 15V3", "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4", "m7 10 5 5 5-5"]);
 
+    /// <summary>框选式马赛克：拖一个矩形，整块糊掉。</summary>
+    public static readonly Geometry MosaicArea = Build(
+        rects: [(3, 4, 18, 16, 2)],
+        paths: ["M3 12h18", "M12 4v16"]);
+
     /// <summary>删除选中的标注。</summary>
     public static readonly Geometry Trash = Build(
         paths:

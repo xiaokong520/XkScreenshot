@@ -44,8 +44,6 @@ public sealed class ToolbarLayer : FrameworkElement
     private const double CornerRadius = 10;
     private const double GapToSelection = 12;
     private const double TipFontSize = 11.5;
-    private const double SwatchSize = 16;
-    private const double SwatchGap = 5;
 
     private static readonly Brush HoverBrush = Freeze(new SolidColorBrush(Color.FromArgb(0x26, 0xFF, 0xFF, 0xFF)));
     private static readonly Brush ActiveBrush = Freeze(new SolidColorBrush(Color.FromArgb(0x44, 0x3B, 0x9E, 0xFF)));
@@ -57,8 +55,6 @@ public sealed class ToolbarLayer : FrameworkElement
     private static readonly Brush TipBackBrush = Freeze(new SolidColorBrush(Color.FromArgb(0xEE, 0x0E, 0x10, 0x14)));
     private static readonly Brush TipTextBrush = Freeze(new SolidColorBrush(Color.FromRgb(0xDA, 0xDF, 0xE6)));
     private static readonly Brush SeparatorBrush = Freeze(new SolidColorBrush(Color.FromArgb(0x28, 0xFF, 0xFF, 0xFF)));
-    private static readonly Pen SwatchPen = Freeze(new Pen(new SolidColorBrush(Color.FromArgb(0x66, 0xFF, 0xFF, 0xFF)), 1));
-    private static readonly Pen SwatchActivePen = Freeze(new Pen(Brushes.White, 2));
     private static readonly Typeface TipFace = new("Microsoft YaHei UI");
 
     /// <summary>工具与命令分成两组，中间用调色板隔开，避免手滑点到「取消」。</summary>
@@ -90,18 +86,7 @@ public sealed class ToolbarLayer : FrameworkElement
         new(Icons.Save, "保存  Ctrl+S", ToolKind.None, ToolbarCommand.Save),
     ];
 
-    public static readonly Color[] Palette =
-    [
-        Color.FromRgb(0xFF, 0x3B, 0x30),
-        Color.FromRgb(0xFF, 0x9F, 0x0A),
-        Color.FromRgb(0x34, 0xC7, 0x59),
-        Color.FromRgb(0x3B, 0x9E, 0xFF),
-        Color.FromRgb(0x1C, 0x1C, 0x1E),
-        Color.FromRgb(0xFF, 0xFF, 0xFF),
-    ];
-
     private readonly List<(Rect Rect, ToolbarItem Item)> _hitBoxes = [];
-    private readonly List<(Rect Rect, int Index)> _swatchBoxes = [];
     private ToolbarItem? _hovered;
     private Rect _hoveredRect;
 
@@ -110,13 +95,15 @@ public sealed class ToolbarLayer : FrameworkElement
     public FrostedBackdrop? Backdrop { get; set; }
     public bool Visible { get; set; }
     public ToolKind ActiveTool { get; set; } = ToolKind.None;
-    public int ActiveColorIndex { get; set; }
     public bool CanUndo { get; set; }
     public bool CanRedo { get; set; }
 
     /// <summary>有没有选中的标注可删。</summary>
     public bool CanDelete { get; set; }
     public Rect PanelRect { get; private set; }
+
+    /// <summary>工具条是不是翻到了选区上方。子工具栏据此决定往哪一侧叠。</summary>
+    public bool PlacedAbove { get; private set; }
 
     public void Refresh() => InvalidateVisual();
 
@@ -131,11 +118,13 @@ public sealed class ToolbarLayer : FrameworkElement
 
         double x = Math.Clamp(selectionLocal.Right - w, 0, Math.Max(0, ActualWidth - w));
         double y = selectionLocal.Bottom + GapToSelection;
+        PlacedAbove = false;
 
         if (y + h > ActualHeight)
         {
             double above = selectionLocal.Top - GapToSelection - h;
-            y = above >= 0 ? above : Math.Max(0, ActualHeight - h - GapToSelection);
+            PlacedAbove = above >= 0;
+            y = PlacedAbove ? above : Math.Max(0, ActualHeight - h - GapToSelection);
         }
 
         PanelRect = new Rect(x, y, w, h);
@@ -149,13 +138,6 @@ public sealed class ToolbarLayer : FrameworkElement
         return null;
     }
 
-    /// <summary>调色板命中测试，返回颜色索引；-1 表示没命中。</summary>
-    public int HitTestSwatch(Point local)
-    {
-        foreach (var (rect, index) in _swatchBoxes)
-            if (rect.Contains(local)) return index;
-        return -1;
-    }
 
     /// <summary>点是否落在工具条面板上。落在上面的鼠标操作不能当成框选。</summary>
     public bool Contains(Point local) => Visible && PanelRect.Contains(local);
@@ -172,15 +154,13 @@ public sealed class ToolbarLayer : FrameworkElement
     private static double MeasureWidth()
     {
         double tools = Tools.Length * ButtonSize + (Tools.Length - 1) * ButtonGap;
-        double palette = Palette.Length * SwatchSize + (Palette.Length - 1) * SwatchGap;
         double commands = Commands.Length * ButtonSize + (Commands.Length - 1) * ButtonGap;
-        return PadX * 2 + tools + GroupGap * 2 + palette + commands;
+        return PadX * 2 + tools + GroupGap + commands;
     }
 
     protected override void OnRender(DrawingContext dc)
     {
         _hitBoxes.Clear();
-        _swatchBoxes.Clear();
         if (!Visible || PanelRect.IsEmpty) return;
 
         PanelChrome.DrawGlassPanel(dc, PanelRect, CornerRadius, Backdrop, new Size(ActualWidth, ActualHeight));
@@ -197,10 +177,6 @@ public sealed class ToolbarLayer : FrameworkElement
         }
 
         x += GroupGap - ButtonGap;
-        DrawSeparator(dc, x - GroupGap / 2);
-        x = DrawPalette(dc, x, PanelRect.Y + (PanelRect.Height - SwatchSize) / 2);
-
-        x += GroupGap;
         DrawSeparator(dc, x - GroupGap / 2);
 
         foreach (var item in Commands)
@@ -226,22 +202,6 @@ public sealed class ToolbarLayer : FrameworkElement
     private void DrawSeparator(DrawingContext dc, double x)
         => dc.DrawRectangle(SeparatorBrush, null,
             new Rect(Math.Round(x) + 0.5, PanelRect.Y + PadY + 5, 1, ButtonSize - 10));
-
-    private double DrawPalette(DrawingContext dc, double x, double y)
-    {
-        for (int i = 0; i < Palette.Length; i++)
-        {
-            var brush = new SolidColorBrush(Palette[i]);
-            brush.Freeze();
-
-            var rect = new Rect(x, y, SwatchSize, SwatchSize);
-            dc.DrawRoundedRectangle(brush, i == ActiveColorIndex ? SwatchActivePen : SwatchPen, rect, 4, 4);
-            _swatchBoxes.Add((rect, i));
-
-            x += SwatchSize + SwatchGap;
-        }
-        return x - SwatchGap;
-    }
 
     private void DrawButton(DrawingContext dc, Rect rect, ToolbarItem item, bool active, bool enabled)
     {
