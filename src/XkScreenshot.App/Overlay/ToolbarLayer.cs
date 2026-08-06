@@ -57,7 +57,7 @@ public sealed class ToolbarLayer : FrameworkElement
     private static readonly Brush SeparatorBrush = Freeze(new SolidColorBrush(Color.FromArgb(0x28, 0xFF, 0xFF, 0xFF)));
     private static readonly Typeface TipFace = new("Microsoft YaHei UI");
 
-    /// <summary>工具与命令分成两组，中间用调色板隔开，避免手滑点到「取消」。</summary>
+    /// <summary>工具与命令分成两组，中间隔一道分隔线，避免手滑点到「取消」。</summary>
     private static readonly ToolbarItem[] Tools =
     [
         // 「无工具」必须是一个看得见、点得着的按钮。否则选了矩形之后，
@@ -81,9 +81,11 @@ public sealed class ToolbarLayer : FrameworkElement
         new(Icons.Undo, "撤销  Ctrl+Z", ToolKind.None, ToolbarCommand.Undo),
         new(Icons.Redo, "重做  Ctrl+Y", ToolKind.None, ToolbarCommand.Redo),
         new(Icons.Pin, "贴图  Ctrl+T", ToolKind.None, ToolbarCommand.Pin),
-        new(Icons.Copy, "复制  Enter", ToolKind.None, ToolbarCommand.Copy),
         new(Icons.Close, "取消  Esc", ToolKind.None, ToolbarCommand.Cancel),
+        // 保存和复制这两个「拿走成品」的动作排在最右：一条工具条从左看到右，
+        // 依次是画什么、改什么、最后拿走，末尾这一格也是光标最容易甩到的位置
         new(Icons.Save, "保存  Ctrl+S", ToolKind.None, ToolbarCommand.Save),
+        new(Icons.Copy, "复制  Enter", ToolKind.None, ToolbarCommand.Copy),
     ];
 
     private readonly List<(Rect Rect, ToolbarItem Item)> _hitBoxes = [];
