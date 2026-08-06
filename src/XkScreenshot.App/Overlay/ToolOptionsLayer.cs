@@ -8,12 +8,9 @@ using XkScreenshot.App.Ui;
 
 namespace XkScreenshot.App.Overlay;
 
-/// <summary>子工具栏里一次点击的含义。</summary>
+/// <summary>子工具栏里一次点击的含义。大小滑块不在其中，它走 <see cref="ToolOptionDrag"/>。</summary>
 public enum ToolOptionKind
 {
-    Thickness,
-    FontSize,
-    MosaicBlock,
     MosaicStyle,
     /// <summary>选一个预设色。</summary>
     Color,
@@ -24,14 +21,16 @@ public enum ToolOptionKind
 /// <summary>点中了子工具栏上的哪一格。</summary>
 public sealed record ToolOptionHit(ToolOptionKind Kind, int Index);
 
-/// <summary>色盘弹层里可拖的两块区域。</summary>
-public enum PickerArea
+/// <summary>子工具栏上按住能一路拖的那几块。</summary>
+public enum ToolOptionDrag
 {
     None,
-    /// <summary>饱和度/明度方块。</summary>
-    Square,
-    /// <summary>色相条。</summary>
-    Hue,
+    /// <summary>大小滑块。</summary>
+    Size,
+    /// <summary>色盘的饱和度/明度方块。</summary>
+    PickerSquare,
+    /// <summary>色盘的色相条。</summary>
+    PickerHue,
 }
 
 /// <summary>
@@ -54,6 +53,14 @@ public sealed class ToolOptionsLayer : FrameworkElement
     private const double LabelFontSize = 11;
     private const double LabelGap = 7;
 
+    // 大小滑块
+    private const double TrackWidth = 104;
+    private const double TrackHeight = 4;
+    private const double KnobRadius = 6.5;
+    private const double ReadoutWidth = 26;
+    private const double ReadoutGap = 8;
+    private const double ReadoutFontSize = 12;
+
     // 色盘弹层
     private const double SquareWidth = 168;
     private const double SquareHeight = 112;
@@ -61,10 +68,12 @@ public sealed class ToolOptionsLayer : FrameworkElement
     private const double PickerGap = 9;
     private const double PreviewSize = 26;
 
-    private static readonly Brush HoverBrush = Freeze(new SolidColorBrush(Color.FromArgb(0x26, 0xFF, 0xFF, 0xFF)));
     private static readonly Brush ActiveBrush = Freeze(new SolidColorBrush(Color.FromArgb(0x44, 0x3B, 0x9E, 0xFF)));
     private static readonly Pen ActivePen = Freeze(new Pen(new SolidColorBrush(Color.FromArgb(0xB0, 0x3B, 0x9E, 0xFF)), 1));
     private static readonly Brush InkBrush = Freeze(new SolidColorBrush(Color.FromRgb(0xE4, 0xE8, 0xEE)));
+    private static readonly Brush TrackBrush = Freeze(new SolidColorBrush(Color.FromArgb(0x3A, 0xFF, 0xFF, 0xFF)));
+    private static readonly Brush FillBrush = Freeze(new SolidColorBrush(Color.FromRgb(0x3B, 0x9E, 0xFF)));
+    private static readonly Pen KnobPen = Freeze(new Pen(new SolidColorBrush(Color.FromArgb(0x70, 0x00, 0x00, 0x00)), 1));
     private static readonly Brush ActiveInkBrush = Freeze(new SolidColorBrush(Color.FromRgb(0xA8, 0xD4, 0xFF)));
     private static readonly Brush LabelBrush = Freeze(new SolidColorBrush(Color.FromRgb(0x7C, 0x84, 0x91)));
     private static readonly Brush SeparatorBrush = Freeze(new SolidColorBrush(Color.FromArgb(0x28, 0xFF, 0xFF, 0xFF)));
@@ -92,8 +101,8 @@ public sealed class ToolOptionsLayer : FrameworkElement
     private static readonly Brush BlackFade = Freeze(new LinearGradientBrush(
         Color.FromArgb(0, 0, 0, 0), Colors.Black, 90));
 
-    /// <summary>一组参数：一个标签 + 若干格子。</summary>
-    private sealed record Group(string Label, ToolOptionKind Kind, int Count);
+    /// <summary>一组参数：一个标签，后面跟若干格子；Kind 为 null 表示跟的是一个滑块。</summary>
+    private sealed record Group(string Label, ToolOptionKind? Kind, int Count);
 
     private readonly List<(Rect Rect, ToolOptionHit Hit)> _hitBoxes = [];
     private readonly Dictionary<string, FormattedText> _labels = [];
@@ -104,10 +113,14 @@ public sealed class ToolOptionsLayer : FrameworkElement
     public FrostedBackdrop? Backdrop { get; set; }
     public bool Visible { get; set; }
 
+    /// <summary>子工具栏在为谁服务：选中的标注，或者当前工具。</summary>
     public ToolKind ActiveTool { get; set; } = ToolKind.None;
-    public double Thickness { get; set; }
-    public double FontSize { get; set; }
-    public int MosaicBlock { get; set; }
+
+    /// <summary>滑块此刻调的是哪个数值，以及它的范围和当前值。</summary>
+    public SizeOption Size { get; set; }
+    public OptionRange SizeRange { get; set; } = ToolOptions.Thickness;
+    public double SizeValue { get; set; }
+
     public MosaicStyle MosaicStyle { get; set; }
     public Color Color { get; set; }
     public Hsv Hsv { get; set; }
@@ -117,6 +130,7 @@ public sealed class ToolOptionsLayer : FrameworkElement
     public Rect PickerRect { get; private set; }
     private Rect _squareRect;
     private Rect _hueRect;
+    private Rect _trackRect;
 
     /// <summary>当前工具有没有参数可调。没有的话整条栏都不出现。</summary>
     public bool HasOptions => GroupsFor(ActiveTool).Length > 0;
@@ -188,22 +202,37 @@ public sealed class ToolOptionsLayer : FrameworkElement
         return null;
     }
 
-    /// <summary>色盘弹层的命中测试：拖拽取色要靠它分辨用户抓的是方块还是色相条。</summary>
-    public PickerArea HitTestPicker(Point local)
+    /// <summary>
+    /// 按住能拖的那几块。滑块排在最前 —— 它跟色盘弹层不会重叠，先判谁都一样，
+    /// 但顺序写死了才不用担心以后布局挪动时出现两块重合。
+    /// </summary>
+    public ToolOptionDrag HitTestDrag(Point local)
     {
-        if (!Visible || !PickerOpen) return PickerArea.None;
-        if (_squareRect.Contains(local)) return PickerArea.Square;
-        if (_hueRect.Contains(local)) return PickerArea.Hue;
-        return PickerArea.None;
+        if (!Visible) return ToolOptionDrag.None;
+        if (Size != SizeOption.None && SliderZone.Contains(local)) return ToolOptionDrag.Size;
+
+        if (!PickerOpen) return ToolOptionDrag.None;
+        if (_squareRect.Contains(local)) return ToolOptionDrag.PickerSquare;
+        if (_hueRect.Contains(local)) return ToolOptionDrag.PickerHue;
+        return ToolOptionDrag.None;
     }
+
+    /// <summary>
+    /// 滑块的可点区域比那条 4 像素的轨道高得多：轨道画细是为了好看，
+    /// 但真让用户去点一条 4 像素的线，谁都得瞄准两次。
+    /// </summary>
+    private Rect SliderZone => _trackRect.IsEmpty
+        ? Rect.Empty
+        : new Rect(_trackRect.X - KnobRadius, PanelRect.Y + PadY,
+            _trackRect.Width + KnobRadius * 2, ChipSize);
 
     /// <summary>
     /// 把光标位置换算成颜色。坐标会被夹回区域内 —— 拖出边界还能继续调，
     /// 是取色器的基本手感，松手前一直跟着走。
     /// </summary>
-    public Hsv PickAt(Point local, PickerArea area)
+    public Hsv PickAt(Point local, ToolOptionDrag area)
     {
-        if (area == PickerArea.Hue)
+        if (area == ToolOptionDrag.PickerHue)
         {
             double t = Math.Clamp((local.X - _hueRect.X) / _hueRect.Width, 0, 1);
             return Hsv with { H = t * 360 };
@@ -214,26 +243,23 @@ public sealed class ToolOptionsLayer : FrameworkElement
         return Hsv with { S = s, V = v };
     }
 
-    private static Group[] GroupsFor(ToolKind tool) => tool switch
+    /// <summary>把光标位置换算成滑块的值，同样夹回范围内。</summary>
+    public double ValueAt(Point local)
+        => _trackRect.Width <= 0
+            ? SizeValue
+            : SizeRange.At((local.X - _trackRect.X) / _trackRect.Width);
+
+    private Group[] GroupsFor(ToolKind tool) => tool switch
     {
-        ToolKind.Rectangle or ToolKind.Ellipse or ToolKind.Arrow or ToolKind.Ink =>
-        [
-            new("粗细", ToolOptionKind.Thickness, ToolOptions.Thicknesses.Length),
-            ColorGroup,
-        ],
-        ToolKind.Text =>
-        [
-            new("字号", ToolOptionKind.FontSize, ToolOptions.FontSizes.Length),
-            ColorGroup,
-        ],
+        ToolKind.Rectangle or ToolKind.Ellipse or ToolKind.Arrow or ToolKind.Ink or ToolKind.Text =>
+            [SizeGroup, ColorGroup],
         // 马赛克没有颜色可言 —— 它取的就是画面本身的颜色
-        ToolKind.Mosaic =>
-        [
-            new("方式", ToolOptionKind.MosaicStyle, 2),
-            new("粒度", ToolOptionKind.MosaicBlock, ToolOptions.MosaicBlocks.Length),
-        ],
+        ToolKind.Mosaic => [new("方式", ToolOptionKind.MosaicStyle, 2), SizeGroup],
         _ => [],
     };
+
+    /// <summary>标签跟着当前工具变：粗细 / 字号 / 粒度，调的是同一个滑块。</summary>
+    private Group SizeGroup => new(ToolOptions.LabelOf(Size), null, 0);
 
     /// <summary>预设色后面多一格：那是打开色盘的入口。</summary>
     private static Group ColorGroup => new("颜色", ToolOptionKind.Color, ToolOptions.Palette.Length + 1);
@@ -247,7 +273,9 @@ public sealed class ToolOptionsLayer : FrameworkElement
         {
             if (i > 0) w += GroupGap;
             w += Label(groups[i].Label).Width + LabelGap;
-            w += groups[i].Count * ChipSize + (groups[i].Count - 1) * ChipGap;
+            w += groups[i].Kind is null
+                ? TrackWidth + ReadoutGap + ReadoutWidth
+                : groups[i].Count * ChipSize + (groups[i].Count - 1) * ChipGap;
         }
         return w;
     }
@@ -272,6 +300,7 @@ public sealed class ToolOptionsLayer : FrameworkElement
     protected override void OnRender(DrawingContext dc)
     {
         _hitBoxes.Clear();
+        _trackRect = Rect.Empty;
         if (!Visible || PanelRect.IsEmpty) return;
 
         PanelChrome.DrawGlassPanel(dc, PanelRect, CornerRadius, Backdrop, new Size(ActualWidth, ActualHeight));
@@ -293,16 +322,55 @@ public sealed class ToolOptionsLayer : FrameworkElement
             dc.DrawText(label, new Point(x, PanelRect.Y + (PanelRect.Height - label.Height) / 2));
             x += label.Width + LabelGap;
 
+            if (group.Kind is not { } kind)
+            {
+                DrawSlider(dc, x, y);
+                x += TrackWidth + ReadoutGap + ReadoutWidth;
+                continue;
+            }
+
             for (int i = 0; i < group.Count; i++)
             {
                 var rect = new Rect(x, y, ChipSize, ChipSize);
-                DrawChip(dc, rect, group.Kind, i);
+                DrawChip(dc, rect, kind, i);
                 x += ChipSize + ChipGap;
             }
             x -= ChipGap;
         }
 
         if (PickerOpen) DrawPicker(dc);
+    }
+
+    /// <summary>
+    /// 大小滑块：一条轨道 + 一个圆钮 + 一个数字读数。
+    ///
+    /// 数字是必需的而不是装饰 —— 连续可调的东西没有读数，用户既说不出「现在是几」，
+    /// 也没法把这次的设置在下次复现出来。
+    /// </summary>
+    private void DrawSlider(DrawingContext dc, double x, double y)
+    {
+        double cy = y + ChipSize / 2;
+        _trackRect = new Rect(x, cy - TrackHeight / 2, TrackWidth, TrackHeight);
+
+        double r = TrackHeight / 2;
+        dc.DrawRoundedRectangle(TrackBrush, null, _trackRect, r, r);
+
+        double knobX = _trackRect.X + SizeRange.Fraction(SizeValue) * TrackWidth;
+        if (knobX > _trackRect.X)
+            dc.DrawRoundedRectangle(FillBrush, null,
+                new Rect(_trackRect.X, _trackRect.Y, knobX - _trackRect.X, TrackHeight), r, r);
+
+        dc.DrawEllipse(Brushes.White, KnobPen, new Point(knobX, cy), KnobRadius, KnobRadius);
+
+        var readout = new FormattedText(
+            SizeValue.ToString("0", CultureInfo.InvariantCulture),
+            CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
+            Face, ReadoutFontSize, InkBrush, VisualTreeHelper.GetDpi(this).PixelsPerDip);
+
+        // 右对齐：数字从一位变两位时，左对齐会让整块读数跟着抖
+        dc.DrawText(readout, new Point(
+            x + TrackWidth + ReadoutGap + ReadoutWidth - readout.Width,
+            cy - readout.Height / 2));
     }
 
     private void DrawSeparator(DrawingContext dc, double x)
@@ -324,18 +392,6 @@ public sealed class ToolOptionsLayer : FrameworkElement
 
         switch (kind)
         {
-            case ToolOptionKind.Thickness:
-                DrawDot(dc, rect, ToolOptions.Thicknesses[index], ink);
-                break;
-
-            case ToolOptionKind.FontSize:
-                DrawGlyph(dc, rect, index, ink);
-                break;
-
-            case ToolOptionKind.MosaicBlock:
-                DrawGrain(dc, rect, index, ink);
-                break;
-
             case ToolOptionKind.MosaicStyle:
                 // 涂抹沿用画笔的图标：这两处是同一个手势（按住拖过去），
                 // 换一个图标反而要让用户再认一次
@@ -354,56 +410,12 @@ public sealed class ToolOptionsLayer : FrameworkElement
 
     private bool IsActive(ToolOptionKind kind, int index, bool isPicker) => kind switch
     {
-        ToolOptionKind.Thickness => ToolOptions.IndexOf(ToolOptions.Thicknesses, Thickness) == index,
-        ToolOptionKind.FontSize => ToolOptions.IndexOf(ToolOptions.FontSizes, FontSize) == index,
-        ToolOptionKind.MosaicBlock => ToolOptions.IndexOf(ToolOptions.MosaicBlocks, MosaicBlock) == index,
         ToolOptionKind.MosaicStyle => (int)MosaicStyle == index,
         // 色盘那一格在「当前颜色不是任何预设」时点亮：自定义色总得有个去处显示
         ToolOptionKind.Color when isPicker => PickerOpen || ToolOptions.IndexOf(ToolOptions.Palette, Color) < 0,
         ToolOptionKind.Color => ToolOptions.IndexOf(ToolOptions.Palette, Color) == index,
         _ => false,
     };
-
-    /// <summary>线宽用一个同等直径的实心圆表示，比写数字直观。</summary>
-    private static void DrawDot(DrawingContext dc, Rect rect, double thickness, Brush brush)
-    {
-        // 直接按线宽画会让最细的那档小得看不清，压缩到 4~13 这个区间
-        double d = 4 + thickness * 0.85;
-        dc.DrawEllipse(brush, null,
-            new Point(rect.X + rect.Width / 2, rect.Y + rect.Height / 2), d / 2, d / 2);
-    }
-
-    private void DrawGlyph(DrawingContext dc, Rect rect, int index, Brush brush)
-    {
-        double size = 9 + index * 3;
-        var text = new FormattedText("A", CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
-            Face, size, brush, VisualTreeHelper.GetDpi(this).PixelsPerDip);
-
-        dc.DrawText(text, new Point(
-            rect.X + (rect.Width - text.Width) / 2,
-            rect.Y + (rect.Height - text.Height) / 2));
-    }
-
-    /// <summary>粒度用格子密度表示：格子越大越糊。</summary>
-    private static void DrawGrain(DrawingContext dc, Rect rect, int index, Brush brush)
-    {
-        int cells = 5 - index;                       // 5,4,3,2
-        double box = 15;
-        double cell = box / cells;
-        double x0 = rect.X + (rect.Width - box) / 2;
-        double y0 = rect.Y + (rect.Height - box) / 2;
-
-        for (int r = 0; r < cells; r++)
-        {
-            for (int c = 0; c < cells; c++)
-            {
-                // 棋盘式填一半，格子的大小才看得出来 —— 全填满就只是一个方块
-                if ((r + c) % 2 != 0) continue;
-                dc.DrawRectangle(brush, null,
-                    new Rect(x0 + c * cell, y0 + r * cell, cell, cell));
-            }
-        }
-    }
 
     private static void DrawSwatch(DrawingContext dc, Rect rect, Color color, bool active)
     {
