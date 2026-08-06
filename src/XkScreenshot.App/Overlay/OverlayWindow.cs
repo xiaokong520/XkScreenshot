@@ -38,8 +38,8 @@ public sealed class OverlayWindow : Window
     private bool _shiftConsumed;
     private bool _annotating;
 
-    /// <summary>正在色盘里拖着取色的那块区域；None 表示没在取色。</summary>
-    private PickerArea _picking;
+    /// <summary>正在子工具栏上拖的那块（滑块或色盘）；None 表示没在拖。</summary>
+    private ToolOptionDrag _dragging;
     private Point _textOrigin;
 
     public OverlayWindow(CaptureSession session, MonitorFrame frame)
@@ -191,13 +191,15 @@ public sealed class OverlayWindow : Window
         _toolbarLayer.CanRedo = _session.Annotations.CanRedo;
         _toolbarLayer.CanDelete = _session.SelectedAnnotation >= 0;
 
+        // 子工具栏跟着「选中的标注 / 当前工具」走，不是跟着工具走：
+        // 选中一个画好的图形，调的就该是它的参数
         _toolOptionsLayer.Visible = visible;
-        _toolOptionsLayer.ActiveTool = _session.ActiveTool;
-        _toolOptionsLayer.Thickness = _session.StrokeThickness;
-        _toolOptionsLayer.FontSize = _session.FontSize;
-        _toolOptionsLayer.MosaicBlock = _session.MosaicBlock;
+        _toolOptionsLayer.ActiveTool = _session.EffectiveTool;
+        _toolOptionsLayer.Size = _session.SizeOption;
+        _toolOptionsLayer.SizeRange = _session.SizeRange;
+        _toolOptionsLayer.SizeValue = _session.SizeValue;
         _toolOptionsLayer.MosaicStyle = _session.MosaicStyle;
-        _toolOptionsLayer.Color = _session.StrokeColor;
+        _toolOptionsLayer.Color = _session.Style.Stroke;
         _toolOptionsLayer.Hsv = _session.PickerHsv;
         _toolOptionsLayer.PickerOpen = _session.ColorPickerOpen;
 
@@ -235,8 +237,14 @@ public sealed class OverlayWindow : Window
     {
         // 选区确定后放大镜依然保留：这时候用户往往正要核对选区边界是否压住了想要的那一行像素，
         // 或者只是想再取一个颜色 —— 恰恰是最需要它的时候。
+        //
+        // 但光标压在工具条上时必须收起来：那儿的画面是工具条自己，放大它没有任何意义，
+        // 而这块面板足够大，跟着光标飘过去正好把要点的按钮盖住。
+        var local = ToLocalDipPoint(_session.Cursor);
         bool onThisMonitor = _frame.Monitor.Bounds.Contains(_session.Cursor)
-                             && _session.CursorOnScreen;
+                             && _session.CursorOnScreen
+                             && !_toolbarLayer.Contains(local)
+                             && !_toolOptionsLayer.Contains(local);
 
         if (!onThisMonitor && !_magnifierWasVisible) return;
         _magnifierWasVisible = onThisMonitor;
@@ -244,7 +252,7 @@ public sealed class OverlayWindow : Window
         if (onThisMonitor)
         {
             _magnifierLayer.CursorPixel = _session.Cursor;
-            _magnifierLayer.CursorLocal = ToLocalDipPoint(_session.Cursor);
+            _magnifierLayer.CursorLocal = local;
             _magnifierLayer.Color = _session.CursorColor;
             _magnifierLayer.Format = _session.ColorFormat;
         }
@@ -303,9 +311,9 @@ public sealed class OverlayWindow : Window
 
         _session.UpdateCursor(pt);
 
-        if (_picking != PickerArea.None)
+        if (_dragging != ToolOptionDrag.None)
         {
-            _session.SetPickerHsv(_toolOptionsLayer.PickAt(ToWindowDip(pt), _picking));
+            DragToolOption(ToWindowDip(pt));
             return;
         }
 
@@ -381,14 +389,20 @@ public sealed class OverlayWindow : Window
         bool insideSelection = _session.Phase == SelectionPhase.Settled
                                && _session.Selection.Contains(cursor);
 
-        if (insideSelection && _session.ActiveTool == ToolKind.Text)
+        // 画完的图形是选中状态，它的控制点优先于「再画一个」：
+        // 那几个小方块是刚刚才出现的，按在上面只可能是想调整它
+        bool onHandle = _session.HitTestAnnotationHandle(cursor, HandleTolerance) >= 0;
+
+        if (!onHandle && insideSelection && _session.ActiveTool == ToolKind.Text)
         {
             BeginTextInput(cursor);
             return;
         }
 
-        if (insideSelection && _annotations.IsDragTool)
+        if (!onHandle && insideSelection && _annotations.IsDragTool)
         {
+            // 开始画新的一笔就等于放弃刚才那个：旧控制点留着会跟新图形叠在一起
+            _session.ClearAnnotationSelection();
             _annotating = true;
             _capturing = CaptureMouse();
             _annotations.Begin(ToAnnotationPoint(cursor));
@@ -416,13 +430,15 @@ public sealed class OverlayWindow : Window
     {
         base.OnMouseLeftButtonUp(e);
 
-        // 取色的收尾放在 _capturing 之前判断：CaptureMouse 是可能失败的，
+        // 子工具栏拖拽的收尾放在 _capturing 之前判断：CaptureMouse 是可能失败的，
         // 那时候标志是 false，但拖拽状态确实开着，漏掉就再也退不出取色了
-        if (_picking != PickerArea.None)
+        if (_dragging != ToolOptionDrag.None)
         {
-            _picking = PickerArea.None;
+            _dragging = ToolOptionDrag.None;
             _capturing = false;
             ReleaseMouseCapture();
+            // 整段拖拽合成一个撤销点，松手才落账
+            _session.FlushStyleEdit();
             return;
         }
 
@@ -434,7 +450,9 @@ public sealed class OverlayWindow : Window
         if (_annotating)
         {
             _annotating = false;
-            _annotations.End(ToAnnotationPoint(Cursor2Pixel()));
+            // 画完立刻选中它：多数时候第一笔的大小、颜色都要再调一下，
+            // 让用户先切回选择工具、再去把刚画的东西点中，是白绕一圈
+            if (_annotations.End(ToAnnotationPoint(Cursor2Pixel()))) SelectNewest();
             _annotationLayer.Preview = null;
             SyncAnnotationState();
             SyncToolbar();
@@ -445,17 +463,17 @@ public sealed class OverlayWindow : Window
     }
 
     /// <summary>
-    /// 子工具栏的点击。色盘的方块与色相条要能拖 —— 取色本来就是「按住调到满意为止」，
-    /// 只认单击的话用户得点几十次才能凑到想要的颜色。
+    /// 子工具栏的点击。滑块和色盘都要能按住一路拖 —— 调粗细、调颜色本来就是
+    /// 「按住改到满意为止」，只认单击的话得点几十次才能凑到想要的值。
     /// </summary>
     private void HandleToolOptionsClick(Point local)
     {
-        var area = _toolOptionsLayer.HitTestPicker(local);
-        if (area != PickerArea.None)
+        var drag = _toolOptionsLayer.HitTestDrag(local);
+        if (drag != ToolOptionDrag.None)
         {
-            _picking = area;
+            _dragging = drag;
             _capturing = CaptureMouse();
-            _session.SetPickerHsv(_toolOptionsLayer.PickAt(local, area));
+            DragToolOption(local);
             return;
         }
 
@@ -464,18 +482,6 @@ public sealed class OverlayWindow : Window
 
         switch (hit.Kind)
         {
-            case ToolOptionKind.Thickness:
-                _session.SetStrokeThickness(ToolOptions.Thicknesses[hit.Index]);
-                break;
-
-            case ToolOptionKind.FontSize:
-                _session.SetFontSize(ToolOptions.FontSizes[hit.Index]);
-                break;
-
-            case ToolOptionKind.MosaicBlock:
-                _session.SetMosaicBlock(ToolOptions.MosaicBlocks[hit.Index]);
-                break;
-
             case ToolOptionKind.MosaicStyle:
                 _session.SetMosaicStyle((MosaicStyle)hit.Index);
                 break;
@@ -488,6 +494,14 @@ public sealed class OverlayWindow : Window
                 _session.ToggleColorPicker();
                 break;
         }
+    }
+
+    private void DragToolOption(Point local)
+    {
+        if (_dragging == ToolOptionDrag.Size)
+            _session.SetSizeValue(_toolOptionsLayer.ValueAt(local));
+        else
+            _session.SetPickerHsv(_toolOptionsLayer.PickAt(local, _dragging));
     }
 
     private void HandleToolbarClick(Point local)
@@ -532,10 +546,11 @@ public sealed class OverlayWindow : Window
 
         _capturing = false;
 
-        if (_picking != PickerArea.None)
+        if (_dragging != ToolOptionDrag.None)
         {
-            // 颜色已经跟着拖拽实时生效了，被强制收回捕获时保留就好，没什么要回滚的
-            _picking = PickerArea.None;
+            // 值已经跟着拖拽实时生效了，被强制收回捕获时保留就好，没什么要回滚的
+            _dragging = ToolOptionDrag.None;
+            _session.FlushStyleEdit();
             return;
         }
 
@@ -612,15 +627,38 @@ public sealed class OverlayWindow : Window
         string text = _textInput.Text;
         HideTextInput();
 
-        if (_annotations.CommitText(_textOrigin, text))
-            SyncAfterEdit();
+        if (!_annotations.CommitText(_textOrigin, text)) return;
+
+        SelectNewest();
+        SyncAfterEdit();
     }
+
+    /// <summary>选中刚添加的那个标注 —— 它永远排在最后。</summary>
+    private void SelectNewest()
+        => _session.SelectAnnotation(_session.Annotations.Items.Count - 1);
 
     private void HideTextInput()
     {
         _textInput.Visibility = Visibility.Collapsed;
         _textInput.Text = string.Empty;
         Focus();
+    }
+
+    /// <summary>
+    /// 滚轮调当前这一档「大小」：粗细 / 字号 / 马赛克粒度，看手上是什么工具。
+    ///
+    /// 每种工具只有一个尺寸参数，所以不需要先指定调什么 —— 滚就是了。
+    /// 覆盖层是全屏的，光标在哪儿滚都算，不必先把鼠标挪到子工具栏上去。
+    /// </summary>
+    protected override void OnMouseWheel(MouseWheelEventArgs e)
+    {
+        base.OnMouseWheel(e);
+
+        // 一次事件可能带着好几格，高精度滚轮尤其如此
+        int notches = e.Delta / Mouse.MouseWheelDeltaForOneLine;
+        if (notches == 0) return;
+
+        if (_session.StepSize(notches)) e.Handled = true;
     }
 
     /// <summary>右键与 Esc 同为「逐级返回」：先取消选中的标注，再退工具，最后退选区。</summary>

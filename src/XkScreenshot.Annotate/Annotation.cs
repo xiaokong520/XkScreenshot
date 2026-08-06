@@ -19,6 +19,16 @@ public enum ToolKind
 }
 
 /// <summary>
+/// 画笔参数的一份完整快照，与几何无关。
+///
+/// 各字段并非每种标注都用得上（矩形没有字号，文字没有马赛克粒度）。
+/// 打包成一个整体传递，是为了让「改样式」这件事只有一个入口 ——
+/// 每加一个参数就给每种标注加一个方法的话，很快就没人记得住哪种支持哪些了。
+/// </summary>
+public readonly record struct AnnotationStyle(
+    Color Stroke, double Thickness, double FontSize, int MosaicBlock, double MosaicBrushWidth);
+
+/// <summary>
 /// 一个标注。
 ///
 /// 坐标系是「选区局部像素」—— 原点在选区左上角，单位是物理像素。
@@ -29,6 +39,21 @@ public abstract class Annotation
 {
     public required Color Stroke { get; init; }
     public required double Thickness { get; init; }
+
+    /// <summary>这是哪个工具画出来的。选中它时，子工具栏据此决定摆哪几个参数。</summary>
+    public abstract ToolKind Kind { get; }
+
+    /// <summary>
+    /// 把自己的样式盖在一份默认值上。
+    ///
+    /// 只覆盖自己真正用到的那几个字段：选中一个矩形时，子工具栏该显示它的线宽，
+    /// 但「字号」这种它根本没有的参数只能沿用画笔的默认值。
+    /// </summary>
+    public virtual AnnotationStyle StyleOver(AnnotationStyle fallback)
+        => fallback with { Stroke = Stroke, Thickness = Thickness };
+
+    /// <summary>换一套样式，几何原样不动。同样只取自己用得上的那几个字段。</summary>
+    public abstract Annotation WithStyle(AnnotationStyle style);
 
     public abstract void Draw(DrawingContext dc, IAnnotationContext context);
 
@@ -126,8 +151,14 @@ public sealed class RectangleAnnotation : Annotation
     public required Rect Area { get; init; }
     public bool Filled { get; init; }
 
+    public override ToolKind Kind => ToolKind.Rectangle;
     public override Rect Bounds => Inflated(Area, Thickness);
     public override Rect Frame => Area;
+
+    public override Annotation WithStyle(AnnotationStyle style) => new RectangleAnnotation
+    {
+        Area = Area, Filled = Filled, Stroke = style.Stroke, Thickness = style.Thickness,
+    };
 
     public override void Draw(DrawingContext dc, IAnnotationContext context)
     {
@@ -170,8 +201,14 @@ public sealed class EllipseAnnotation : Annotation
 {
     public required Rect Area { get; init; }
 
+    public override ToolKind Kind => ToolKind.Ellipse;
     public override Rect Bounds => Inflated(Area, Thickness);
     public override Rect Frame => Area;
+
+    public override Annotation WithStyle(AnnotationStyle style) => new EllipseAnnotation
+    {
+        Area = Area, Stroke = style.Stroke, Thickness = style.Thickness,
+    };
 
     public override void Draw(DrawingContext dc, IAnnotationContext context)
         => dc.DrawEllipse(null, CreatePen(),
@@ -210,8 +247,14 @@ public sealed class ArrowAnnotation : Annotation
     /// <summary>箭头大小跟着线宽走，细线配大箭头会很怪。</summary>
     private double HeadLength => Math.Max(10, Thickness * 4.5);
 
+    public override ToolKind Kind => ToolKind.Arrow;
     public override Rect Bounds => Inflated(new Rect(From, To), HeadLength);
     public override Rect Frame => new(From, To);
+
+    public override Annotation WithStyle(AnnotationStyle style) => new ArrowAnnotation
+    {
+        From = From, To = To, Stroke = style.Stroke, Thickness = style.Thickness,
+    };
 
     /// <summary>箭头给两个端点，比外框八个点自然得多 —— 要调的本来就是「从哪指到哪」。</summary>
     public override int HandleCount => 2;
@@ -289,9 +332,15 @@ public sealed class InkAnnotation : Annotation
 {
     public required IReadOnlyList<Point> Points { get; init; }
 
+    public override ToolKind Kind => ToolKind.Ink;
     public override Rect Bounds => Inflated(Frame, Thickness);
 
     public override Rect Frame => Extent(Points);
+
+    public override Annotation WithStyle(AnnotationStyle style) => new InkAnnotation
+    {
+        Points = Points, Stroke = style.Stroke, Thickness = style.Thickness,
+    };
 
     /// <summary>一串点的外接矩形。涂抹式马赛克也是一串点，共用这一份。</summary>
     internal static Rect Extent(IReadOnlyList<Point> points)
@@ -388,6 +437,8 @@ public sealed class TextAnnotation : Annotation
     private static readonly int[] Corners =
         [Handles.TopLeft, Handles.TopRight, Handles.BottomLeft, Handles.BottomRight];
 
+    public override ToolKind Kind => ToolKind.Text;
+
     public override Rect Bounds => Frame;
 
     public override Rect Frame
@@ -398,6 +449,20 @@ public sealed class TextAnnotation : Annotation
             return new Rect(Origin.X, Origin.Y, t.Width, t.Height);
         }
     }
+
+    /// <summary>文字的「大小」是字号，Thickness 在这里没有任何视觉含义。</summary>
+    public override AnnotationStyle StyleOver(AnnotationStyle fallback)
+        => fallback with { Stroke = Stroke, FontSize = FontSize };
+
+    public override Annotation WithStyle(AnnotationStyle style) => new TextAnnotation
+    {
+        Origin = Origin,
+        Text = Text,
+        FontSize = Math.Max(MinFontSize, style.FontSize),
+        PixelsPerDip = PixelsPerDip,
+        Stroke = style.Stroke,
+        Thickness = Thickness,
+    };
 
     public override int HandleCount => Corners.Length;
 
@@ -455,8 +520,18 @@ public sealed class MosaicAnnotation : Annotation
     public required Rect Area { get; init; }
     public required int Block { get; init; }
 
+    public override ToolKind Kind => ToolKind.Mosaic;
     public override Rect Bounds => Area;
     public override Rect Frame => Area;
+
+    /// <summary>马赛克没有颜色和线宽可言 —— 它取的就是画面本身的颜色。</summary>
+    public override AnnotationStyle StyleOver(AnnotationStyle fallback)
+        => fallback with { MosaicBlock = Block };
+
+    public override Annotation WithStyle(AnnotationStyle style) => new MosaicAnnotation
+    {
+        Area = Area, Block = style.MosaicBlock, Stroke = Stroke, Thickness = Thickness,
+    };
 
     public override void Draw(DrawingContext dc, IAnnotationContext context)
         => context.DrawMosaic(dc, Area, Block);
@@ -491,9 +566,23 @@ public sealed class MosaicStrokeAnnotation : Annotation
     public required IReadOnlyList<Point> Points { get; init; }
     public required int Block { get; init; }
 
+    public override ToolKind Kind => ToolKind.Mosaic;
+
     public override Rect Bounds => Inflated(Frame, Thickness);
 
     public override Rect Frame => InkAnnotation.Extent(Points);
+
+    /// <summary>这里的 Thickness 是笔宽而不是描边宽度，所以对应的是笔宽那一档。</summary>
+    public override AnnotationStyle StyleOver(AnnotationStyle fallback)
+        => fallback with { MosaicBlock = Block, MosaicBrushWidth = Thickness };
+
+    public override Annotation WithStyle(AnnotationStyle style) => new MosaicStrokeAnnotation
+    {
+        Points = Points,
+        Block = style.MosaicBlock,
+        Stroke = Stroke,
+        Thickness = style.MosaicBrushWidth,
+    };
 
     public override void Draw(DrawingContext dc, IAnnotationContext context)
     {

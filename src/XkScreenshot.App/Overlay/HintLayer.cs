@@ -21,6 +21,7 @@ public sealed class HintLayer : FrameworkElement
         new(["单击"], false, "选中整个窗口"),
         new(["W", "A", "S", "D"], false, "光标移动 1 像素"),
         new(["←", "↑", "↓", "→"], false, "移动选区 / 选中的标注"),
+        new(["滚轮"], false, "调粗细 / 字号 / 马赛克粒度"),
         new(["Delete"], false, "删除选中的标注"),
         new(["Ctrl", "A"], true, "选中整屏 / 整个桌面"),
         new(["C"], false, "复制颜色值"),
