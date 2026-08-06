@@ -20,12 +20,13 @@ public sealed class HintLayer : FrameworkElement
         new(["拖拽"], false, "框选区域"),
         new(["单击"], false, "选中整个窗口"),
         new(["W", "A", "S", "D"], false, "光标移动 1 像素"),
-        new(["←", "↑", "↓", "→"], false, "移动选区，Shift 加速"),
+        new(["←", "↑", "↓", "→"], false, "移动选区 / 选中的标注"),
+        new(["Delete"], false, "删除选中的标注"),
         new(["Ctrl", "A"], true, "选中整屏 / 整个桌面"),
         new(["C"], false, "复制颜色值"),
         new(["Shift"], false, "切换 RGB / HEX"),
         new(["Enter"], false, "确认截图，双击选区亦可"),
-        new(["Esc"], false, "重选 / 退出"),
+        new(["Esc"], false, "逐级返回：标注 → 工具 → 重选"),
         new(["H"], false, "隐藏本面板"),
     ];
 
