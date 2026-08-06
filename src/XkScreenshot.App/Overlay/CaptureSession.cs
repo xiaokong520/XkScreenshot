@@ -30,6 +30,23 @@ public enum CaptureAction
 /// <summary>一次截图的成品：已烧好标注的位图，以及它在屏幕上的原始位置（贴图要用）。</summary>
 public sealed record CaptureResult(BitmapSource Image, PixelRect Bounds, CaptureAction Action);
 
+/// <summary>
+/// 光标此刻落在什么上面，决定该显示哪种指针。
+/// 由 Session 统一给出，而不是各个窗口自己猜 —— 判定顺序必须和
+/// <see cref="CaptureSession.BeginPress"/> 完全一致，否则指针会承诺一件按下去不会发生的事。
+/// </summary>
+public enum CursorHint
+{
+    /// <summary>十字：拉一个新选区。</summary>
+    Cross,
+    /// <summary>四向箭头：整体平移。</summary>
+    Move,
+    SizeNS,
+    SizeWE,
+    SizeNWSE,
+    SizeNESW,
+}
+
 public enum SelectionPhase
 {
     /// <summary>还没框选，鼠标悬停哪个窗口就高亮哪个。</summary>
@@ -50,6 +67,9 @@ public sealed class CaptureSession
     /// <summary>小于这个距离视为「点击」而不是「拖拽」，用来触发窗口整窗选取。</summary>
     private const int ClickThresholdPx = 4;
 
+    /// <summary>控制点的默认命中半径（物理像素）。调用方按自己那块屏的缩放传入更准的值。</summary>
+    public const double DefaultHandleTolerance = 8;
+
     /// <summary>一次按下-移动-抬起到底在干什么。</summary>
     private enum PressKind
     {
@@ -58,11 +78,38 @@ public sealed class CaptureSession
         Selecting,
         /// <summary>整体平移已有的选区。</summary>
         Moving,
+        /// <summary>拖某个控制点改变选区尺寸。</summary>
+        Resizing,
+        /// <summary>整体平移一个已选中的标注。</summary>
+        MovingAnnotation,
+        /// <summary>拖某个控制点改变标注的形状。</summary>
+        ResizingAnnotation,
     }
 
     private PressKind _press = PressKind.None;
     private PixelPoint _anchor;
-    private PixelRect _moveOrigin;
+
+    /// <summary>按下那一刻的选区。平移和拉伸都从它算起，而不是从上一帧的结果累加。</summary>
+    private PixelRect _pressOrigin;
+
+    private int _resizeHandle = -1;
+
+    /// <summary>
+    /// 按下时光标与控制点之间的偏移。
+    ///
+    /// 拉伸时用「光标 - 偏移」而不是光标本身，有两个作用：抓得偏一点也不会让边框
+    /// 跳到光标底下；以及原地按一下（双击的第一次 Down）算出来的目标点和原位置相同，
+    /// 选区纹丝不动 —— 否则双击确认会先把选区抽歪一下。
+    /// </summary>
+    private PixelPoint _resizeGrab;
+
+    /// <summary>被拖的那个标注在按下那一刻的样子。撤销点和每一帧的重算都以它为基准。</summary>
+    private Annotation? _editOrigin;
+    private int _editIndex = -1;
+    private int _editHandle = -1;
+
+    /// <summary>按下时光标与标注控制点之间的偏移（选区局部像素），作用同 <see cref="_resizeGrab"/>。</summary>
+    private Vector _editGrab;
 
     public CaptureSession(DesktopSnapshot snapshot)
     {
@@ -73,6 +120,20 @@ public sealed class CaptureSession
 
     /// <summary>本次截图的标注。坐标是选区局部物理像素。</summary>
     public AnnotationDocument Annotations { get; } = new();
+
+    /// <summary>
+    /// 当前选中的标注在文档里的下标，-1 表示没选中。
+    ///
+    /// 放在 Session 而不是某个窗口里：标注可以跨屏，控制点得在每块屏上都画出来；
+    /// 存下标而不是对象引用，是因为平移选区会把所有标注整体重基成新对象，
+    /// 引用当场失效，而下标在重基前后始终指向同一个标注。
+    /// </summary>
+    public int SelectedAnnotation { get; private set; } = -1;
+
+    public Annotation? SelectedAnnotationItem
+        => SelectedAnnotation >= 0 && SelectedAnnotation < Annotations.Items.Count
+            ? Annotations.Items[SelectedAnnotation]
+            : null;
 
     public ToolKind ActiveTool { get; private set; } = ToolKind.None;
     public int ColorIndex { get; private set; }
@@ -144,7 +205,83 @@ public sealed class CaptureSession
     public void SetTool(ToolKind tool)
     {
         ActiveTool = ActiveTool == tool ? ToolKind.None : tool;
+        // 工具一上手就该是画新图形，旧标注的控制点留在屏幕上只会挡路
+        SelectedAnnotation = -1;
         Changed?.Invoke();
+    }
+
+    /// <summary>
+    /// 退出当前标注工具。返回值表示「刚才确实有工具在用」，
+    /// 供 Esc / 右键做逐级返回：先退工具，没工具可退才退选区。
+    /// </summary>
+    public bool ClearTool()
+    {
+        if (ActiveTool == ToolKind.None) return false;
+
+        ActiveTool = ToolKind.None;
+        Changed?.Invoke();
+        return true;
+    }
+
+    /// <summary>
+    /// 某个窗口直接改动了标注文档（画完一笔、提交一段文字）之后，
+    /// 通知所有覆盖层重绘 —— 标注跟选区一样可以跨屏，不能只刷自己那一块。
+    /// </summary>
+    public void NotifyAnnotationsChanged() => Changed?.Invoke();
+
+    public void SelectAnnotation(int index)
+    {
+        if (index == SelectedAnnotation) return;
+
+        SelectedAnnotation = index;
+        Changed?.Invoke();
+    }
+
+    /// <summary>取消标注选中。返回值表示「刚才确实选中着一个」，供逐级返回判断。</summary>
+    public bool ClearAnnotationSelection()
+    {
+        if (SelectedAnnotation < 0) return false;
+
+        SelectedAnnotation = -1;
+        Changed?.Invoke();
+        return true;
+    }
+
+    /// <summary>
+    /// 逐级返回一步：先取消标注选中，再退出工具。
+    /// 返回 false 表示这两级都没得退，该由调用方决定是退选区还是退出截图。
+    /// </summary>
+    public bool StepBack() => ClearAnnotationSelection() || ClearTool();
+
+    public bool DeleteSelectedAnnotation()
+    {
+        if (!Annotations.RemoveAt(SelectedAnnotation)) return false;
+
+        // 删掉之后下标全体前移，留着原来那个会指到隔壁的标注上
+        SelectedAnnotation = -1;
+        Changed?.Invoke();
+        return true;
+    }
+
+    /// <summary>
+    /// 撤销/重做整份列表都会换掉，下标随时可能指到另一个标注上，所以一并取消选中。
+    /// </summary>
+    public bool Undo()
+    {
+        if (!Annotations.Undo()) return false;
+
+        SelectedAnnotation = -1;
+        Changed?.Invoke();
+        return true;
+    }
+
+    public bool Redo()
+    {
+        if (!Annotations.Redo()) return false;
+
+        SelectedAnnotation = -1;
+        Changed?.Invoke();
+        return true;
     }
 
     public void SetColorIndex(int index)
@@ -226,14 +363,34 @@ public sealed class CaptureSession
     /// 截下来的已经是整个窗口而不是用户辛苦拖出来的区域了。
     /// 在选区内按下的正确语义是「准备平移选区」（或只是即将双击）。
     /// </summary>
-    public void BeginPress(PixelPoint cursor)
+    public void BeginPress(PixelPoint cursor, double handleTolerance = DefaultHandleTolerance)
     {
         _anchor = cursor;
 
+        // 判定顺序就是优先级，改动前先想清楚：
+        // 已选中标注的控制点 > 选区控制点 > 标注本体 > 选区内部。
+        // 标注的控制点排在选区前面，是因为贴着选区边缘画的图形，两处控制点会叠在一起 ——
+        // 那种情况下用户盯着的显然是自己刚选中的那个图形。
+        if (BeginAnnotationResize(cursor, handleTolerance)) return;
+
+        int handle = HitTestHandle(cursor, handleTolerance);
+        if (handle >= 0)
+        {
+            _press = PressKind.Resizing;
+            _pressOrigin = Selection;
+            _resizeHandle = handle;
+            _resizeGrab = cursor - Handles.At(Selection, handle);
+            return; // 同上：还什么都没变
+        }
+
+        if (BeginAnnotationMove(cursor, handleTolerance)) return;
+
         if (Phase == SelectionPhase.Settled && Selection.Contains(cursor))
         {
+            // 点在空白处＝放弃当前选中的标注，和所有画布类工具的习惯一致
+            ClearAnnotationSelection();
             _press = PressKind.Moving;
-            _moveOrigin = Selection;
+            _pressOrigin = Selection;
             return; // 选区原样保留，什么都还没变，不必通知重绘
         }
 
@@ -242,6 +399,120 @@ public sealed class CaptureSession
         StartFreshSelection(PixelRect.Empty);
         Changed?.Invoke();
     }
+
+    /// <summary>标注只在选区已定、且没有画图工具在用时才可编辑。</summary>
+    private bool CanEditAnnotations
+        => Phase == SelectionPhase.Settled && ActiveTool == ToolKind.None && !Selection.IsEmpty;
+
+    /// <summary>虚拟屏幕物理坐标 → 选区局部坐标（标注文档用的坐标系）。</summary>
+    private Point ToLocal(PixelPoint p) => new(p.X - Selection.X, p.Y - Selection.Y);
+
+    private bool BeginAnnotationResize(PixelPoint cursor, double tolerance)
+    {
+        int handle = HitTestAnnotationHandle(cursor, tolerance);
+        if (handle < 0) return false;
+
+        var item = SelectedAnnotationItem!;
+        _press = PressKind.ResizingAnnotation;
+        _editIndex = SelectedAnnotation;
+        _editOrigin = item;
+        _editHandle = handle;
+        _editGrab = ToLocal(cursor) - item.HandleAt(handle);
+        return true;
+    }
+
+    private bool BeginAnnotationMove(PixelPoint cursor, double tolerance)
+    {
+        int index = HitTestAnnotation(cursor, tolerance);
+        if (index < 0) return false;
+
+        _press = PressKind.MovingAnnotation;
+        _editIndex = index;
+        _editOrigin = Annotations.Items[index];
+
+        // 点中即选中：不必先点一下选、再点一下拖，一次按下就能开始移动
+        SelectAnnotation(index);
+        return true;
+    }
+
+    /// <summary>命中已选中标注的控制点，返回控制点编号，-1 表示没命中。</summary>
+    public int HitTestAnnotationHandle(PixelPoint cursor, double tolerance = DefaultHandleTolerance)
+    {
+        if (!CanEditAnnotations || SelectedAnnotationItem is not { } item) return -1;
+        if (!HandlesUsable(item, tolerance)) return -1;
+
+        var local = ToLocal(cursor);
+        for (int i = 0; i < item.HandleCount; i++)
+        {
+            var h = item.HandleAt(i);
+            if (Math.Abs(local.X - h.X) <= tolerance && Math.Abs(local.Y - h.Y) <= tolerance) return i;
+        }
+        return -1;
+    }
+
+    /// <summary>
+    /// 图形小到八个控制点互相压住时一律不认，理由同 <see cref="Handles.HitTest"/>：
+    /// 那种尺寸下点哪儿都是歧义，退回「拖动＝整体平移」反而合手。
+    /// 端点式的控制点（箭头两头、文字四角）不受此限 —— 它们本来就不在一条边上排队，
+    /// 而且一根水平箭头的外框高度是 0，按外框判会把它的两个端点一并判没。
+    ///
+    /// 画与点必须同规同尺：<see cref="AnnotationLayer"/> 用同一个判据决定画不画，
+    /// 否则会出现「看得见却抓不着」或者反过来的鬼影控制点。
+    /// </summary>
+    public static bool HandlesUsable(Annotation item, double tolerance)
+        => item.HandleCount != Handles.Count || Handles.FitIn(item.Frame, tolerance);
+
+    /// <summary>
+    /// 命中任意标注本体，返回下标，-1 表示没命中。
+    ///
+    /// 只认选区内部：拖出界的那部分是被裁掉、看不见的，让看不见的东西抢走点击，
+    /// 用户只会觉得「这块地方莫名其妙框不了新选区」。要把它拖回来还有控制点。
+    /// </summary>
+    public int HitTestAnnotation(PixelPoint cursor, double tolerance = DefaultHandleTolerance)
+        => CanEditAnnotations && Selection.Contains(cursor)
+            ? Annotations.HitTest(ToLocal(cursor), tolerance)
+            : -1;
+
+    /// <summary>
+    /// 光标此刻该显示什么指针。判定顺序与 <see cref="BeginPress"/> 严格一致 ——
+    /// 指针是对「现在按下去会发生什么」的承诺，两边分叉就是骗人。
+    /// </summary>
+    public CursorHint HintAt(PixelPoint cursor, double tolerance = DefaultHandleTolerance)
+    {
+        // 有画图工具在用时，选区内外一律是「即将画一笔」，指针不该暗示别的
+        if (ActiveTool != ToolKind.None) return CursorHint.Cross;
+
+        int annotationHandle = HitTestAnnotationHandle(cursor, tolerance);
+        if (annotationHandle >= 0)
+            return HintForHandle(SelectedAnnotationItem!, annotationHandle);
+
+        int handle = HitTestHandle(cursor, tolerance);
+        if (handle >= 0) return HintForIndex(handle);
+
+        if (HitTestAnnotation(cursor, tolerance) >= 0) return CursorHint.Move;
+
+        return Phase == SelectionPhase.Settled && Selection.Contains(cursor)
+            ? CursorHint.Move
+            : CursorHint.Cross;
+    }
+
+    /// <summary>
+    /// 自由端点（箭头的两头）不存在「往哪个方向拉伸」，给方向箭头反而误导 ——
+    /// 它是可以往任意方向拖的。
+    /// </summary>
+    private static CursorHint HintForHandle(Annotation item, int handle)
+    {
+        int axis = item.HandleAxis(handle);
+        return axis < 0 ? CursorHint.Move : HintForIndex(axis);
+    }
+
+    private static CursorHint HintForIndex(int handle) => handle switch
+    {
+        Handles.TopLeft or Handles.BottomRight => CursorHint.SizeNWSE,
+        Handles.TopRight or Handles.BottomLeft => CursorHint.SizeNESW,
+        Handles.Top or Handles.Bottom => CursorHint.SizeNS,
+        _ => CursorHint.SizeWE,
+    };
 
     public void UpdatePress(PixelPoint cursor)
     {
@@ -253,13 +524,54 @@ public sealed class CaptureSession
 
             case PressKind.Moving:
                 var delta = cursor - _anchor;
-                MoveSelectionTo(_moveOrigin.Offset(delta.X, delta.Y).ClampInto(Snapshot.VirtualBounds));
+                ReshapeSelection(_pressOrigin.Offset(delta.X, delta.Y).ClampInto(Snapshot.VirtualBounds));
+                break;
+
+            case PressKind.Resizing:
+                ResizeTo(cursor);
+                break;
+
+            case PressKind.MovingAnnotation:
+                // 选区在这期间不动，所以屏幕上的位移就是选区局部的位移，不必换算
+                var moved = cursor - _anchor;
+                Annotations.ReplaceLive(_editIndex, _editOrigin!.Translate(moved.X, moved.Y));
+                break;
+
+            case PressKind.ResizingAnnotation:
+                var target = ToLocal(cursor) - _editGrab;
+                Annotations.ReplaceLive(_editIndex, _editOrigin!.DragHandle(_editHandle, target));
                 break;
 
             default:
                 return;
         }
         Changed?.Invoke();
+    }
+
+    /// <summary>
+    /// 选区只在 Settled 且没有标注工具在用时才认控制点。
+    /// 画图的时候手正好落在边角上不能变成拉框，那会让人莫名其妙。
+    /// </summary>
+    public int HitTestHandle(PixelPoint cursor, double tolerance = DefaultHandleTolerance)
+        => Phase == SelectionPhase.Settled && ActiveTool == ToolKind.None && !Selection.IsEmpty
+            ? Handles.HitTest(Selection, cursor, tolerance)
+            : -1;
+
+    private void ResizeTo(PixelPoint cursor)
+    {
+        // 先把目标点夹进桌面范围，再算矩形。直接夹结果矩形会连带把对边也推走
+        var target = new PixelPoint(
+            Math.Clamp(cursor.X - _resizeGrab.X, Snapshot.VirtualBounds.X, Snapshot.VirtualBounds.Right),
+            Math.Clamp(cursor.Y - _resizeGrab.Y, Snapshot.VirtualBounds.Y, Snapshot.VirtualBounds.Bottom));
+
+        // 始终从按下那一刻的矩形算起。用上一帧的结果累加的话，拖过头翻转之后
+        // 控制点编号就和实际边对不上了，选区会开始自己乱跳。
+        var next = Handles.Resize(_pressOrigin, _resizeHandle, target);
+
+        // 拖到完全塌掉时保持原样，别让一次手滑把选区整个抹掉
+        if (next.Width < 1 || next.Height < 1) return;
+
+        ReshapeSelection(next);
     }
 
     /// <summary>
@@ -270,13 +582,16 @@ public sealed class CaptureSession
     {
         Selection = next;
         ActiveTool = ToolKind.None;
+        SelectedAnnotation = -1;
         Annotations.Reset();
     }
 
     /// <summary>
-    /// 平移选区。标注要跟着画面内容走而不是跟着选框走，所以坐标反向重基。
+    /// 换一个位置或尺寸，但仍是同一块选区（平移、拉伸、方向键微调都走这里）。
+    /// 标注要跟着画面内容走而不是跟着选框走，所以坐标按原点位移反向重基；
+    /// 只改宽高不动原点的拉伸（右/下方向）位移为零，标注原样不动。
     /// </summary>
-    private void MoveSelectionTo(PixelRect next)
+    private void ReshapeSelection(PixelRect next)
     {
         if (next == Selection) return;
 
@@ -315,7 +630,14 @@ public sealed class CaptureSession
                 break;
 
             case PressKind.Moving:
+            case PressKind.Resizing:
                 Phase = SelectionPhase.Settled;
+                break;
+
+            case PressKind.MovingAnnotation:
+            case PressKind.ResizingAnnotation:
+                // 整段拖拽合成一个撤销点。原地按一下没真动过的话什么都不记
+                Annotations.CommitEdit(_editIndex, _editOrigin!);
                 break;
 
             default:
@@ -323,6 +645,10 @@ public sealed class CaptureSession
         }
 
         _press = PressKind.None;
+        _resizeHandle = -1;
+        _editIndex = -1;
+        _editHandle = -1;
+        _editOrigin = null;
         Changed?.Invoke();
     }
 
@@ -362,6 +688,8 @@ public sealed class CaptureSession
     public void Escape()
     {
         _press = PressKind.None;
+        _editOrigin = null;
+        _editIndex = -1;
 
         if (Phase == SelectionPhase.Settled && !Selection.IsEmpty)
         {
@@ -373,11 +701,26 @@ public sealed class CaptureSession
         Cancelled?.Invoke();
     }
 
-    /// <summary>方向键微调选区位置，按住 Shift 时步长放大。</summary>
+    /// <summary>方向键微调，按住 Shift 时步长放大。</summary>
     public void NudgeSelection(int dx, int dy)
     {
+        // 选中着标注时调的是那个标注：此刻用户的注意力明摆着在它身上，
+        // 而选区随时可以按 Esc 取消选中之后再调。
+        if (NudgeAnnotation(dx, dy)) return;
+
         if (Selection.IsEmpty) return;
-        MoveSelectionTo(Selection.Offset(dx, dy).ClampInto(Snapshot.VirtualBounds));
+        ReshapeSelection(Selection.Offset(dx, dy).ClampInto(Snapshot.VirtualBounds));
         Changed?.Invoke();
+    }
+
+    private bool NudgeAnnotation(int dx, int dy)
+    {
+        if (!CanEditAnnotations || SelectedAnnotationItem is not { } item) return false;
+
+        Annotations.ReplaceLive(SelectedAnnotation, item.Translate(dx, dy));
+        // 一次按键就是一次编辑，各自记一个撤销点
+        Annotations.CommitEdit(SelectedAnnotation, item);
+        Changed?.Invoke();
+        return true;
     }
 }

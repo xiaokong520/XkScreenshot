@@ -19,6 +19,10 @@ public static class Icons
     private const double DesignSize = 24.0;
     private const double DesignStroke = 2.0;
 
+    /// <summary>选择工具 —— 不画任何东西，拖拽即平移选区。</summary>
+    public static readonly Geometry Cursor = Build(
+        paths: ["M4.037 4.688a.495.495 0 0 1 .651-.651l16 6.5a.5.5 0 0 1-.063.947l-6.124 1.58a2 2 0 0 0-1.438 1.435l-1.579 6.126a.5.5 0 0 1-.947.063z"]);
+
     /// <summary>矩形工具。</summary>
     public static readonly Geometry Square = Build(
         rects: [(3, 3, 18, 18, 2)]);
@@ -67,6 +71,17 @@ public static class Icons
 
     public static readonly Geometry Save = Build(
         paths: ["M12 15V3", "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4", "m7 10 5 5 5-5"]);
+
+    /// <summary>删除选中的标注。</summary>
+    public static readonly Geometry Trash = Build(
+        paths:
+        [
+            "M3 6h18",
+            "M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6",
+            "M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2",
+            "M10 11v6",
+            "M14 11v6",
+        ]);
 
     public static readonly Geometry Close = Build(
         paths: ["M18 6 6 18", "m6 6 12 12"]);

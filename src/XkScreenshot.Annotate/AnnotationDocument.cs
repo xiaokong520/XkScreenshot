@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Windows;
 using System.Windows.Media;
 
 namespace XkScreenshot.Annotate;
@@ -32,6 +33,58 @@ public sealed class AnnotationDocument
         PushUndo();
         _items.Add(annotation);
         Changed?.Invoke();
+    }
+
+    public bool RemoveAt(int index)
+    {
+        if (index < 0 || index >= _items.Count) return false;
+
+        PushUndo();
+        _items.RemoveAt(index);
+        Changed?.Invoke();
+        return true;
+    }
+
+    /// <summary>
+    /// 命中光标的最上面那个标注，-1 表示没命中。
+    /// 倒着找：后画的压在先画的上面，重叠时理应先选到看得见的那个。
+    /// </summary>
+    public int HitTest(Point p, double tolerance)
+    {
+        for (int i = _items.Count - 1; i >= 0; i--)
+            if (_items[i].HitTest(p, tolerance)) return i;
+
+        return -1;
+    }
+
+    /// <summary>
+    /// 拖拽过程中的实时替换，不记撤销点。
+    ///
+    /// 一次拖拽会产生几百帧，每帧都记一次的话，用户想撤销一次移动得按上几百下 Ctrl+Z。
+    /// 撤销点由拖拽结束时的 <see cref="CommitEdit"/> 补记。
+    /// </summary>
+    public void ReplaceLive(int index, Annotation next)
+    {
+        if (index < 0 || index >= _items.Count) return;
+        if (ReferenceEquals(_items[index], next)) return;
+
+        _items[index] = next;
+        Changed?.Invoke();
+    }
+
+    /// <summary>
+    /// 一次拖拽结束，用拖拽前的那个对象补记撤销点。
+    /// 原地按一下没真的动过就什么都不记，免得历史里堆满空操作。
+    /// </summary>
+    public bool CommitEdit(int index, Annotation before)
+    {
+        if (index < 0 || index >= _items.Count) return false;
+        if (ReferenceEquals(_items[index], before)) return false;
+
+        var snapshot = _items.ToArray();
+        snapshot[index] = before;
+        PushSnapshot(snapshot);
+        return true;
     }
 
     /// <summary>删除最后一个标注。工具条上的「删除」用它，语义比撤销更直白。</summary>
@@ -122,9 +175,11 @@ public sealed class AnnotationDocument
         return true;
     }
 
-    private void PushUndo()
+    private void PushUndo() => PushSnapshot(_items.ToArray());
+
+    private void PushSnapshot(Annotation[] snapshot)
     {
-        _undo.Add(_items.ToArray());
+        _undo.Add(snapshot);
         // 新的操作让原有的重做分支失效，这是所有编辑器的共同约定
         _redo.Clear();
 

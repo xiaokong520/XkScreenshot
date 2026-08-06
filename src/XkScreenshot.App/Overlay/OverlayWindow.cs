@@ -153,8 +153,16 @@ public sealed class OverlayWindow : Window
         _annotationLayer.Selection = _session.Selection;
         _annotationLayer.Context = _session.Selection.IsEmpty ? null : _session.MosaicContext();
         _annotationLayer.Preview = _annotations.Preview;
+        _annotationLayer.Selected = _session.SelectedAnnotationItem;
         _annotationLayer.Refresh();
     }
+
+    /// <summary>
+    /// 控制点的命中半径。按本屏缩放折算，这样 150% 缩放的屏上不会因为
+    /// 物理像素被拉大而显得「点不着」—— 手感要跟屏幕上看到的大小一致。
+    /// </summary>
+    private double HandleTolerance
+        => CaptureSession.DefaultHandleTolerance * _frame.Monitor.ScaleX;
 
     /// <summary>
     /// 工具条只出现在「持有选区右下角」的那块屏上。跨屏选区时若每块屏都画，
@@ -172,6 +180,7 @@ public sealed class OverlayWindow : Window
         _toolbarLayer.ActiveColorIndex = _session.ColorIndex;
         _toolbarLayer.CanUndo = _session.Annotations.CanUndo;
         _toolbarLayer.CanRedo = _session.Annotations.CanRedo;
+        _toolbarLayer.CanDelete = _session.SelectedAnnotation >= 0;
 
         if (visible)
             _toolbarLayer.Layout(ToLocalDip(selection.Intersect(_frame.Monitor.Bounds)));
@@ -286,8 +295,33 @@ public sealed class OverlayWindow : Window
         }
 
         _session.UpdateHover(pt);
+        UpdateCursorShape(pt);
         if (_toolbarLayer.UpdateHover(ToWindowDip(pt)))
             _toolbarLayer.Refresh();
+    }
+
+    /// <summary>
+    /// 指针形状是这套交互唯一的说明书 —— 控制点画得再清楚，
+    /// 不变指针的话用户也未必想到那里能拖。判定全部交给 Session，
+    /// 保证「指针承诺的」和「按下去发生的」永远是同一件事。
+    /// </summary>
+    private void UpdateCursorShape(PixelPoint cursor)
+    {
+        var hint = _toolbarLayer.Contains(ToWindowDip(cursor))
+            ? CursorHint.Cross
+            : _session.HintAt(cursor, HandleTolerance);
+
+        var shape = hint switch
+        {
+            CursorHint.Move => Cursors.SizeAll,
+            CursorHint.SizeNS => Cursors.SizeNS,
+            CursorHint.SizeWE => Cursors.SizeWE,
+            CursorHint.SizeNWSE => Cursors.SizeNWSE,
+            CursorHint.SizeNESW => Cursors.SizeNESW,
+            _ => Cursors.Cross,
+        };
+
+        if (!ReferenceEquals(Cursor, shape)) Cursor = shape;
     }
 
     protected override void OnMouseLeftButtonDown(MouseButtonEventArgs e)
@@ -322,16 +356,22 @@ public sealed class OverlayWindow : Window
             return;
         }
 
-        // 已确定选区后，双击选区内部 = 确认
-        if (e.ClickCount == 2 && insideSelection)
+        // 已确定选区后，双击选区内部 = 确认。
+        // 但双击落在标注上时不算：那时用户明显是在跟这个图形较劲（连点两下想选中、
+        // 或者第二下只是手抖），把图截掉走人绝不是他要的。
+        if (e.ClickCount == 2 && insideSelection && !HitsAnnotation(cursor))
         {
             _session.Confirm();
             return;
         }
 
         _capturing = CaptureMouse();
-        _session.BeginPress(cursor);
+        _session.BeginPress(cursor, HandleTolerance);
     }
+
+    private bool HitsAnnotation(PixelPoint cursor)
+        => _session.HitTestAnnotationHandle(cursor, HandleTolerance) >= 0
+           || _session.HitTestAnnotation(cursor, HandleTolerance) >= 0;
 
     protected override void OnMouseLeftButtonUp(MouseButtonEventArgs e)
     {
@@ -374,8 +414,10 @@ public sealed class OverlayWindow : Window
 
         switch (item.Command)
         {
-            case ToolbarCommand.Undo: _session.Annotations.Undo(); SyncAfterEdit(); break;
-            case ToolbarCommand.Redo: _session.Annotations.Redo(); SyncAfterEdit(); break;
+            case ToolbarCommand.Select: _session.ClearTool(); break;
+            case ToolbarCommand.Delete: _session.DeleteSelectedAnnotation(); break;
+            case ToolbarCommand.Undo: _session.Undo(); break;
+            case ToolbarCommand.Redo: _session.Redo(); break;
             case ToolbarCommand.Pin: _session.Confirm(CaptureAction.Pin); break;
             case ToolbarCommand.Copy: _session.Confirm(CaptureAction.Copy); break;
             case ToolbarCommand.Save: _session.Confirm(CaptureAction.Save); break;
@@ -383,11 +425,11 @@ public sealed class OverlayWindow : Window
         }
     }
 
-    private void SyncAfterEdit()
-    {
-        SyncAnnotationState();
-        SyncToolbar();
-    }
+    /// <summary>
+    /// 本窗口改动了标注之后的刷新。走 Session 广播而不是只刷自己 ——
+    /// 选区可以跨屏，标注也就可以跨屏，另一块屏上那半边同样要跟着变。
+    /// </summary>
+    private void SyncAfterEdit() => _session.NotifyAnnotationsChanged();
 
     /// <summary>
     /// 系统可能在任何时候强制收回鼠标捕获（另一个窗口抢了捕获、Alt+Tab、显示器热插拔等）。
@@ -485,10 +527,11 @@ public sealed class OverlayWindow : Window
         Focus();
     }
 
+    /// <summary>右键与 Esc 同为「逐级返回」：先取消选中的标注，再退工具，最后退选区。</summary>
     protected override void OnMouseRightButtonUp(MouseButtonEventArgs e)
     {
         base.OnMouseRightButtonUp(e);
-        _session.Escape();
+        if (!_session.StepBack()) _session.Escape();
     }
 
     protected override void OnKeyDown(KeyEventArgs e)
@@ -506,23 +549,25 @@ public sealed class OverlayWindow : Window
         switch (e.Key)
         {
             case Key.Escape:
-                // 有工具在用时，Esc 先退出工具，再按才是退回重选
-                if (_session.ActiveTool != ToolKind.None) _session.SetTool(_session.ActiveTool);
-                else _session.Escape();
+                // 逐级返回：标注选中 → 工具 → 重选 → 退出
+                if (!_session.StepBack()) _session.Escape();
                 break;
 
             case Key.Enter:
                 _session.Confirm();
                 break;
 
+            case Key.Delete:
+            case Key.Back:
+                _session.DeleteSelectedAnnotation();
+                break;
+
             case Key.Z when ctrl:
-                _session.Annotations.Undo();
-                SyncAfterEdit();
+                _session.Undo();
                 break;
 
             case Key.Y when ctrl:
-                _session.Annotations.Redo();
-                SyncAfterEdit();
+                _session.Redo();
                 break;
 
             case Key.T when ctrl:

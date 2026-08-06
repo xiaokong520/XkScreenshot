@@ -67,24 +67,22 @@ public sealed class SelectionLayer : FrameworkElement
             DrawSizeLabel(dc, rect);
     }
 
+    /// <summary>
+    /// 控制点的位置一律问 <see cref="Handles"/> 要，不在这儿自己算。
+    /// 画在一处、点在另一处是这类界面最烦人的 bug，而且极难被看出来。
+    /// </summary>
     private static void DrawHandles(DrawingContext dc, Rect rect)
     {
         // 高亮区太小时控制点会糊成一团，直接不画
-        if (rect.Width < HandleSize * 3 || rect.Height < HandleSize * 3) return;
-
-        double cx = rect.Left + rect.Width / 2;
-        double cy = rect.Top + rect.Height / 2;
-        Span<Point> points =
-        [
-            new(rect.Left, rect.Top),    new(cx, rect.Top),    new(rect.Right, rect.Top),
-            new(rect.Left, cy),                                new(rect.Right, cy),
-            new(rect.Left, rect.Bottom), new(cx, rect.Bottom), new(rect.Right, rect.Bottom),
-        ];
+        if (!Handles.FitIn(rect, HandleSize)) return;
 
         double half = HandleSize / 2;
-        foreach (var p in points)
+        for (int i = 0; i < Handles.Count; i++)
+        {
+            var p = Handles.At(rect, i);
             dc.DrawRectangle(HandleFill, HandlePen,
                 new Rect(p.X - half, p.Y - half, HandleSize, HandleSize));
+        }
     }
 
     private void DrawSizeLabel(DrawingContext dc, Rect rect)

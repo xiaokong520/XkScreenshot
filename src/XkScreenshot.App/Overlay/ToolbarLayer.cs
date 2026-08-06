@@ -11,6 +11,10 @@ namespace XkScreenshot.App.Overlay;
 public enum ToolbarCommand
 {
     None,
+    /// <summary>退出当前标注工具，回到「拖拽 = 平移选区」。</summary>
+    Select,
+    /// <summary>删掉当前选中的那个标注。</summary>
+    Delete,
     Undo,
     Redo,
     Pin,
@@ -60,6 +64,10 @@ public sealed class ToolbarLayer : FrameworkElement
     /// <summary>工具与命令分成两组，中间用调色板隔开，避免手滑点到「取消」。</summary>
     private static readonly ToolbarItem[] Tools =
     [
+        // 「无工具」必须是一个看得见、点得着的按钮。否则选了矩形之后，
+        // 拖拽全被判成画图，选区再也拖不动，用户会以为程序卡死了 ——
+        // 光靠「再点一次同一个工具取消」这种隐藏规则是发现不了的。
+        new(Icons.Cursor, "选择  拖动选区与标注", ToolKind.None, ToolbarCommand.Select),
         new(Icons.Square, "矩形", ToolKind.Rectangle, ToolbarCommand.None),
         new(Icons.Circle, "椭圆", ToolKind.Ellipse, ToolbarCommand.None),
         new(Icons.ArrowUpRight, "箭头", ToolKind.Arrow, ToolbarCommand.None),
@@ -70,12 +78,16 @@ public sealed class ToolbarLayer : FrameworkElement
 
     private static readonly ToolbarItem[] Commands =
     [
+        // 删除排在撤销旁边，且只在真的选中了标注时才亮。
+        // 选中图形之后眼睛第一时间会往工具条上找「删掉它」，
+        // 只给 Delete 键的话，不看提示面板的人根本不知道这个功能存在。
+        new(Icons.Trash, "删除选中的标注  Delete", ToolKind.None, ToolbarCommand.Delete),
         new(Icons.Undo, "撤销  Ctrl+Z", ToolKind.None, ToolbarCommand.Undo),
         new(Icons.Redo, "重做  Ctrl+Y", ToolKind.None, ToolbarCommand.Redo),
         new(Icons.Pin, "贴图  Ctrl+T", ToolKind.None, ToolbarCommand.Pin),
         new(Icons.Copy, "复制  Enter", ToolKind.None, ToolbarCommand.Copy),
-        new(Icons.Save, "保存  Ctrl+S", ToolKind.None, ToolbarCommand.Save),
         new(Icons.Close, "取消  Esc", ToolKind.None, ToolbarCommand.Cancel),
+        new(Icons.Save, "保存  Ctrl+S", ToolKind.None, ToolbarCommand.Save),
     ];
 
     public static readonly Color[] Palette =
@@ -101,6 +113,9 @@ public sealed class ToolbarLayer : FrameworkElement
     public int ActiveColorIndex { get; set; }
     public bool CanUndo { get; set; }
     public bool CanRedo { get; set; }
+
+    /// <summary>有没有选中的标注可删。</summary>
+    public bool CanDelete { get; set; }
     public Rect PanelRect { get; private set; }
 
     public void Refresh() => InvalidateVisual();
@@ -192,6 +207,7 @@ public sealed class ToolbarLayer : FrameworkElement
         {
             bool enabled = item.Command switch
             {
+                ToolbarCommand.Delete => CanDelete,
                 ToolbarCommand.Undo => CanUndo,
                 ToolbarCommand.Redo => CanRedo,
                 _ => true,
