@@ -37,6 +37,9 @@ public partial class App : Application
     private AppSettings _settings = new();
     private BitmapSource? _lastCapture;
 
+    /// <summary>上一次截图的原始位置。F3 贴图若贴的正是这一张，回到原位而不是落在光标下。</summary>
+    private PixelRect _lastCaptureBounds;
+
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
@@ -169,7 +172,25 @@ public partial class App : Application
             return;
         }
 
-        _pins.Create(image, PlaceUnderCursor(image));
+        _pins.Create(image, PlacePinned(image));
+    }
+
+    /// <summary>
+    /// 决定一张要贴的图落在哪：
+    /// 正是上一次截的那张（剪贴板为空退回、或剪贴板里那份尺寸对得上）→ 回到截图时的原位，
+    /// 视觉上是把画面「冻」在原来的地方，这才是贴图的语义；其它来源（别处复制的图、文本）
+    /// 没有「原位」可言，落在光标手边最省事。
+    ///
+    /// 用尺寸判定「是不是上次那张」：剪贴板退回的那份是同一对象；Copy 截图后剪贴板里那份
+    /// 是重新解码的，只能靠尺寸对上。误判的代价很低 —— 刚好和上次截图同尺寸的外部图片，
+    /// 贴回原位而已。
+    /// </summary>
+    private PixelRect PlacePinned(BitmapSource image)
+    {
+        bool fromLastCapture = _lastCapture is not null
+            && image.PixelWidth == _lastCapture.PixelWidth
+            && image.PixelHeight == _lastCapture.PixelHeight;
+        return fromLastCapture ? _lastCaptureBounds : PlaceUnderCursor(image);
     }
 
     /// <summary>光标所在显示器的缩放倍率。文本贴图按它出图，才不会在高 DPI 屏上小一圈。</summary>
@@ -277,6 +298,7 @@ public partial class App : Application
     private void OnCaptured(CaptureResult result)
     {
         _lastCapture = result.Image;
+        _lastCaptureBounds = result.Bounds;
 
         switch (result.Action)
         {

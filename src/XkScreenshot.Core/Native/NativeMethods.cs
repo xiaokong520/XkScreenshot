@@ -17,9 +17,6 @@ public static class NativeMethods
     public static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFOEXW lpmi);
 
     [DllImport("user32.dll")]
-    public static extern IntPtr MonitorFromPoint(POINT pt, uint dwFlags);
-
-    [DllImport("user32.dll")]
     public static extern bool GetCursorPos(out POINT lpPoint);
 
     [DllImport("user32.dll")]
@@ -43,9 +40,6 @@ public static class NativeMethods
     [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "GetWindowTextW")]
     public static extern int GetWindowText(IntPtr hWnd, StringBuilder buf, int maxCount);
 
-    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")]
-    public static extern IntPtr GetWindowLongPtr(IntPtr hWnd, int nIndex);
-
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
 
@@ -62,27 +56,35 @@ public static class NativeMethods
     [DllImport("user32.dll")]
     public static extern int ReleaseDC(IntPtr hWnd, IntPtr hDC);
 
-    [DllImport("user32.dll")]
-    public static extern uint GetDpiForWindow(IntPtr hWnd);
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool UpdateLayeredWindow(IntPtr hwnd, IntPtr hdcDst,
+        ref POINT pptDst, ref SIZE psize, IntPtr hdcSrc, ref POINT pptSrc,
+        uint crKey, ref BLENDFUNCTION pblend, uint dwFlags);
 
-    public const int GWL_EXSTYLE = -20;
-    public const int WS_EX_TOOLWINDOW = 0x00000080;
-    public const int WS_EX_NOREDIRECTIONBITMAP = 0x00200000;
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool SetLayeredWindowAttributes(IntPtr hwnd, uint crKey, byte bAlpha, uint dwFlags);
 
-    public const uint MONITOR_DEFAULTTONEAREST = 2;
+    public const byte AC_SRC_OVER = 0;
+    public const byte AC_SRC_ALPHA = 1;
+    /// <summary>UpdateLayeredWindow 用逐像素 alpha 合成（blend.SourceConstantAlpha 作整体不透明度）。</summary>
+    public const uint ULW_ALPHA = 2;
+    /// <summary>SetLayeredWindowAttributes 只改整体不透明度，不动画面。</summary>
+    public const uint LWA_ALPHA = 0x00000002;
+
+    /// <summary>置顶带。贴图的右键菜单用它：贴图自己是 TopMost，菜单不加这个会被压在底下。</summary>
+    public const int WS_EX_TOPMOST = 0x00000008;
+
+    /// <summary>
+    /// 分层窗口。贴图用它：内容走 UpdateLayeredWindow 整幅送上去，DWM 原子合成，
+    /// 几何和画面在同一帧到位，缩放不会闪（见 PinForm 类注释）。
+    /// </summary>
+    public const int WS_EX_LAYERED = 0x00080000;
+
     public const uint MONITORINFOF_PRIMARY = 1;
 
     public static readonly IntPtr HWND_TOPMOST = new(-1);
     public const uint SWP_NOACTIVATE = 0x0010;
     public const uint SWP_SHOWWINDOW = 0x0040;
-    public const uint SWP_NOZORDER = 0x0004;
-
-    /// <summary>
-    /// 别把旧的客户区位图搬过来。缩放一个内容会跟着尺寸变的窗口时必须带上它 ——
-    /// 否则系统先把旧画面按老比例贴到新尺寸里，等应用重绘才换成对的，
-    /// 中间那一帧就是一次肉眼可见的错位。
-    /// </summary>
-    public const uint SWP_NOCOPYBITS = 0x0100;
 
     public const int WM_HOTKEY = 0x0312;
 
