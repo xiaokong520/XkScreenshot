@@ -25,6 +25,7 @@ public sealed class HintLayer : FrameworkElement
         new(["滚轮"], false, "调粗细 / 字号 / 马赛克粒度"),
         new(["Delete"], false, "删除选中的标注"),
         new(["Ctrl", "A"], true, "选中整屏 / 整个桌面"),
+        new(["[", "]"], false, "回溯截屏区域历史"),
         new(["C"], false, "复制颜色值"),
         new(["Shift"], false, "切换 RGB / HEX"),
         new(["Enter"], false, "确认截图，双击选区亦可"),

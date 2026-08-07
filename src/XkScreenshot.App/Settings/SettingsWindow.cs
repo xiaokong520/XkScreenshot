@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
@@ -66,6 +67,7 @@ public sealed class SettingsWindow : Window
 
     private readonly TextBox _directory = new();
     private readonly TextBox _prefix = new() { Width = 200 };
+    private readonly TextBox _historyCapacity = new() { Width = 64, MaxLength = 3 };
     private readonly ComboBox _defaultAction = new() { Width = 168 };
     private readonly ToggleButton _saveWithoutPrompt = new();
     private readonly ToggleButton _showHints = new();
@@ -93,8 +95,10 @@ public sealed class SettingsWindow : Window
 
         Title = "XkScreenshot 设置";
         Width = 720;
-        // 定高而不是随内容伸缩：切换分类时窗口跟着一页一页地变高变矮，比任何滚动条都晃眼
-        Height = Math.Min(464, Math.Max(360, SystemParameters.WorkArea.Height - 80));
+        // 定高而不是随内容伸缩：切换分类时窗口跟着一页一页地变高变矮，比任何滚动条都晃眼。
+        // 这个高度要能装下最长的那一页（此刻是「截图」的四张卡）—— 定高的意义在于不用滚，
+        // 装不下就退化成「既不能自适应、又还是要滚」，两头都不讨好。加分类时记得重新对一下。
+        Height = Math.Min(540, Math.Max(360, SystemParameters.WorkArea.Height - 80));
         ResizeMode = ResizeMode.NoResize;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         // 托盘程序没有主窗口，设置窗被别的窗口盖住之后，任务栏是唯一能把它找回来的地方
@@ -112,6 +116,18 @@ public sealed class SettingsWindow : Window
         {
             Source = new Uri("pack://application:,,,/XkScreenshot;component/Settings/SettingsTheme.xaml"),
         });
+
+        // 只让数字敲进去，省掉一个「请输入数字」的弹窗。粘贴绕得过去，
+        // 所以 Commit 那边照样得解析一次兜底。
+        _historyCapacity.PreviewTextInput += (_, e) =>
+        {
+            foreach (char c in e.Text)
+            {
+                if (char.IsAsciiDigit(c)) continue;
+                e.Handled = true;
+                return;
+            }
+        };
 
         foreach (var (_, label) in Actions) _defaultAction.Items.Add(label);
         foreach (var toggle in new[] { _saveWithoutPrompt, _showHints, _elementMode, _runAtStartup })
@@ -229,7 +245,10 @@ public sealed class SettingsWindow : Window
             Card(Icons.Eye, "显示快捷键提示面板",
                 "截图中按 H 也能开关。", _showHints),
             Card(Icons.Cursor, "默认用控件级检测",
-                "截图中按 Tab 在整窗与控件级之间切换。", _elementMode));
+                "截图中按 Tab 在整窗与控件级之间切换。", _elementMode),
+            Card(Icons.History, "记住多少条截屏区域",
+                "截图中按 [ 和 ] 回溯用过的区域，同一块只占一条。0 = 关闭。",
+                Line(_historyCapacity, Suffix("条"))));
 
         AddPage(Icons.Folder, "保存",
             StackedCard(Icons.Folder, "默认目录",
@@ -444,6 +463,15 @@ public sealed class SettingsWindow : Window
 
     private Brush Brush(string key) => (Brush)FindResource(key);
 
+    /// <summary>跟在输入框后面的单位。</summary>
+    private TextBlock Suffix(string text) => new()
+    {
+        Text = text,
+        Foreground = Brush("TextSecondary"),
+        VerticalAlignment = VerticalAlignment.Center,
+        Margin = new Thickness(8, 0, 0, 0),
+    };
+
     /// <summary>一排控件靠左排开。</summary>
     private static UIElement Line(params UIElement[] children)
     {
@@ -567,6 +595,7 @@ public sealed class SettingsWindow : Window
         _showHints.IsChecked = s.ShowHints;
         _elementMode.IsChecked = s.ElementMode;
         _runAtStartup.IsChecked = s.RunAtStartup;
+        _historyCapacity.Text = s.HistoryCapacity.ToString(CultureInfo.InvariantCulture);
 
         int index = Array.FindIndex(Actions, a => a.Action == s.DefaultAction);
         _defaultAction.SelectedIndex = index < 0 ? 0 : index;
@@ -605,6 +634,13 @@ public sealed class SettingsWindow : Window
         _draft.ShowHints = _showHints.IsChecked == true;
         _draft.ElementMode = _elementMode.IsChecked == true;
         _draft.RunAtStartup = _runAtStartup.IsChecked == true;
+
+        // 解析不出来（粘进去一段乱七八糟的）就退回默认值，而不是当成 0 把功能关掉 ——
+        // 用户来这儿是想调条数，不是想关掉它
+        _draft.HistoryCapacity = int.TryParse(
+            _historyCapacity.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out int capacity)
+            ? Math.Clamp(capacity, 0, CaptureHistory.MaxCapacity)
+            : CaptureHistory.DefaultCapacity;
 
         Result = _draft;
         Close();

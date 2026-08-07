@@ -87,7 +87,12 @@ public partial class App : Application
     /// </summary>
     private void ApplySettings()
     {
-        if (_controller is not null) _controller.Defaults = _settings.ToCaptureDefaults();
+        if (_controller is not null)
+        {
+            _controller.Defaults = _settings.ToCaptureDefaults();
+            // 调小了就当场裁掉多余的那几条，不必等下一次截图
+            _controller.History.Capacity = _settings.HistoryCapacity;
+        }
 
         // 注册失败必须说出来。RegisterHotKey 失败是静默的，
         // 不提示的话用户只会感知到「按了没反应」，然后放弃这个软件。

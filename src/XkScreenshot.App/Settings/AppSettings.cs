@@ -53,6 +53,9 @@ public sealed class AppSettings
     /// <summary>截图时默认用控件级检测而不是整窗。</summary>
     public bool ElementMode { get; set; }
 
+    /// <summary>回溯截屏区域历史缓存多少条。0 = 关掉。</summary>
+    public int HistoryCapacity { get; set; } = CaptureHistory.DefaultCapacity;
+
     public bool RunAtStartup { get; set; }
 
     /// <summary>实际写文件的目录。设置里留空就用系统「图片」文件夹。</summary>

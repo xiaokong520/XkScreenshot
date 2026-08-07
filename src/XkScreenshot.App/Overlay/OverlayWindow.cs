@@ -744,6 +744,16 @@ public sealed class OverlayWindow : Window
                 CopyColor();
                 break;
 
+            // 回溯截屏区域历史。挑 [ ] 是因为它俩在这套覆盖层里还没人用，
+            // 而且「上一个 / 下一个」的方向感是现成的。
+            case Key.OemOpenBrackets:
+                _session.StepHistory(back: true);
+                break;
+
+            case Key.OemCloseBrackets:
+                _session.StepHistory(back: false);
+                break;
+
             case Key.H:
                 _session.ToggleHints();
                 UpdateHintVisibility();
