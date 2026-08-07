@@ -188,6 +188,48 @@
     </Setter>
   </Style>
 
+  <!-- ================= 左侧导航项 ================= -->
+  <!--
+    用 RadioButton 而不是 Button：同组互斥是它自带的，不必自己维护「谁是当前项」，
+    也就不会出现两项同时高亮那种状态机漏改的 bug。
+  -->
+
+  <Style x:Key="NavItem" TargetType="{x:Type RadioButton}">
+    <Setter Property="Height" Value="38" />
+    <Setter Property="Margin" Value="0,0,0,2" />
+    <Setter Property="Cursor" Value="Hand" />
+    <Setter Property="Foreground" Value="{DynamicResource Text}" />
+    <Setter Property="SnapsToDevicePixels" Value="True" />
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="{x:Type RadioButton}">
+          <Grid>
+            <Border x:Name="Bd" Background="Transparent" CornerRadius="4" />
+            <!-- 选中项左侧那道竖条。只靠底色区分的话，浅色主题下两种灰太接近了 -->
+            <Border x:Name="Pill"
+                    Width="3" Height="16"
+                    HorizontalAlignment="Left"
+                    CornerRadius="1.5"
+                    Background="Transparent" />
+            <ContentPresenter Margin="14,0,10,0" VerticalAlignment="Center" />
+          </Grid>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+              <Setter TargetName="Bd" Property="Background" Value="{DynamicResource NavHover}" />
+            </Trigger>
+            <Trigger Property="IsChecked" Value="True">
+              <Setter TargetName="Bd" Property="Background" Value="{DynamicResource NavSelected}" />
+              <Setter TargetName="Pill" Property="Background" Value="{DynamicResource Accent}" />
+            </Trigger>
+            <Trigger Property="IsKeyboardFocused" Value="True">
+              <Setter TargetName="Bd" Property="Background" Value="{DynamicResource NavHover}" />
+            </Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
   <!-- ================= 下拉框 ================= -->
 
   <Style TargetType="{x:Type ComboBoxItem}">

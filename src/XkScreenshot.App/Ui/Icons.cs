@@ -111,6 +111,19 @@ public static class Icons
     public static readonly Geometry Power = Build(
         paths: ["M12 2v10", "M18.4 6.6a9 9 0 1 1-12.77.04"]);
 
+    /// <summary>「通用」分类。</summary>
+    public static readonly Geometry Sliders = Build(
+        ellipses: [(7, 7, 3, 3), (17, 17, 3, 3)],
+        paths: ["M20 7h-9", "M14 17H5"]);
+
+    /// <summary>「截图」分类。</summary>
+    public static readonly Geometry Crop = Build(
+        paths: ["M6 2v14a2 2 0 0 0 2 2h14", "M18 22V8a2 2 0 0 0-2-2H2"]);
+
+    public static readonly Geometry Camera = Build(
+        ellipses: [(12, 13, 3, 3)],
+        paths: ["M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"]);
+
     private static readonly Dictionary<Brush, Pen> PenCache = [];
 
     /// <summary>
