@@ -16,6 +16,22 @@ public struct POINT
     public int X, Y;
 }
 
+[StructLayout(LayoutKind.Sequential)]
+public struct SIZE
+{
+    public int cx, cy;
+}
+
+/// <summary>UpdateLayeredWindow 用的混合参数。四个字节，顺序不能错。</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct BLENDFUNCTION
+{
+    public byte BlendOp;
+    public byte BlendFlags;
+    public byte SourceConstantAlpha;
+    public byte AlphaFormat;
+}
+
 [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
 public struct MONITORINFOEXW
 {

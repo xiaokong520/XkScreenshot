@@ -3,6 +3,17 @@
   <PropertyGroup>
     <RootNamespace>XkScreenshot.Pin</RootNamespace>
     <UseWPF>true</UseWPF>
+    <!-- 贴图窗口用 WinForms + GDI 双缓冲绘制，而不是 WPF：WPF 异步渲染在窗口缩放时
+         必然有一帧 DWM 顶旧纹理的闪光（见 PinForm 类注释），GDI 同步绘制没这一帧。
+         BitmapSource 仍要用 WPF 的（贴图拷贝/另存走的是 WPF 的 BitmapSource）。 -->
+    <UseWindowsForms>true</UseWindowsForms>
+    <!-- WinForms 的隐式 using 会和 System.Windows 大面积撞名（Point/Size/Color），
+         关掉，全部显式 using。跟 App 的做法一致。 -->
+    <ImplicitUsings>disable</ImplicitUsings>
+    <!-- WFAC010 建议用 Application.SetHighDpiMode 配 DPI，那是 WinForms 的建议。
+         本进程的 PerMonitorV2 在清单里声明、由 WPF 初始化，这里引 WinForms 只是
+         为了 GDI 窗口，运行期设置早已来不及。 -->
+    <NoWarn>$(NoWarn);WFAC010</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
