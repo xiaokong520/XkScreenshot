@@ -57,6 +57,7 @@ public partial class App : Application
 
         _controller = new CaptureController(new GdiScreenCapture());
         _controller.Captured += OnCaptured;
+        _controller.History.Changed += SaveHistory;
 
         _pins.CopyRequested += CopyImage;
         _pins.SaveRequested += SaveImage;
@@ -66,7 +67,18 @@ public partial class App : Application
 
         SetupTrayIcon();
         ApplySettings();
+
+        // 装历史必须排在 ApplySettings 后面：容量得先由设置定下来，
+        // 反过来的话这里会按默认那 30 条把用户设的更长的历史截掉一段
+        _controller.History.Restore(HistoryStore.Load());
     }
+
+    /// <summary>
+    /// 每截一次图就写一遍。攒到退出时再写是不行的 —— 进程被任务管理器结束、
+    /// 或者跟着关机一起没掉，攒着的那一批就全丢了，而「重启之后历史空了」
+    /// 恰恰是这个功能最不能出的岔子。文件只有一两 KB，写它的代价可以忽略。
+    /// </summary>
+    private void SaveHistory() => HistoryStore.Save(_controller!.History.Items);
 
     private void OnHotkeyPressed(HotkeyBinding binding)
     {
