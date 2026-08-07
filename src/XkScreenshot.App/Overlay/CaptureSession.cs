@@ -625,8 +625,14 @@ public sealed class CaptureSession : IDisposable
     /// <summary>正翻到历史的第几条，-1 表示没在回溯（看的是实时冻屏）。见 <see cref="StartFreshSelection"/>。</summary>
     private int _historyIndex = -1;
 
-    /// <summary>正翻到第几条（从 1 数起），0 表示没在回溯。</summary>
-    public int HistoryPosition => _historyIndex + 1;
+    /// <summary>
+    /// 正翻到第几条，0 表示没在回溯。
+    ///
+    /// 按时间先后数，最早那条是 1、最近那条是 <see cref="HistoryCount"/> ——
+    /// 这个数是时间轴上的位置，所以往更早翻（`,`）时它递减。
+    /// 内部下标是反着的（0 = 最近），别把两者搞混。
+    /// </summary>
+    public int HistoryPosition => _historyIndex < 0 ? 0 : HistoryCount - _historyIndex;
 
     public int HistoryCount => _history?.Items.Count ?? 0;
 
