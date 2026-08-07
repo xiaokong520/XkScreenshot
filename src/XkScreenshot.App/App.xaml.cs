@@ -90,16 +90,9 @@ public partial class App : Application
     {
         if (_controller is not null) _controller.Defaults = _settings.ToCaptureDefaults();
 
-        // 没设的热键不注册。虚拟键为 0 送进 RegisterHotKey 只会白拿一个失败
-        var bindings = new List<HotkeyBinding>();
-        if (_settings.CaptureHotkey.IsSet)
-            bindings.Add(_settings.CaptureHotkey.ToBinding(CaptureHotkeyName));
-        if (_settings.PinHotkey.IsSet)
-            bindings.Add(_settings.PinHotkey.ToBinding(PinHotkeyName));
-
         // 注册失败必须说出来。RegisterHotKey 失败是静默的，
         // 不提示的话用户只会感知到「按了没反应」，然后放弃这个软件。
-        var failed = _hotkeys!.Reset(bindings).Where(r => !r.Success).Select(r => r.Error!).ToList();
+        var failed = RegisterHotkeys().Where(r => !r.Success).Select(r => r.Error!).ToList();
         if (failed.Count > 0) ShowTrayWarning(string.Join(Environment.NewLine, failed));
 
         string capture = _settings.CaptureHotkey.ToString();
@@ -109,6 +102,18 @@ public partial class App : Application
             _trayIcon.Text = _settings.CaptureHotkey.IsSet
                 ? $"XkScreenshot — 按 {capture} 截图"
                 : "XkScreenshot";
+    }
+
+    /// <summary>按当前设置注册全部热键。没设的那些（虚拟键为 0）跳过，送进去只会白拿一个失败。</summary>
+    private IReadOnlyList<HotkeyRegistrationResult> RegisterHotkeys()
+    {
+        var bindings = new List<HotkeyBinding>();
+        if (_settings.CaptureHotkey.IsSet)
+            bindings.Add(_settings.CaptureHotkey.ToBinding(CaptureHotkeyName));
+        if (_settings.PinHotkey.IsSet)
+            bindings.Add(_settings.PinHotkey.ToBinding(PinHotkeyName));
+
+        return _hotkeys!.Reset(bindings);
     }
 
     /// <summary>
@@ -212,12 +217,20 @@ public partial class App : Application
             return;
         }
 
-        // 设置界面要探测热键有没有被别人占用，办法是真去注册一次试试。
-        // 自己正占着的话，每一项都会把自己认成冲突，所以开窗期间先全部让出来。
-        _hotkeys?.Clear();
-
-        var window = new SettingsWindow(_settings);
+        var window = new SettingsWindow(
+            _settings,
+            spec => _hotkeys?.Holds(spec.Modifiers, spec.VirtualKey) == true);
         _settingsWindow = window;
+
+        // 只在用户点进热键框、正在录键的那一段让出热键：不让的话他按 F1 会当场触发一次截图，
+        // 而不是被录进框里。整个开窗期间都让出去则是另一个极端 —— 设置窗可以一直开着，
+        // 那样等于把热键关掉了。这里不报注册失败：录键期间来回让进让出，弹几次气泡只会烦人，
+        // 关窗时的 ApplySettings 会统一提示一次。
+        window.RecordingChanged += recording =>
+        {
+            if (recording) _hotkeys?.Clear();
+            else RegisterHotkeys();
+        };
         window.Closed += (_, _) =>
         {
             _settingsWindow = null;
@@ -236,7 +249,7 @@ public partial class App : Application
                 if (SettingsStore.Save(_settings) is { } saveError) ShowTrayWarning(saveError);
             }
 
-            // 取消也要走一遍：热键是开窗时让出去的，不装回来就等于被这一次「取消」关掉了
+            // 取消也要走一遍：关窗时热键框可能正握着焦点、热键正让出去着，不装回来就再也回不来了
             ApplySettings();
         };
         window.Show();

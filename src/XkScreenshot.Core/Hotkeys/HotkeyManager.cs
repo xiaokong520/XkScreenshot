@@ -69,6 +69,16 @@ public sealed class HotkeyManager : IDisposable
         return results;
     }
 
+    /// <summary>
+    /// 本进程此刻是不是正占着这个组合键。
+    ///
+    /// 探测占用时要用它把自己排掉：<c>RegisterHotKey</c> 是全系统去重的，
+    /// 自己已经注册的同样会失败，不排掉的话每个热键都会把自己报成「被占用」。
+    /// </summary>
+    public bool Holds(HotkeyModifiers modifiers, uint virtualKey)
+        => virtualKey != 0
+           && _registered.Values.Any(b => b.Modifiers == modifiers && b.VirtualKey == virtualKey);
+
     /// <summary>撤掉所有已注册的热键，但保留消息窗口。</summary>
     public void Clear()
     {
