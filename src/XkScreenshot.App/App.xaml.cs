@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
-using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Windows;
@@ -117,48 +116,29 @@ public partial class App : Application
     }
 
     /// <summary>
-    /// 把剪贴板里的图钉到屏幕上；剪贴板里没有图就钉上一次截的那张 ——
-    /// 「刚截完想再看一眼」和「从别处复制了张图想摆着对照」是同一个动作的两种由头。
+    /// 把剪贴板里的东西钉到屏幕上；剪贴板里没有可贴的内容就钉上一次截的那张 ——
+    /// 「刚截完想再看一眼」和「从别处复制了点什么想摆着对照」是同一个动作的两种由头。
     /// </summary>
     private void PinFromClipboard()
     {
         // 截图进行中不打扰：那时候满屏都是覆盖层，弹出来的贴图会被压在下面
         if (_controller?.IsActive == true) return;
 
-        var image = ReadClipboardImage() ?? _lastCapture;
+        var image = ClipboardReader.ReadPinnable(CursorScale()) ?? _lastCapture;
         if (image is null)
         {
-            ShowTrayInfo("剪贴板里没有图片，也还没有截过图");
+            ShowTrayInfo("剪贴板里没有可以贴的内容，也还没有截过图");
             return;
         }
 
         _pins.Create(image, PlaceUnderCursor(image));
     }
 
-    private static BitmapSource? ReadClipboardImage()
+    /// <summary>光标所在显示器的缩放倍率。文本贴图按它出图，才不会在高 DPI 屏上小一圈。</summary>
+    private static double CursorScale()
     {
-        try
-        {
-            // 先试 PNG：它保真且带 alpha，浏览器和多数设计工具都会放一份。
-            // 退回 GetImage 走的是 CF_DIB，透明会被压掉，但总比拿不到强。
-            if (Clipboard.GetData("PNG") is Stream png)
-            {
-                var decoded = BitmapFrame.Create(png, BitmapCreateOptions.None, BitmapCacheOption.OnLoad);
-                decoded.Freeze();
-                return decoded;
-            }
-
-            if (!Clipboard.ContainsImage()) return null;
-
-            var image = Clipboard.GetImage();
-            image?.Freeze();
-            return image;
-        }
-        catch (Exception)
-        {
-            // 剪贴板被别的进程占着、或者里面那份数据是坏的，都不该让程序崩掉
-            return null;
-        }
+        var cursor = MonitorEnumerator.GetCursorPosition();
+        return MonitorEnumerator.FromPoint(MonitorEnumerator.Enumerate(), cursor)?.ScaleX ?? 1.0;
     }
 
     /// <summary>
