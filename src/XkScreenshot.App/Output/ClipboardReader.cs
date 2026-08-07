@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -22,9 +23,15 @@ public static class ClipboardReader
     /// <summary>
     /// 读一张可贴的图；剪贴板为空或内容不认识时返回 null。
     /// scale 只用于文本渲染，见 <see cref="TextImage.Render"/>。
+    ///
+    /// busy 为 true 表示这次压根没读成 —— 剪贴板被别的进程占着。
+    /// 它和「剪贴板里确实没东西」必须分开报：两者都返回 null，
+    /// 但前者再按一次就好，后者按多少次都一样。
     /// </summary>
-    public static BitmapSource? ReadPinnable(double scale)
+    public static BitmapSource? ReadPinnable(double scale, out bool busy)
     {
+        busy = false;
+
         try
         {
             if (ReadImage() is { } image) return image;
@@ -32,9 +39,18 @@ public static class ClipboardReader
             if (Clipboard.ContainsText()) return TextImage.Render(Clipboard.GetText(), scale);
             return null;
         }
+        catch (COMException)
+        {
+            // 剪贴板是全局独占资源，输入法、云剪贴板、密码管理器都可能正好占着它。
+            // 这里不再自己套一层重试：WPF 的 Clipboard 内部已经重试了约一秒才把异常抛上来，
+            // 外面再循环八次就是把这一秒乘八倍（实测最坏 9.5 秒），而这段时间 UI 线程是冻住的 ——
+            // 贴图热键正跑在它上面。抢不到就如实说一声，比让整个程序假死好。
+            busy = true;
+            return null;
+        }
         catch (Exception)
         {
-            // 剪贴板是全局独占资源，被别的进程占着、或者里面那份数据是坏的，都不该让程序崩掉
+            // 剪贴板里那份数据本身是坏的，不该让程序崩掉
             return null;
         }
     }
