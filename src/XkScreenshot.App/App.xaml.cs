@@ -71,6 +71,10 @@ public partial class App : Application
         // 装历史必须排在 ApplySettings 后面：容量得先由设置定下来，
         // 反过来的话这里会按默认那 30 条把用户设的更长的历史截掉一段
         _controller.History.Restore(HistoryStore.Load());
+
+        // 上次跑的时候可能在「写完 PNG、还没来得及写索引」之间被结束掉，
+        // 那种文件谁也认领不了，只会一直占着磁盘
+        HistoryStore.PruneImages(_controller.History.ImageIds());
     }
 
     /// <summary>
@@ -78,7 +82,14 @@ public partial class App : Application
     /// 或者跟着关机一起没掉，攒着的那一批就全丢了，而「重启之后历史空了」
     /// 恰恰是这个功能最不能出的岔子。文件只有一两 KB，写它的代价可以忽略。
     /// </summary>
-    private void SaveHistory() => HistoryStore.Save(_controller!.History.Items);
+    private void SaveHistory()
+    {
+        var history = _controller!.History;
+        HistoryStore.SaveIndex(history.Items);
+        // 索引里没有的画面就是垃圾：容量调小、条目被挤掉都会留下这种文件，
+        // 而用户是按条数设的上限，不会想到磁盘上还压着几十张
+        HistoryStore.PruneImages(history.ImageIds());
+    }
 
     private void OnHotkeyPressed(HotkeyBinding binding)
     {

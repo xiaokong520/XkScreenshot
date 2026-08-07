@@ -1,41 +1,104 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Text.Json;
+using System.Windows.Media.Imaging;
+using XkScreenshot.App.Overlay;
 using XkScreenshot.Core.Geometry;
 
 namespace XkScreenshot.App.Settings;
 
 /// <summary>
-/// 截屏区域历史的落盘。
+/// 截屏历史的落盘。
 ///
-/// 单独一个文件而不是塞进 settings.json：历史每截一次图就要重写一遍，而设置是用户自己
-/// 敲进去的东西 —— 让一个高频写入去碰它，等于给「配置文件被写坏」多开一扇门。
+/// 目录结构：
+/// <code>
+///   %APPDATA%\XkScreenshot\history\
+///       index.json          顺序、选区、画面归属
+///       0001.png            那一次截图时整个虚拟桌面的冻结画面
+///       0002.png
+/// </code>
 ///
-/// 写失败一声不吭：这是截图流程的尾巴，为了一条历史没存上去弹个气泡，
-/// 打扰的程度远超过这件事本身的分量。读失败退回空历史，同理。
+/// 画面就是普通 PNG，没有自定义容器：出了问题双击就能看，用任何看图软件都能确认
+/// 「存下来的到底是不是那一屏」。把 PNG 裹进私有格式只换来一件事 —— 排查时得先写个工具。
+/// 索引单独一个 JSON，因为它要频繁重写，而那些 PNG 一旦写完就再也不动了。
+///
+/// 单独一个目录而不是塞进 settings.json 旁边：这里的东西按条增删，
+/// 让它和用户自己敲的配置混在一个层级上，迟早会有人误删。
 /// </summary>
 public static class HistoryStore
 {
-    /// <summary>落盘用的紧凑形态。直接序列化 PixelRect 会把 Right/Bottom/Area 那几个算出来的属性也写进去。</summary>
-    private sealed record Entry(int X, int Y, int W, int H);
+    /// <summary>落盘形态。分开写而不是直接序列化 <see cref="HistoryEntry"/>，是为了不把内部类型的形状焊到文件格式上。</summary>
+    private sealed record Row(int X, int Y, int W, int H, int DX, int DY, int DW, int DH, string? Image);
 
-    public static string FilePath => Path.Combine(
+    public static string Directory => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-        "XkScreenshot", "history.json");
+        "XkScreenshot", "history");
 
-    public static IReadOnlyList<PixelRect> Load()
+    public static string IndexPath => Path.Combine(Directory, "index.json");
+
+    /// <summary>
+    /// 读回历史。索引里指着一个已经不在的 PNG 时，条目本身留着、画面置空 ——
+    /// 选区还是有用的，没必要因为图丢了就把这一条一起丢掉。
+    /// </summary>
+    public static IReadOnlyList<HistoryEntry> Load()
     {
         try
         {
-            if (!File.Exists(FilePath)) return [];
+            if (!File.Exists(IndexPath)) return LoadLegacy();
 
-            var entries = JsonSerializer.Deserialize<List<Entry>>(File.ReadAllText(FilePath));
-            if (entries is null) return [];
+            var rows = JsonSerializer.Deserialize<List<Row>>(File.ReadAllText(IndexPath));
+            if (rows is null) return [];
 
-            var rects = new List<PixelRect>(entries.Count);
-            foreach (var e in entries) rects.Add(new PixelRect(e.X, e.Y, e.W, e.H));
-            return rects;
+            var entries = new List<HistoryEntry>(rows.Count);
+            foreach (var row in rows)
+            {
+                var bounds = new PixelRect(row.X, row.Y, row.W, row.H);
+                if (bounds.IsEmpty) continue;
+
+                var desktop = new PixelRect(row.DX, row.DY, row.DW, row.DH);
+                // 画面文件没了就当这一条只有选区。桌面范围为空同理 ——
+                // 没有原点就没法把那张图摆回虚拟屏幕坐标系里，图有等于没有。
+                string? image = row.Image is not null && !desktop.IsEmpty && File.Exists(ImagePath(row.Image))
+                    ? row.Image
+                    : null;
+
+                entries.Add(new HistoryEntry(bounds, desktop, image));
+            }
+            return entries;
+        }
+        catch (Exception)
+        {
+            // 手改坏了、写到一半断电了 —— 都不该让程序起不来
+            return [];
+        }
+    }
+
+    /// <summary>
+    /// 上一版把历史存成一个只有矩形的 <c>history.json</c>，就放在设置文件旁边。
+    /// 那些矩形照样有用，接过来当「只有框」的条目 —— 升级一次就把人家攒的历史清空，
+    /// 是这个功能最不该干的事。接完就把旧文件删掉，免得下次又走一遍。
+    /// </summary>
+    private static IReadOnlyList<HistoryEntry> LoadLegacy()
+    {
+        string legacy = Path.Combine(Path.GetDirectoryName(Directory)!, "history.json");
+
+        try
+        {
+            if (!File.Exists(legacy)) return [];
+
+            var rows = JsonSerializer.Deserialize<List<LegacyRow>>(File.ReadAllText(legacy));
+            var entries = new List<HistoryEntry>();
+            foreach (var row in rows ?? [])
+            {
+                var bounds = new PixelRect(row.X, row.Y, row.W, row.H);
+                if (!bounds.IsEmpty) entries.Add(new HistoryEntry(bounds, PixelRect.Empty, null));
+            }
+
+            SaveIndex(entries);
+            File.Delete(legacy);
+            return entries;
         }
         catch (Exception)
         {
@@ -43,19 +106,126 @@ public static class HistoryStore
         }
     }
 
-    public static void Save(IEnumerable<PixelRect> rects)
+    private sealed record LegacyRow(int X, int Y, int W, int H);
+
+    public static void SaveIndex(IEnumerable<HistoryEntry> entries)
     {
         try
         {
-            var entries = new List<Entry>();
-            foreach (var r in rects) entries.Add(new Entry(r.X, r.Y, r.Width, r.Height));
+            var rows = new List<Row>();
+            foreach (var e in entries)
+                rows.Add(new Row(
+                    e.Bounds.X, e.Bounds.Y, e.Bounds.Width, e.Bounds.Height,
+                    e.Desktop.X, e.Desktop.Y, e.Desktop.Width, e.Desktop.Height,
+                    e.Image));
 
-            Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
-            File.WriteAllText(FilePath, JsonSerializer.Serialize(entries));
+            System.IO.Directory.CreateDirectory(Directory);
+            File.WriteAllText(IndexPath, JsonSerializer.Serialize(rows, new JsonSerializerOptions
+            {
+                WriteIndented = true,
+                DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+            }));
         }
         catch (Exception)
         {
             // 见类注释：这条路上没有值得打断用户的失败
         }
+    }
+
+    public static string ImagePath(string id) => Path.Combine(Directory, id + ".png");
+
+    /// <summary>
+    /// 把整屏画面写成 PNG，返回它的 id；失败返回 null（调用方照样能只记选区）。
+    /// 图必须已经 Freeze —— 这个方法是给后台线程调的。
+    /// </summary>
+    public static string? SaveImage(BitmapSource image)
+    {
+        try
+        {
+            System.IO.Directory.CreateDirectory(Directory);
+
+            string id = NextId();
+            var encoder = new PngBitmapEncoder();
+            encoder.Frames.Add(BitmapFrame.Create(image));
+
+            // 先写临时文件再改名：写到一半被打断的话，留下的是一个残缺的 .tmp，
+            // 而不是一个索引正指着、打开却是半张的 PNG
+            string tmp = ImagePath(id) + ".tmp";
+            using (var fs = File.Create(tmp)) encoder.Save(fs);
+            File.Move(tmp, ImagePath(id), overwrite: true);
+            return id;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>读一张存档画面；文件没了或者解不出来返回 null。</summary>
+    public static BitmapSource? LoadImage(string id)
+    {
+        try
+        {
+            // OnLoad 会当场读完，出了 using 文件就不再被占用 —— 否则清理时删不掉
+            using var fs = File.OpenRead(ImagePath(id));
+            var frame = BitmapFrame.Create(fs, BitmapCreateOptions.None, BitmapCacheOption.OnLoad);
+            frame.Freeze();
+            return frame;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// 删掉不在 keep 里的 PNG（含写了一半的 .tmp）。
+    /// 容量裁剪和「索引与目录对不上」都靠它收尾 —— 只删索引不删文件的话，
+    /// 目录会一直涨，而用户是按条数设的上限，不会想到磁盘上还压着几十张。
+    /// </summary>
+    public static void PruneImages(IEnumerable<string> keep)
+    {
+        try
+        {
+            if (!System.IO.Directory.Exists(Directory)) return;
+
+            var live = new HashSet<string>(keep, StringComparer.OrdinalIgnoreCase);
+            foreach (string file in System.IO.Directory.EnumerateFiles(Directory))
+            {
+                string ext = Path.GetExtension(file);
+                if (!ext.Equals(".png", StringComparison.OrdinalIgnoreCase)
+                    && !ext.Equals(".tmp", StringComparison.OrdinalIgnoreCase)) continue;
+
+                if (ext.Equals(".png", StringComparison.OrdinalIgnoreCase)
+                    && live.Contains(Path.GetFileNameWithoutExtension(file))) continue;
+
+                try { File.Delete(file); } catch (Exception) { /* 正被看图软件占着，下次再说 */ }
+            }
+        }
+        catch (Exception)
+        {
+        }
+    }
+
+    /// <summary>
+    /// 递增序号，取目录里现有的最大值加一。
+    /// 不用时间戳：同一秒内连截两张就会撞名，而这里恰恰是连着截图的场景。
+    /// </summary>
+    private static string NextId()
+    {
+        int max = 0;
+        try
+        {
+            foreach (string file in System.IO.Directory.EnumerateFiles(Directory, "*.png"))
+            {
+                if (int.TryParse(Path.GetFileNameWithoutExtension(file),
+                        NumberStyles.None, CultureInfo.InvariantCulture, out int n) && n > max)
+                    max = n;
+            }
+        }
+        catch (Exception)
+        {
+        }
+        return (max + 1).ToString("D4", CultureInfo.InvariantCulture);
     }
 }

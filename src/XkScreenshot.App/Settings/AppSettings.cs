@@ -53,7 +53,7 @@ public sealed class AppSettings
     /// <summary>截图时默认用控件级检测而不是整窗。</summary>
     public bool ElementMode { get; set; }
 
-    /// <summary>回溯截屏区域历史缓存多少条。0 = 关掉。</summary>
+    /// <summary>回溯截屏历史缓存多少条。每条含一张整屏画面，0 = 关掉。</summary>
     public int HistoryCapacity { get; set; } = CaptureHistory.DefaultCapacity;
 
     public bool RunAtStartup { get; set; }

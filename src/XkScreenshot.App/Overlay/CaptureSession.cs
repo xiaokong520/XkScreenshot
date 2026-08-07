@@ -132,12 +132,15 @@ public sealed class CaptureSession : IDisposable
     public CaptureSession(
         DesktopSnapshot snapshot,
         CaptureDefaults? defaults = null,
-        CaptureHistory? history = null)
+        CaptureHistory? history = null,
+        Func<HistoryEntry, DesktopSnapshot?>? historyLoader = null)
     {
         var d = defaults ?? CaptureDefaults.Standard;
 
         Snapshot = snapshot;
+        LiveSnapshot = snapshot;
         _history = history;
+        _historyLoader = historyLoader;
         DefaultAction = d.Action;
         ShowHints = d.ShowHints;
         ElementMode = d.ElementMode;
@@ -145,7 +148,26 @@ public sealed class CaptureSession : IDisposable
         _probe.Updated += OnProbeUpdated;
     }
 
-    public DesktopSnapshot Snapshot { get; }
+    /// <summary>
+    /// 覆盖层此刻在看的画面。回溯到历史时会换成存档的那一张 ——
+    /// 换掉之后裁剪、取色、马赛克全都自动跟着走，因为它们本来就只认这一个来源。
+    /// </summary>
+    public DesktopSnapshot Snapshot { get; private set; }
+
+    /// <summary>按下热键那一刻的实时冻屏。从历史里走出来时回到它。</summary>
+    public DesktopSnapshot LiveSnapshot { get; }
+
+    /// <summary>true = 正看着历史里的某一张画面，而不是实时冻屏。</summary>
+    public bool InHistory => !ReferenceEquals(Snapshot, LiveSnapshot);
+
+    /// <summary>
+    /// 当前画面来自历史里的哪一条，null = 实时冻屏。
+    /// 从历史画面上确认截图时靠它复用那张已经存好的图，而不是把同一张再编码一遍。
+    /// </summary>
+    public HistoryEntry? HistorySource { get; private set; }
+
+    /// <summary>画面整个换掉了，覆盖层要重挂底图、放大镜和毛玻璃。</summary>
+    public event Action? SnapshotSwapped;
 
     /// <summary>Enter / 双击选区确认时截到哪去。工具条上的按钮各说各的，不看这一项。</summary>
     public CaptureAction DefaultAction { get; }
@@ -598,16 +620,18 @@ public sealed class CaptureSession : IDisposable
     // ---------------- 截屏区域历史 ----------------
 
     private readonly CaptureHistory? _history;
+    private readonly Func<HistoryEntry, DesktopSnapshot?>? _historyLoader;
 
-    /// <summary>正翻到历史的第几条，-1 表示没在回溯。见 <see cref="StartFreshSelection"/>。</summary>
+    /// <summary>正翻到历史的第几条，-1 表示没在回溯（看的是实时冻屏）。见 <see cref="StartFreshSelection"/>。</summary>
     private int _historyIndex = -1;
 
     /// <summary>
-    /// 回溯截屏区域历史。<paramref name="back"/> 为 true 往更早翻，false 往更近翻。
+    /// 回溯截屏历史。<paramref name="back"/> 为 true 往更早翻，false 往更近翻。
     /// 返回 false 表示这个方向已经没有了。
     ///
-    /// 只往回走到最近那一条为止，不记「进入回溯之前是什么样」：
-    /// 走错了按 Esc 就是重选，多存一份返回态换来的只是同一件事的第二种做法。
+    /// 翻过去的是当时那一整屏画面，选区跟着一起回来 —— 于是在它上面重新框、
+    /// 重新标注、重新确认，得到的都是当时那张图。往回一直翻会走出历史、回到实时冻屏，
+    /// 这条退路必须有：进了历史却出不来，等于按错一下就得重开一次截图。
     /// </summary>
     public bool StepHistory(bool back)
     {
@@ -619,13 +643,24 @@ public sealed class CaptureSession : IDisposable
         while (true)
         {
             index += back ? 1 : -1;
-            if (index < 0 || index >= items.Count) return false;
 
-            // 显示器插拔、改分辨率之后，旧矩形可能整个落到桌面外面去了。
+            // 往回走到 -1 就是走出历史。没在历史里时再往回走才是真的没有了
+            if (index < 0) return !back && InHistory && ReturnToLive();
+            if (index >= items.Count) return false;
+
+            var entry = items[index];
+
+            // 显示器插拔、改分辨率之后，旧矩形可能整个落到当前桌面外面去了。
             // 那种条目直接跳过 —— 摆出来是一个框不住任何东西的空选区，
             // 比按了没反应更让人摸不着头脑。
-            var rect = items[index].Intersect(Snapshot.VirtualBounds);
+            var rect = entry.Bounds.Intersect(LiveSnapshot.VirtualBounds);
             if (rect.IsEmpty) continue;
+
+            // 画面装不出来（文件没了、解码失败）就退回「只把框摆回来」那一层，
+            // 而不是把这一条跳过去 —— 选区本身仍然是用户要的东西
+            var loaded = entry.Image is null ? null : _historyLoader?.Invoke(entry);
+            HistorySource = loaded is null ? null : entry;
+            Swap(loaded ?? LiveSnapshot);
 
             StartFreshSelection(rect);
             // StartFreshSelection 会把下标清成 -1（那是给「用户自己重新框」用的），
@@ -638,6 +673,34 @@ public sealed class CaptureSession : IDisposable
             Changed?.Invoke();
             return true;
         }
+    }
+
+    /// <summary>走出历史，回到按下热键那一刻的实时冻屏。选区一并清掉：它是历史那张图上的框。</summary>
+    private bool ReturnToLive()
+    {
+        HistorySource = null;
+        Swap(LiveSnapshot);
+        StartFreshSelection(PixelRect.Empty);
+        Phase = SelectionPhase.Idle;
+        _press = PressKind.None;
+        UpdateHover(Cursor);
+        Changed?.Invoke();
+        return true;
+    }
+
+    private void Swap(DesktopSnapshot next)
+    {
+        if (ReferenceEquals(next, Snapshot)) return;
+
+        Snapshot = next;
+
+        // 马赛克缓存是按选区键的，换了画面同一个选区对应的像素已经不是那一批了
+        _mosaicKey = PixelRect.Empty;
+        _mosaicSource = null;
+
+        // 光标底下的颜色取自画面，换了画面就得重取
+        UpdateCursor(Cursor);
+        SnapshotSwapped?.Invoke();
     }
 
     /// <summary>
