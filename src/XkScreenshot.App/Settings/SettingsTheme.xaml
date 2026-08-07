@@ -1,0 +1,339 @@
+<!--
+  设置界面的控件皮肤。
+
+  为什么单独一个 XAML：控件模板本质上就是一棵带触发器的元素树，用 C# 的
+  FrameworkElementFactory 拼出来会长三倍且没法读。窗口的结构仍然在 SettingsWindow.cs 里搭 ——
+  那部分是循环和条件，反过来才是 XAML 的短板。
+
+  所有颜色一律 DynamicResource：真正的画刷由 Ui/Theme.cs 按系统的浅色/深色灌进窗口资源，
+  同一份模板管两套皮。
+-->
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:s="clr-namespace:XkScreenshot.App.Settings">
+
+  <!-- ================= 输入框 ================= -->
+
+  <Style TargetType="{x:Type TextBox}">
+    <Setter Property="Height" Value="32" />
+    <Setter Property="Padding" Value="10,0,10,0" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="Background" Value="{DynamicResource ControlBg}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource ControlBorder}" />
+    <Setter Property="Foreground" Value="{DynamicResource Text}" />
+    <Setter Property="CaretBrush" Value="{DynamicResource Text}" />
+    <Setter Property="SelectionBrush" Value="{DynamicResource Accent}" />
+    <Setter Property="VerticalContentAlignment" Value="Center" />
+    <Setter Property="SnapsToDevicePixels" Value="True" />
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="{x:Type TextBox}">
+          <Border x:Name="Bd"
+                  Background="{TemplateBinding Background}"
+                  BorderBrush="{TemplateBinding BorderBrush}"
+                  BorderThickness="{TemplateBinding BorderThickness}"
+                  CornerRadius="4"
+                  SnapsToDevicePixels="True">
+            <ScrollViewer x:Name="PART_ContentHost"
+                          Margin="{TemplateBinding Padding}"
+                          VerticalAlignment="Center"
+                          Focusable="False"
+                          HorizontalScrollBarVisibility="Hidden"
+                          VerticalScrollBarVisibility="Hidden" />
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+              <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ControlBgHover}" />
+            </Trigger>
+            <!-- 聚焦时只换边框色，不加粗：加粗会让里面的文字整体挪一像素，看着像抖了一下 -->
+            <Trigger Property="IsKeyboardFocusWithin" Value="True">
+              <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource Accent}" />
+            </Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
+  <!-- 隐式样式不会落到派生类型上，热键框得自己认一次领 -->
+  <Style TargetType="{x:Type s:HotkeyBox}" BasedOn="{StaticResource {x:Type TextBox}}">
+    <Setter Property="TextAlignment" Value="Center" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+  </Style>
+
+  <!-- ================= 按钮 ================= -->
+
+  <Style TargetType="{x:Type Button}">
+    <Setter Property="Height" Value="32" />
+    <Setter Property="Padding" Value="16,0,16,0" />
+    <Setter Property="Background" Value="{DynamicResource ControlBg}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource ControlBorder}" />
+    <Setter Property="Foreground" Value="{DynamicResource Text}" />
+    <Setter Property="SnapsToDevicePixels" Value="True" />
+    <Setter Property="Cursor" Value="Hand" />
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="{x:Type Button}">
+          <Border x:Name="Bd"
+                  Background="{TemplateBinding Background}"
+                  BorderBrush="{TemplateBinding BorderBrush}"
+                  BorderThickness="1"
+                  CornerRadius="4"
+                  SnapsToDevicePixels="True">
+            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                              Margin="{TemplateBinding Padding}" />
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+              <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ControlBgHover}" />
+            </Trigger>
+            <Trigger Property="IsPressed" Value="True">
+              <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ControlBgPressed}" />
+            </Trigger>
+            <Trigger Property="IsKeyboardFocused" Value="True">
+              <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource Accent}" />
+            </Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
+  <Style x:Key="AccentButton" TargetType="{x:Type Button}" BasedOn="{StaticResource {x:Type Button}}">
+    <Setter Property="Background" Value="{DynamicResource Accent}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Accent}" />
+    <Setter Property="Foreground" Value="White" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="{x:Type Button}">
+          <Border x:Name="Bd"
+                  Background="{TemplateBinding Background}"
+                  BorderBrush="{TemplateBinding BorderBrush}"
+                  BorderThickness="1"
+                  CornerRadius="4"
+                  SnapsToDevicePixels="True">
+            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                              Margin="{TemplateBinding Padding}" />
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+              <Setter TargetName="Bd" Property="Background" Value="{DynamicResource AccentHover}" />
+              <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource AccentHover}" />
+            </Trigger>
+            <Trigger Property="IsPressed" Value="True">
+              <Setter TargetName="Bd" Property="Background" Value="{DynamicResource AccentPressed}" />
+              <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource AccentPressed}" />
+            </Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
+  <!-- ================= 开关 ================= -->
+  <!--
+    用开关而不是复选框：这几项全是「立刻生效的状态」而不是「待勾选的选项」，
+    开关能一眼看出当前是开是关，复选框要盯着那个小勾辨认。
+  -->
+
+  <Style x:Key="ToggleSwitch" TargetType="{x:Type ToggleButton}">
+    <Setter Property="Width" Value="40" />
+    <Setter Property="Height" Value="20" />
+    <Setter Property="Cursor" Value="Hand" />
+    <Setter Property="SnapsToDevicePixels" Value="True" />
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="{x:Type ToggleButton}">
+          <!-- 透明底铺满，滑轨之外的那几像素也要能点中 -->
+          <Grid Background="Transparent">
+            <Border x:Name="Track"
+                    CornerRadius="10"
+                    Background="{DynamicResource ToggleOffTrack}"
+                    BorderBrush="{DynamicResource ToggleOffBorder}"
+                    BorderThickness="1" />
+            <Ellipse x:Name="Thumb"
+                     Width="12" Height="12"
+                     Fill="{DynamicResource ToggleOffThumb}"
+                     HorizontalAlignment="Left"
+                     Margin="4,0,0,0" />
+          </Grid>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+              <Setter TargetName="Thumb" Property="Width" Value="14" />
+              <Setter TargetName="Thumb" Property="Height" Value="14" />
+              <Setter TargetName="Thumb" Property="Margin" Value="3,0,0,0" />
+            </Trigger>
+            <Trigger Property="IsChecked" Value="True">
+              <Setter TargetName="Track" Property="Background" Value="{DynamicResource Accent}" />
+              <Setter TargetName="Track" Property="BorderBrush" Value="{DynamicResource Accent}" />
+              <Setter TargetName="Thumb" Property="Fill" Value="White" />
+              <Setter TargetName="Thumb" Property="HorizontalAlignment" Value="Right" />
+              <Setter TargetName="Thumb" Property="Margin" Value="0,0,4,0" />
+            </Trigger>
+            <!-- 开着又悬停：上面两条各改了一半的 Margin，这里一次性给全 -->
+            <MultiTrigger>
+              <MultiTrigger.Conditions>
+                <Condition Property="IsChecked" Value="True" />
+                <Condition Property="IsMouseOver" Value="True" />
+              </MultiTrigger.Conditions>
+              <Setter TargetName="Thumb" Property="Margin" Value="0,0,3,0" />
+            </MultiTrigger>
+            <Trigger Property="IsKeyboardFocused" Value="True">
+              <Setter TargetName="Track" Property="BorderBrush" Value="{DynamicResource Accent}" />
+            </Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
+  <!-- ================= 下拉框 ================= -->
+
+  <Style TargetType="{x:Type ComboBoxItem}">
+    <Setter Property="Foreground" Value="{DynamicResource Text}" />
+    <Setter Property="Padding" Value="11,7,11,7" />
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="{x:Type ComboBoxItem}">
+          <Border x:Name="Bd" Background="Transparent" CornerRadius="4" Margin="4,1,4,1">
+            <ContentPresenter Margin="{TemplateBinding Padding}" VerticalAlignment="Center" />
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsHighlighted" Value="True">
+              <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ControlBgHover}" />
+            </Trigger>
+            <Trigger Property="IsSelected" Value="True">
+              <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ControlBgPressed}" />
+            </Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
+  <Style TargetType="{x:Type ComboBox}">
+    <Setter Property="Height" Value="32" />
+    <Setter Property="Foreground" Value="{DynamicResource Text}" />
+    <Setter Property="Cursor" Value="Hand" />
+    <Setter Property="SnapsToDevicePixels" Value="True" />
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="{x:Type ComboBox}">
+          <Grid>
+            <ToggleButton x:Name="Toggle" Focusable="False" ClickMode="Press"
+                          IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
+              <ToggleButton.Template>
+                <ControlTemplate TargetType="{x:Type ToggleButton}">
+                  <Border x:Name="Bd"
+                          Background="{DynamicResource ControlBg}"
+                          BorderBrush="{DynamicResource ControlBorder}"
+                          BorderThickness="1"
+                          CornerRadius="4"
+                          SnapsToDevicePixels="True">
+                    <Path x:Name="Arrow"
+                          Data="M0,0 L4,4 L8,0"
+                          Stroke="{DynamicResource TextSecondary}"
+                          StrokeThickness="1.4"
+                          StrokeStartLineCap="Round"
+                          StrokeEndLineCap="Round"
+                          StrokeLineJoin="Round"
+                          HorizontalAlignment="Right"
+                          VerticalAlignment="Center"
+                          Margin="0,0,12,0" />
+                  </Border>
+                  <ControlTemplate.Triggers>
+                    <Trigger Property="IsMouseOver" Value="True">
+                      <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ControlBgHover}" />
+                    </Trigger>
+                    <Trigger Property="IsChecked" Value="True">
+                      <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource Accent}" />
+                    </Trigger>
+                  </ControlTemplate.Triggers>
+                </ControlTemplate>
+              </ToggleButton.Template>
+            </ToggleButton>
+
+            <ContentPresenter Margin="12,0,34,0"
+                              VerticalAlignment="Center"
+                              IsHitTestVisible="False"
+                              Content="{TemplateBinding SelectionBoxItem}"
+                              ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}" />
+
+            <Popup x:Name="PART_Popup"
+                   Placement="Bottom"
+                   VerticalOffset="4"
+                   AllowsTransparency="True"
+                   PopupAnimation="Fade"
+                   Focusable="False"
+                   IsOpen="{TemplateBinding IsDropDownOpen}">
+              <!-- 阴影要有地方落，四周留白就是给它的 -->
+              <Border Margin="8,2,8,10"
+                      MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}"
+                      Background="{DynamicResource FlyoutBg}"
+                      BorderBrush="{DynamicResource CardBorder}"
+                      BorderThickness="1"
+                      CornerRadius="6"
+                      Padding="0,4,0,4">
+                <Border.Effect>
+                  <DropShadowEffect BlurRadius="16" ShadowDepth="3" Opacity="0.22" Color="Black" />
+                </Border.Effect>
+                <ItemsPresenter />
+              </Border>
+            </Popup>
+          </Grid>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
+  <!-- ================= 滚动条 ================= -->
+  <!-- 系统默认那条带上下箭头的滚动条是 Win7 的样式，跟卡片放一起格外扎眼 -->
+
+  <Style x:Key="ScrollThumbStyle" TargetType="{x:Type Thumb}">
+    <Setter Property="IsTabStop" Value="False" />
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="{x:Type Thumb}">
+          <Border Background="{DynamicResource ScrollThumb}" CornerRadius="3" Margin="3,0,3,0" />
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
+  <Style x:Key="ScrollPageButton" TargetType="{x:Type RepeatButton}">
+    <Setter Property="Focusable" Value="False" />
+    <Setter Property="IsTabStop" Value="False" />
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="{x:Type RepeatButton}">
+          <Border Background="Transparent" />
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
+  <Style TargetType="{x:Type ScrollBar}">
+    <Setter Property="Width" Value="12" />
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="{x:Type ScrollBar}">
+          <Track x:Name="PART_Track" IsDirectionReversed="True">
+            <Track.Thumb>
+              <Thumb Style="{StaticResource ScrollThumbStyle}" />
+            </Track.Thumb>
+            <!-- 上下翻页区要有，但不该画出来 -->
+            <Track.DecreaseRepeatButton>
+              <RepeatButton Command="ScrollBar.PageUpCommand" Style="{StaticResource ScrollPageButton}" />
+            </Track.DecreaseRepeatButton>
+            <Track.IncreaseRepeatButton>
+              <RepeatButton Command="ScrollBar.PageDownCommand" Style="{StaticResource ScrollPageButton}" />
+            </Track.IncreaseRepeatButton>
+          </Track>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
+</ResourceDictionary>

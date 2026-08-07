@@ -48,6 +48,30 @@ public sealed class HotkeyManager : IDisposable
         _source.AddHook(WndProc);
     }
 
+    /// <summary>
+    /// 换一套热键：先全撤，再注册新的。新的注册失败时把旧的原样装回去 ——
+    /// 否则用户在设置里挑了一个被占用的组合，换来的是「一个热键都没有」。
+    /// </summary>
+    public HotkeyRegistrationResult Reset(HotkeyBinding binding)
+    {
+        var previous = _registered.Values.ToList();
+        Clear();
+
+        var result = Register(binding);
+        if (result.Success) return result;
+
+        foreach (var old in previous) Register(old);
+        return result;
+    }
+
+    /// <summary>撤掉所有已注册的热键，但保留消息窗口。</summary>
+    public void Clear()
+    {
+        foreach (int id in _registered.Keys)
+            NativeMethods.UnregisterHotKey(_source.Handle, id);
+        _registered.Clear();
+    }
+
     public HotkeyRegistrationResult Register(HotkeyBinding binding)
     {
         int id = _nextId++;
@@ -82,10 +106,7 @@ public sealed class HotkeyManager : IDisposable
         if (_disposed) return;
         _disposed = true;
 
-        foreach (int id in _registered.Keys)
-            NativeMethods.UnregisterHotKey(_source.Handle, id);
-        _registered.Clear();
-
+        Clear();
         _source.RemoveHook(WndProc);
         _source.Dispose();
     }

@@ -10,6 +10,7 @@ using XkScreenshot.Capture;
 using XkScreenshot.Core.Geometry;
 using XkScreenshot.Core.Monitors;
 using XkScreenshot.Core.Native;
+using XkScreenshot.Core.Windows;
 
 namespace XkScreenshot.App.Overlay;
 
@@ -136,17 +137,35 @@ public sealed class OverlayWindow : Window
             _selectionLayer.HighlightLocal = ToLocalDip(highlight.Intersect(bounds));
             _selectionLayer.HighlightPixels = highlight;
             _selectionLayer.ShowSizeLabel = OwnsLabelAnchor(highlight);
+            _selectionLayer.HighlightTag = selection.IsEmpty ? DetectionTag() : null;
         }
         else
         {
             _selectionLayer.HighlightLocal = null;
             _selectionLayer.ShowSizeLabel = false;
+            _selectionLayer.HighlightTag = null;
         }
 
         _selectionLayer.Refresh();
         SyncAnnotationState();
         SyncToolbar();
         UpdateHintVisibility();
+    }
+
+    /// <summary>
+    /// 检测模式徽标。整窗是默认行为，不用标；控件级要标，而且得如实说出它此刻的处境 ——
+    /// 「识别中」和「整窗」都意味着框住的其实是整个窗口，把它们说成「控件级」就是在骗人。
+    /// </summary>
+    private string? DetectionTag()
+    {
+        if (!_session.ElementMode) return null;
+
+        return _session.HoverElement switch
+        {
+            ElementHit.Found => "控件",
+            ElementHit.Scanning => "控件 · 识别中",
+            _ => "控件 · 整窗",
+        };
     }
 
     private void SyncAnnotationState()
@@ -694,6 +713,11 @@ public sealed class OverlayWindow : Window
             case Key.Delete:
             case Key.Back:
                 _session.DeleteSelectedAnnotation();
+                break;
+
+            // 构造函数里关掉了 Tab 的焦点导航，这里才拿得到它
+            case Key.Tab:
+                _session.ToggleElementMode();
                 break;
 
             case Key.Z when ctrl:

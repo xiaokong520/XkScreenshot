@@ -91,6 +91,26 @@ public static class Icons
     public static readonly Geometry Close = Build(
         paths: ["M18 6 6 18", "m6 6 12 12"]);
 
+    // ---------------- 设置界面 ----------------
+
+    /// <summary>热键。用命令键的结环图案，比键盘轮廓在 20px 下更容易认。</summary>
+    public static readonly Geometry Command = Build(
+        paths: ["M15 6v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3"]);
+
+    public static readonly Geometry Folder = Build(
+        paths: ["M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"]);
+
+    /// <summary>确认截图后的去向 —— 就是 Enter 那个折返箭头。</summary>
+    public static readonly Geometry CornerDownLeft = Build(
+        paths: ["M20 4v7a4 4 0 0 1-4 4H4", "m9 10-5 5 5 5"]);
+
+    public static readonly Geometry Eye = Build(
+        ellipses: [(12, 12, 3, 3)],
+        paths: ["M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"]);
+
+    public static readonly Geometry Power = Build(
+        paths: ["M12 2v10", "M18.4 6.6a9 9 0 1 1-12.77.04"]);
+
     private static readonly Dictionary<Brush, Pen> PenCache = [];
 
     /// <summary>

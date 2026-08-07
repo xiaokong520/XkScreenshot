@@ -32,6 +32,16 @@ public enum CaptureAction
 public sealed record CaptureResult(BitmapSource Image, PixelRect Bounds, CaptureAction Action);
 
 /// <summary>
+/// 会话起手时的状态，全部来自设置界面。
+/// 单独一个记录而不是把 AppSettings 整个塞进来：会话只关心这三样，
+/// 多传的每一项都会变成以后「设置一改，截图行为莫名其妙跟着变」的伏笔。
+/// </summary>
+public sealed record CaptureDefaults(CaptureAction Action, bool ShowHints, bool ElementMode)
+{
+    public static readonly CaptureDefaults Standard = new(CaptureAction.Copy, true, false);
+}
+
+/// <summary>
 /// 光标此刻落在什么上面，决定该显示哪种指针。
 /// 由 Session 统一给出，而不是各个窗口自己猜 —— 判定顺序必须和
 /// <see cref="CaptureSession.BeginPress"/> 完全一致，否则指针会承诺一件按下去不会发生的事。
@@ -63,7 +73,7 @@ public enum SelectionPhase
 /// 选区用「虚拟屏幕物理像素」表示 —— 这样跨屏拖拽天然成立，
 /// 每个覆盖层只负责把选区跟自己的 Bounds 求交后画出来。
 /// </summary>
-public sealed class CaptureSession
+public sealed class CaptureSession : IDisposable
 {
     /// <summary>小于这个距离视为「点击」而不是「拖拽」，用来触发窗口整窗选取。</summary>
     private const int ClickThresholdPx = 4;
@@ -119,12 +129,22 @@ public sealed class CaptureSession
     private Annotation? _styleOrigin;
     private int _styleIndex = -1;
 
-    public CaptureSession(DesktopSnapshot snapshot)
+    public CaptureSession(DesktopSnapshot snapshot, CaptureDefaults? defaults = null)
     {
+        var d = defaults ?? CaptureDefaults.Standard;
+
         Snapshot = snapshot;
+        DefaultAction = d.Action;
+        ShowHints = d.ShowHints;
+        ElementMode = d.ElementMode;
+
+        _probe.Updated += OnProbeUpdated;
     }
 
     public DesktopSnapshot Snapshot { get; }
+
+    /// <summary>Enter / 双击选区确认时截到哪去。工具条上的按钮各说各的，不看这一项。</summary>
+    public CaptureAction DefaultAction { get; }
 
     /// <summary>本次截图的标注。坐标是选区局部物理像素。</summary>
     public AnnotationDocument Annotations { get; } = new();
@@ -207,6 +227,16 @@ public sealed class CaptureSession
     public SelectionPhase Phase { get; private set; } = SelectionPhase.Idle;
     public PixelRect Selection { get; private set; } = PixelRect.Empty;
     public PixelRect HoverWindow { get; private set; } = PixelRect.Empty;
+
+    // ---------------- 界面元素检测 ----------------
+
+    private readonly UiElementProbe _probe = new();
+
+    /// <summary>true = 控件级检测，悬停命中窗口里的按钮/输入框；false = 整窗。Tab 切换。</summary>
+    public bool ElementMode { get; private set; }
+
+    /// <summary>控件级模式下，当前高亮到底是什么。整窗模式时恒为 <see cref="ElementHit.None"/>。</summary>
+    public ElementHit HoverElement { get; private set; } = ElementHit.None;
 
     /// <summary>光标当前所在的虚拟屏幕物理坐标。</summary>
     public PixelPoint Cursor { get; private set; }
@@ -581,14 +611,58 @@ public sealed class CaptureSession
     {
         if (Phase != SelectionPhase.Idle) return;
 
-        var hit = WindowEnumerator.HitTest(Snapshot.Windows, cursor);
-        var rect = hit is null
-            ? PixelRect.Empty
-            : hit.Bounds.Intersect(Snapshot.VirtualBounds);
+        var rect = ResolveTarget(cursor, out var hit);
+        if (rect == HoverWindow && hit == HoverElement) return;
 
-        if (rect == HoverWindow) return;
         HoverWindow = rect;
+        HoverElement = hit;
         Changed?.Invoke();
+    }
+
+    /// <summary>
+    /// 在「整窗」与「控件级」之间切换。
+    ///
+    /// 控件级不是默认值：多数时候用户要的就是整个窗口，而控件级会让高亮随着光标
+    /// 在界面里跳个不停。做成一键切换，需要的时候按一下即可。
+    /// </summary>
+    public void ToggleElementMode()
+    {
+        ElementMode = !ElementMode;
+
+        // 立刻按新模式重算一次，不必等用户再动一下鼠标才看到变化
+        if (Phase == SelectionPhase.Idle)
+        {
+            HoverWindow = ResolveTarget(Cursor, out var hit);
+            HoverElement = hit;
+        }
+        Changed?.Invoke();
+    }
+
+    /// <summary>
+    /// 光标底下「点一下会截到什么」。整窗模式给顶层窗口，控件级给最内层的控件。
+    ///
+    /// 悬停高亮和单击选取必须共用这一个函数：高亮画出来的是一句承诺，
+    /// 两边各算各的，迟早会出现「框着按钮、点下去截到整个窗口」。
+    /// </summary>
+    private PixelRect ResolveTarget(PixelPoint cursor, out ElementHit hit)
+    {
+        hit = ElementHit.None;
+
+        var window = WindowEnumerator.HitTest(Snapshot.Windows, cursor);
+        if (window is null) return PixelRect.Empty;
+        if (!ElementMode) return window.Bounds.Intersect(Snapshot.VirtualBounds);
+
+        // 扫描没完成时先退回整窗；扫完了 Probe 会发 Updated，届时再自动收细一次
+        hit = _probe.HitTest(window.Handle, window.Bounds, cursor, out var element);
+        return hit == ElementHit.Found
+            ? element.Intersect(Snapshot.VirtualBounds)
+            : window.Bounds.Intersect(Snapshot.VirtualBounds);
+    }
+
+    /// <summary>某个窗口的控件树扫完了，把高亮从整窗收细到控件。</summary>
+    private void OnProbeUpdated()
+    {
+        if (ElementMode) UpdateHover(Cursor);
     }
 
     /// <summary>
@@ -855,13 +929,10 @@ public sealed class CaptureSession
         switch (_press)
         {
             case PressKind.Selecting:
-                // 没拖动就是单击：直接选中光标下的整个窗口
+                // 没拖动就是单击：选中刚才高亮的那一块（整窗，或控件级下的那个控件）
                 if (cursor.ManhattanTo(_anchor) <= ClickThresholdPx)
                 {
-                    var hit = WindowEnumerator.HitTest(Snapshot.Windows, cursor);
-                    StartFreshSelection(hit is null
-                        ? PixelRect.Empty
-                        : hit.Bounds.Intersect(Snapshot.VirtualBounds));
+                    StartFreshSelection(ResolveTarget(cursor, out _));
                 }
                 else
                 {
@@ -903,11 +974,12 @@ public sealed class CaptureSession
         Changed?.Invoke();
     }
 
-    public void Confirm(CaptureAction action = CaptureAction.Copy)
+    /// <summary>不指定去向时用设置里的默认动作（Enter、双击选区都走这条）。</summary>
+    public void Confirm(CaptureAction? action = null)
     {
         if (Selection.IsEmpty) return;
         FlushStyleEdit();
-        Confirmed?.Invoke(new CaptureResult(RenderResult(), Selection, action));
+        Confirmed?.Invoke(new CaptureResult(RenderResult(), Selection, action ?? DefaultAction));
     }
 
     /// <summary>
@@ -977,5 +1049,15 @@ public sealed class CaptureSession
         Annotations.CommitEdit(SelectedAnnotation, item);
         Changed?.Invoke();
         return true;
+    }
+
+    /// <summary>
+    /// 会话结束。要紧的是把探针拆掉：后台扫描可能还在跑，扫完了往一个已经收摊的
+    /// 会话上发通知，只会去刷一批已经关掉的覆盖层。
+    /// </summary>
+    public void Dispose()
+    {
+        _probe.Updated -= OnProbeUpdated;
+        _probe.Dispose();
     }
 }

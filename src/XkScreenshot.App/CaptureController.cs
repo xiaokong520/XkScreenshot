@@ -22,6 +22,12 @@ public sealed class CaptureController
 
     public bool IsActive => _session is not null;
 
+    /// <summary>
+    /// 下一次会话的起手状态。设置改完直接换掉这一份即可 ——
+    /// 正在进行的会话不受影响，它已经拿走了自己那份快照。
+    /// </summary>
+    public CaptureDefaults Defaults { get; set; } = CaptureDefaults.Standard;
+
     /// <summary>截图完成，参数是烧好标注的成品与用户选的去向。</summary>
     public event Action<CaptureResult>? Captured;
 
@@ -38,7 +44,7 @@ public sealed class CaptureController
         var snapshot = DesktopSnapshot.Take(_capture, own);
         if (snapshot.Frames.Count == 0) return;
 
-        _session = new CaptureSession(snapshot);
+        _session = new CaptureSession(snapshot, Defaults);
         _session.Confirmed += OnConfirmed;
         _session.Cancelled += Cancel;
 
@@ -78,6 +84,7 @@ public sealed class CaptureController
         {
             _session.Confirmed -= OnConfirmed;
             _session.Cancelled -= Cancel;
+            _session.Dispose();
             _session = null;
         }
 
