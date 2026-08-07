@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Windows;
 using System.Windows.Controls;
@@ -27,19 +28,29 @@ public sealed class HotkeyBox : TextBox
         IsUndoEnabled = false;
         ContextMenu = null;
         // 居中和字重交给样式表，这里设了就把样式盖掉了（本地值优先级高于 Style Setter）
-        ToolTip = "点这里，然后按下想用的组合键。Esc 放弃，Delete 恢复默认";
+        ToolTip = "点这里，然后按下想用的组合键。Esc 放弃，Delete 清除";
         Refresh();
     }
+
+    /// <summary>录到了新的组合键（或被清除）。冲突检测靠它触发。</summary>
+    public event Action? ValueChanged;
 
     public HotkeySpec Value
     {
         get => _value;
         set
         {
-            _value = value;
             _committed = value;
-            Refresh();
+            Commit(value);
         }
+    }
+
+    private void Commit(HotkeySpec value)
+    {
+        bool changed = _value != value;
+        _value = value;
+        Refresh();
+        if (changed) ValueChanged?.Invoke();
     }
 
     private void Refresh() => Text = _value.ToString();
@@ -73,14 +84,14 @@ public sealed class HotkeyBox : TextBox
             switch (key)
             {
                 case Key.Escape:
-                    _value = _committed;
-                    Refresh();
+                    Commit(_committed);
                     return;
 
+                // 清空＝不设这个热键。全局热键会把那个键从整个系统里抢走，
+                // 用不上的功能就该能彻底关掉，而不是被迫占着一个键位。
                 case Key.Delete:
                 case Key.Back:
-                    _value = HotkeySpec.CaptureDefault;
-                    Refresh();
+                    Commit(HotkeySpec.None);
                     return;
             }
         }
@@ -92,8 +103,7 @@ public sealed class HotkeyBox : TextBox
             return;
         }
 
-        _value = new HotkeySpec(CurrentModifiers(), (uint)KeyInterop.VirtualKeyFromKey(key));
-        Refresh();
+        Commit(new HotkeySpec(CurrentModifiers(), (uint)KeyInterop.VirtualKeyFromKey(key)));
     }
 
     /// <summary>

@@ -11,12 +11,20 @@ namespace XkScreenshot.App.Settings;
 /// <summary>一个可持久化的热键。<see cref="HotkeyBinding"/> 带着业务名字，不适合直接落盘。</summary>
 public sealed record HotkeySpec(HotkeyModifiers Modifiers, uint VirtualKey)
 {
+    /// <summary>不设热键。全局热键会把那个键从整个系统里抢走，允许关掉某一项是必要的。</summary>
+    public static readonly HotkeySpec None = new(HotkeyModifiers.None, 0);
+
     /// <summary>0x70 = VK_F1。</summary>
     public static readonly HotkeySpec CaptureDefault = new(HotkeyModifiers.None, 0x70);
 
+    /// <summary>0x72 = VK_F3。</summary>
+    public static readonly HotkeySpec PinDefault = new(HotkeyModifiers.None, 0x72);
+
+    public bool IsSet => VirtualKey != 0;
+
     public HotkeyBinding ToBinding(string name) => new(name, Modifiers, VirtualKey);
 
-    public override string ToString() => ToBinding(string.Empty).ToString();
+    public override string ToString() => IsSet ? ToBinding(string.Empty).ToString() : "未设置";
 }
 
 public sealed class AppSettings
@@ -24,6 +32,9 @@ public sealed class AppSettings
     public const string DefaultPrefix = "XkScreenshot";
 
     public HotkeySpec CaptureHotkey { get; set; } = HotkeySpec.CaptureDefault;
+
+    /// <summary>把剪贴板里的图钉到屏幕上。</summary>
+    public HotkeySpec PinHotkey { get; set; } = HotkeySpec.PinDefault;
 
     /// <summary>留空 = 系统「图片」文件夹。存空串而不是当场解析，换了机器/换了用户配置才不会带着旧路径走。</summary>
     public string SaveDirectory { get; set; } = string.Empty;

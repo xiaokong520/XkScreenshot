@@ -1,10 +1,13 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Windows;
 using System.Windows.Media.Imaging;
+using XkScreenshot.Core.Geometry;
+using XkScreenshot.Core.Monitors;
 using XkScreenshot.App.Output;
 using XkScreenshot.App.Overlay;
 using XkScreenshot.App.Settings;
@@ -19,6 +22,10 @@ namespace XkScreenshot.App;
 public partial class App : Application
 {
     private const string SingleInstanceMutexName = @"Local\XkScreenshot.SingleInstance";
+
+    // 热键靠名字分发。HotkeyManager 只管注册，按下之后干什么是这一层的事
+    private const string CaptureHotkeyName = "Capture";
+    private const string PinHotkeyName = "Pin";
 
     private readonly PinManager _pins = new();
 
@@ -56,10 +63,24 @@ public partial class App : Application
         _pins.SaveRequested += SaveImage;
 
         _hotkeys = new HotkeyManager();
-        _hotkeys.Pressed += _ => _controller?.Start();
+        _hotkeys.Pressed += OnHotkeyPressed;
 
         SetupTrayIcon();
         ApplySettings();
+    }
+
+    private void OnHotkeyPressed(HotkeyBinding binding)
+    {
+        switch (binding.Name)
+        {
+            case CaptureHotkeyName:
+                _controller?.Start();
+                break;
+
+            case PinHotkeyName:
+                PinFromClipboard();
+                break;
+        }
     }
 
     /// <summary>
@@ -69,15 +90,95 @@ public partial class App : Application
     {
         if (_controller is not null) _controller.Defaults = _settings.ToCaptureDefaults();
 
-        var result = _hotkeys!.Reset(_settings.CaptureHotkey.ToBinding("Capture"));
+        // 没设的热键不注册。虚拟键为 0 送进 RegisterHotKey 只会白拿一个失败
+        var bindings = new List<HotkeyBinding>();
+        if (_settings.CaptureHotkey.IsSet)
+            bindings.Add(_settings.CaptureHotkey.ToBinding(CaptureHotkeyName));
+        if (_settings.PinHotkey.IsSet)
+            bindings.Add(_settings.PinHotkey.ToBinding(PinHotkeyName));
 
         // 注册失败必须说出来。RegisterHotKey 失败是静默的，
         // 不提示的话用户只会感知到「按了没反应」，然后放弃这个软件。
-        if (!result.Success) ShowTrayWarning(result.Error!);
+        var failed = _hotkeys!.Reset(bindings).Where(r => !r.Success).Select(r => r.Error!).ToList();
+        if (failed.Count > 0) ShowTrayWarning(string.Join(Environment.NewLine, failed));
 
-        string hotkey = _settings.CaptureHotkey.ToString();
-        if (_captureMenuItem is not null) _captureMenuItem.Text = $"截图 ({hotkey})";
-        if (_trayIcon is not null) _trayIcon.Text = $"XkScreenshot — 按 {hotkey} 截图";
+        string capture = _settings.CaptureHotkey.ToString();
+        if (_captureMenuItem is not null)
+            _captureMenuItem.Text = _settings.CaptureHotkey.IsSet ? $"截图 ({capture})" : "截图";
+        if (_trayIcon is not null)
+            _trayIcon.Text = _settings.CaptureHotkey.IsSet
+                ? $"XkScreenshot — 按 {capture} 截图"
+                : "XkScreenshot";
+    }
+
+    /// <summary>
+    /// 把剪贴板里的图钉到屏幕上；剪贴板里没有图就钉上一次截的那张 ——
+    /// 「刚截完想再看一眼」和「从别处复制了张图想摆着对照」是同一个动作的两种由头。
+    /// </summary>
+    private void PinFromClipboard()
+    {
+        // 截图进行中不打扰：那时候满屏都是覆盖层，弹出来的贴图会被压在下面
+        if (_controller?.IsActive == true) return;
+
+        var image = ReadClipboardImage() ?? _lastCapture;
+        if (image is null)
+        {
+            ShowTrayInfo("剪贴板里没有图片，也还没有截过图");
+            return;
+        }
+
+        _pins.Create(image, PlaceUnderCursor(image));
+    }
+
+    private static BitmapSource? ReadClipboardImage()
+    {
+        try
+        {
+            // 先试 PNG：它保真且带 alpha，浏览器和多数设计工具都会放一份。
+            // 退回 GetImage 走的是 CF_DIB，透明会被压掉，但总比拿不到强。
+            if (Clipboard.GetData("PNG") is Stream png)
+            {
+                var decoded = BitmapFrame.Create(png, BitmapCreateOptions.None, BitmapCacheOption.OnLoad);
+                decoded.Freeze();
+                return decoded;
+            }
+
+            if (!Clipboard.ContainsImage()) return null;
+
+            var image = Clipboard.GetImage();
+            image?.Freeze();
+            return image;
+        }
+        catch (Exception)
+        {
+            // 剪贴板被别的进程占着、或者里面那份数据是坏的，都不该让程序崩掉
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// 贴图落在光标处。截图来的贴图会回到画面原位，而剪贴板里的图没有「原位」可言，
+    /// 落在手边是最省事的答案。
+    /// </summary>
+    private static PixelRect PlaceUnderCursor(BitmapSource image)
+    {
+        int w = image.PixelWidth;
+        int h = image.PixelHeight;
+
+        var cursor = MonitorEnumerator.GetCursorPosition();
+        var rect = new PixelRect(cursor.X - w / 2, cursor.Y - h / 2, w, h);
+
+        var monitor = MonitorEnumerator.FromPoint(MonitorEnumerator.Enumerate(), cursor);
+        if (monitor is null) return rect;
+
+        // 只挪位置不改尺寸：比屏幕还大的图得原样钉出来，缩了就不是原图了。
+        // 所以不能用 ClampInto —— 它会连宽高一起裁。
+        var bounds = monitor.Bounds;
+        return rect with
+        {
+            X = Math.Clamp(rect.X, bounds.X, Math.Max(bounds.X, bounds.Right - w)),
+            Y = Math.Clamp(rect.Y, bounds.Y, Math.Max(bounds.Y, bounds.Bottom - h)),
+        };
     }
 
     private void SetupTrayIcon()
@@ -111,25 +212,32 @@ public partial class App : Application
             return;
         }
 
+        // 设置界面要探测热键有没有被别人占用，办法是真去注册一次试试。
+        // 自己正占着的话，每一项都会把自己认成冲突，所以开窗期间先全部让出来。
+        _hotkeys?.Clear();
+
         var window = new SettingsWindow(_settings);
         _settingsWindow = window;
         window.Closed += (_, _) =>
         {
             _settingsWindow = null;
-            if (window.Result is not { } updated) return;
 
-            // 自启动写的是注册表，不是配置文件，失败了要单独说一声
-            if (updated.RunAtStartup != StartupRegistration.IsEnabled()
-                && StartupRegistration.Apply(updated.RunAtStartup) is { } startupError)
+            if (window.Result is { } updated)
             {
-                ShowTrayWarning(startupError);
-                updated.RunAtStartup = StartupRegistration.IsEnabled();
+                // 自启动写的是注册表，不是配置文件，失败了要单独说一声
+                if (updated.RunAtStartup != StartupRegistration.IsEnabled()
+                    && StartupRegistration.Apply(updated.RunAtStartup) is { } startupError)
+                {
+                    ShowTrayWarning(startupError);
+                    updated.RunAtStartup = StartupRegistration.IsEnabled();
+                }
+
+                _settings = updated;
+                if (SettingsStore.Save(_settings) is { } saveError) ShowTrayWarning(saveError);
             }
 
-            _settings = updated;
+            // 取消也要走一遍：热键是开窗时让出去的，不装回来就等于被这一次「取消」关掉了
             ApplySettings();
-
-            if (SettingsStore.Save(_settings) is { } saveError) ShowTrayWarning(saveError);
         };
         window.Show();
         window.Activate();
