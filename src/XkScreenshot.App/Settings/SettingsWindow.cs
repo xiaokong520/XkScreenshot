@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
@@ -7,6 +8,7 @@ using System.Windows.Media;
 using Microsoft.Win32;
 using XkScreenshot.App.Overlay;
 using XkScreenshot.App.Ui;
+using XkScreenshot.Core.Hotkeys;
 
 namespace XkScreenshot.App.Settings;
 
@@ -47,7 +49,14 @@ public sealed class SettingsWindow : Window
     private readonly AppSettings _draft;
     private readonly bool _dark;
 
-    private readonly HotkeyBox _hotkey = new() { Width = 132 };
+    private readonly HotkeyBox _captureHotkey = new() { Width = 132 };
+    private readonly HotkeyBox _pinHotkey = new() { Width = 132 };
+    private readonly TextBlock _captureStatus = new();
+    private readonly TextBlock _pinStatus = new();
+
+    /// <summary>探热键占用的那个探针。窗口一关就撤，别一直占着一个消息窗口。</summary>
+    private readonly HotkeyProbe _probe = new();
+
     private readonly TextBox _directory = new();
     private readonly TextBox _prefix = new() { Width = 200 };
     private readonly ComboBox _defaultAction = new() { Width = 168 };
@@ -98,8 +107,13 @@ public sealed class SettingsWindow : Window
         BuildPages();
         LoadFrom(_draft);
 
+        _captureHotkey.ValueChanged += RefreshHotkeyStatus;
+        _pinHotkey.ValueChanged += RefreshHotkeyStatus;
+        RefreshHotkeyStatus();
+
         // 深色窗体配一条亮白标题栏是最扎眼的一种半吊子深色模式，但要等窗口有了句柄才能改
         SourceInitialized += (_, _) => Theme.ApplyTitleBar(this, _dark);
+        Closed += (_, _) => _probe.Dispose();
     }
 
     private UIElement BuildLayout()
@@ -168,9 +182,12 @@ public sealed class SettingsWindow : Window
                 "登录 Windows 后自动常驻托盘。", _runAtStartup));
 
         AddPage(Icons.Command, "热键",
-            Card(Icons.Camera, "开始截图",
-                "点进输入框后按下组合键。",
-                Line(_hotkey, Button("恢复默认", () => _hotkey.Value = HotkeySpec.CaptureDefault))));
+            HotkeyCard(Icons.Camera, "开始截图",
+                "点进输入框后按下组合键，Delete 清除。",
+                _captureHotkey, _captureStatus, HotkeySpec.CaptureDefault),
+            HotkeyCard(Icons.Pin, "贴图",
+                "把剪贴板里的图钉到屏幕上；剪贴板里没有图就钉上一次截的那张。",
+                _pinHotkey, _pinStatus, HotkeySpec.PinDefault));
 
         AddPage(Icons.Crop, "截图",
             Card(Icons.CornerDownLeft, "确认截图后",
@@ -254,6 +271,41 @@ public sealed class SettingsWindow : Window
         return Shell(grid);
     }
 
+    /// <summary>
+    /// 热键卡：说明和输入框上下排，冲突提示紧跟在输入框下面。
+    ///
+    /// 不跟别的卡一样把控件贴到右边：热键框加一个「恢复默认」已经占掉大半宽度，
+    /// 说明会被挤成三行。而提示必须就在那个框旁边 —— 攒到点确定时才一次性弹出来，
+    /// 用户得回头猜是哪一项、当初按的又是什么组合，可这两件事他刚才明明都知道。
+    /// </summary>
+    private Border HotkeyCard(
+        Geometry icon, string title, string description,
+        HotkeyBox box, TextBlock status, HotkeySpec fallback)
+    {
+        status.FontSize = 12;
+        status.TextWrapping = TextWrapping.Wrap;
+        status.Foreground = Brush("Warn");
+        status.Margin = new Thickness(0, 8, 0, 0);
+        status.Visibility = Visibility.Collapsed;
+
+        var row = Line(box, Button("恢复默认", () => box.Value = fallback));
+        ((FrameworkElement)row).Margin = new Thickness(0, 12, 0, 0);
+        ((FrameworkElement)row).HorizontalAlignment = HorizontalAlignment.Left;
+
+        var text = TitleBlock(title, description);
+        text.VerticalAlignment = VerticalAlignment.Top;
+        text.Children.Add(row);
+        text.Children.Add(status);
+
+        var icons = IconBox(icon, IconSize, IconGap);
+        icons.VerticalAlignment = VerticalAlignment.Top;
+
+        var grid = NewCardGrid();
+        grid.Children.Add(icons);
+        grid.Children.Add(text);
+        return Shell(grid);
+    }
+
     /// <summary>控件另起一行的卡片。给那些一行放不下的控件用（比如路径框 + 浏览按钮）。</summary>
     private Border StackedCard(Geometry icon, string title, string? description, UIElement control)
     {
@@ -328,7 +380,7 @@ public sealed class SettingsWindow : Window
         };
     }
 
-    private FrameworkElement TitleBlock(string title, string? description)
+    private StackPanel TitleBlock(string title, string? description)
     {
         var stack = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
         stack.Children.Add(new TextBlock
@@ -407,11 +459,41 @@ public sealed class SettingsWindow : Window
         return button;
     }
 
+    // ---------------- 热键冲突 ----------------
+
+    /// <summary>
+    /// 重算两个热键框的冲突提示。
+    ///
+    /// 探测要求本程序此刻没有占着自己的热键，否则每一项都会把自己认成冲突 ——
+    /// 所以设置窗一打开，App 就先把全部热键撤掉，关窗时再统一装回去。
+    /// </summary>
+    private void RefreshHotkeyStatus()
+    {
+        Describe(_captureHotkey.Value, _pinHotkey.Value, _captureStatus);
+        Describe(_pinHotkey.Value, _captureHotkey.Value, _pinStatus);
+    }
+
+    private void Describe(HotkeySpec spec, HotkeySpec other, TextBlock status)
+    {
+        string? message = null;
+
+        if (!spec.IsSet)
+            message = null;
+        else if (spec == other)
+            message = "和另一个热键设成了同一个组合键。";
+        else if (_probe.IsTaken(spec.Modifiers, spec.VirtualKey))
+            message = "已被其他程序占用，这样保存不会生效。";
+
+        status.Text = message ?? string.Empty;
+        status.Visibility = message is null ? Visibility.Collapsed : Visibility.Visible;
+    }
+
     // ---------------- 读写 ----------------
 
     private void LoadFrom(AppSettings s)
     {
-        _hotkey.Value = s.CaptureHotkey;
+        _captureHotkey.Value = s.CaptureHotkey;
+        _pinHotkey.Value = s.PinHotkey;
         _directory.Text = s.SaveDirectory;
         _prefix.Text = s.FileNamePrefix;
         _saveWithoutPrompt.IsChecked = s.SaveWithoutPrompt;
@@ -445,7 +527,10 @@ public sealed class SettingsWindow : Window
             return;
         }
 
-        _draft.CaptureHotkey = _hotkey.Value;
+        if (!CheckHotkeys()) return;
+
+        _draft.CaptureHotkey = _captureHotkey.Value;
+        _draft.PinHotkey = _pinHotkey.Value;
         _draft.SaveDirectory = directory;
         _draft.FileNamePrefix = _prefix.Text.Trim();
         _draft.SaveWithoutPrompt = _saveWithoutPrompt.IsChecked == true;
@@ -457,4 +542,37 @@ public sealed class SettingsWindow : Window
         Result = _draft;
         Close();
     }
+
+    /// <summary>
+    /// 保存前的最后一关。返回 false 表示别保存。
+    ///
+    /// 两项撞成同一个组合键是硬伤：真保存下去，两个功能里必然有一个永远轮不上，
+    /// 而用户从界面上看两项都「设好了」，这种不一致必须当场堵死。
+    /// 被别的程序占用则只是警告 —— 占着它的那个程序随时可能关掉，
+    /// 用户想先设上等以后再说，那是他的自由。
+    /// </summary>
+    private bool CheckHotkeys()
+    {
+        if (_captureHotkey.Value.IsSet && _captureHotkey.Value == _pinHotkey.Value)
+        {
+            MessageBox.Show(this,
+                $"「开始截图」和「贴图」都设成了 {_captureHotkey.Value}，请给其中一个换一个组合键。",
+                "XkScreenshot", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return false;
+        }
+
+        var taken = new List<string>();
+        if (IsTaken(_captureHotkey.Value)) taken.Add($"开始截图（{_captureHotkey.Value}）");
+        if (IsTaken(_pinHotkey.Value)) taken.Add($"贴图（{_pinHotkey.Value}）");
+        if (taken.Count == 0) return true;
+
+        return MessageBox.Show(this,
+            string.Join(Environment.NewLine, taken)
+            + Environment.NewLine + Environment.NewLine
+            + "以上热键已被其他程序占用，保存后不会生效。仍然保存吗？",
+            "XkScreenshot", MessageBoxButton.OKCancel, MessageBoxImage.Warning) == MessageBoxResult.OK;
+    }
+
+    private bool IsTaken(HotkeySpec spec)
+        => spec.IsSet && _probe.IsTaken(spec.Modifiers, spec.VirtualKey);
 }

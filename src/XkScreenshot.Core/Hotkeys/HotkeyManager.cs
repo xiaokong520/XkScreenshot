@@ -49,19 +49,24 @@ public sealed class HotkeyManager : IDisposable
     }
 
     /// <summary>
-    /// 换一套热键：先全撤，再注册新的。新的注册失败时把旧的原样装回去 ——
-    /// 否则用户在设置里挑了一个被占用的组合，换来的是「一个热键都没有」。
+    /// 换一套热键：先全撤，再注册新的。某一项注册失败时，把它原来那个按同名装回去 ——
+    /// 否则用户在设置里给它挑了一个被占用的组合，换来的是这一项彻底没有热键。
     /// </summary>
-    public HotkeyRegistrationResult Reset(HotkeyBinding binding)
+    public IReadOnlyList<HotkeyRegistrationResult> Reset(IEnumerable<HotkeyBinding> bindings)
     {
-        var previous = _registered.Values.ToList();
+        var previous = _registered.Values.ToDictionary(b => b.Name, StringComparer.Ordinal);
         Clear();
 
-        var result = Register(binding);
-        if (result.Success) return result;
+        var results = new List<HotkeyRegistrationResult>();
+        foreach (var binding in bindings)
+        {
+            var result = Register(binding);
+            if (!result.Success && previous.TryGetValue(binding.Name, out var old) && old != binding)
+                Register(old);
 
-        foreach (var old in previous) Register(old);
-        return result;
+            results.Add(result);
+        }
+        return results;
     }
 
     /// <summary>撤掉所有已注册的热键，但保留消息窗口。</summary>

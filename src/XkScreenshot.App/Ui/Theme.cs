@@ -62,6 +62,8 @@ public static class Theme
             Put(r, "ControlBorder", 0x48, 0x48, 0x48);
             Put(r, "Text", 0xF0, 0xF1, 0xF3);
             Put(r, "TextSecondary", 0x9C, 0xA3, 0xAD);
+            // 冲突提示用琥珀而不是红：热键被占用是「这样设不会生效」，不是「你错了」
+            Put(r, "Warn", 0xF2, 0xB0, 0x5E);
             Put(r, "Accent", BrandAccent);
             Put(r, "AccentHover", 0x59, 0xAE, 0xFF);
             Put(r, "AccentPressed", 0x2F, 0x86, 0xDB);
@@ -87,6 +89,7 @@ public static class Theme
             Put(r, "ControlBorder", 0xD6, 0xD6, 0xD6);
             Put(r, "Text", 0x1B, 0x1B, 0x1B);
             Put(r, "TextSecondary", 0x5F, 0x66, 0x6E);
+            Put(r, "Warn", 0x9A, 0x5B, 0x05);
             Put(r, "Accent", BrandAccentDeep);
             Put(r, "AccentHover", 0x2E, 0x84, 0xE0);
             Put(r, "AccentPressed", 0x17, 0x62, 0xB4);
