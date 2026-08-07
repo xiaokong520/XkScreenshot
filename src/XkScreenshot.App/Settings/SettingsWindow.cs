@@ -13,10 +13,14 @@ namespace XkScreenshot.App.Settings;
 /// <summary>
 /// 设置界面。
 ///
-/// 版式照 Windows 11 设置页那套「卡片行」：一张卡 = 一个设置项，
-/// 左边图标 + 标题 + 一句说明，右边就是那个控件。比「标签 : 控件」的表格版式好在，
-/// 每一项的说明就贴在它自己身上，眼睛不用在标签列和说明行之间来回找对应关系。
-/// 具体尺寸取自 WinUI 的 SettingsCard：最小高 68、内边距 16、图标 20 且右留 20、说明 12px。
+/// 左边一列分类，右边是那一类的设置项 —— 照 Windows 11 设置那套。
+/// 不把所有项摊在一页上：光是 M1 就已经八项，M2~M4 的长截图、文字识别、翻译各自还要一组，
+/// 摊平的话窗口会长到需要滚动，而滚动着找设置是最烦人的一种找法。
+/// 分类往左边那一列里加就行，版式不用动。
+///
+/// 每一项是一张卡：左边图标 + 标题 + 一句说明，右边就是那个控件。比「标签 : 控件」的表格
+/// 好在，说明贴在它自己身上，眼睛不用在标签列和说明行之间来回找对应关系。
+/// 尺寸取自 WinUI 的 SettingsCard：最小高 68、内边距 16、图标 20 且右留 20、说明 12px。
 ///
 /// 结构在这儿搭、皮肤在 SettingsTheme.xaml 里：前者是循环和条件，后者是带触发器的元素树，
 /// 各自用最顺手的那种写法。
@@ -31,6 +35,7 @@ public sealed class SettingsWindow : Window
     private const double IconGap = 20;
     private const double ContentGap = 24;
     private const double PagePadding = 24;
+    private const double NavWidth = 176;
 
     private static readonly (CaptureAction Action, string Label)[] Actions =
     [
@@ -51,6 +56,9 @@ public sealed class SettingsWindow : Window
     private readonly ToggleButton _elementMode = new();
     private readonly ToggleButton _runAtStartup = new();
 
+    private readonly StackPanel _nav = new();
+    private readonly ContentControl _pageHost = new();
+
     /// <summary>用户点了「确定」才有值，取消时保持 null。</summary>
     public AppSettings? Result { get; private set; }
 
@@ -60,10 +68,9 @@ public sealed class SettingsWindow : Window
         _dark = Theme.IsSystemDark();
 
         Title = "XkScreenshot 设置";
-        Width = 600;
-        SizeToContent = SizeToContent.Height;
-        // 小屏上不能顶出工作区，超了就交给里面的滚动条
-        MaxHeight = Math.Max(480, SystemParameters.WorkArea.Height - 60);
+        Width = 720;
+        // 定高而不是随内容伸缩：切换分类时窗口跟着一页一页地变高变矮，比任何滚动条都晃眼
+        Height = Math.Min(464, Math.Max(360, SystemParameters.WorkArea.Height - 80));
         ResizeMode = ResizeMode.NoResize;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         // 托盘程序没有主窗口，设置窗被别的窗口盖住之后，任务栏是唯一能把它找回来的地方
@@ -88,6 +95,7 @@ public sealed class SettingsWindow : Window
 
         Background = Brush("PageBg");
         Content = BuildLayout();
+        BuildPages();
         LoadFrom(_draft);
 
         // 深色窗体配一条亮白标题栏是最扎眼的一种半吊子深色模式，但要等窗口有了句柄才能改
@@ -96,40 +104,31 @@ public sealed class SettingsWindow : Window
 
     private UIElement BuildLayout()
     {
-        var page = new StackPanel();
-
-        page.Children.Add(Section("热键", first: true));
-        page.Children.Add(Card(Icons.Command, "开始截图",
-            "点进输入框后按下想用的组合键。",
-            Line(_hotkey, Button("恢复默认", () => _hotkey.Value = HotkeySpec.CaptureDefault))));
-
-        page.Children.Add(Section("保存"));
-        page.Children.Add(StackedCard(Icons.Folder, "默认目录",
-            "留空则用系统「图片」文件夹。",
-            Fill(_directory, Button("浏览…", BrowseDirectory))));
-        page.Children.Add(Card(Icons.Type, "文件名前缀",
-            "形如 前缀_20260807_142530.png。", _prefix));
-        page.Children.Add(Card(Icons.Save, "保存时不弹对话框",
-            "直接存进上面的目录，重名自动加序号。", _saveWithoutPrompt));
-
-        page.Children.Add(Section("默认行为"));
-        page.Children.Add(Card(Icons.CornerDownLeft, "确认截图后",
-            "指按 Enter 或双击选区，工具条上的按钮不受影响。",
-            _defaultAction));
-        page.Children.Add(Card(Icons.Eye, "显示快捷键提示面板",
-            "截图中按 H 也能开关。", _showHints));
-        page.Children.Add(Card(Icons.Cursor, "默认用控件级检测",
-            "截图中按 Tab 在整窗与控件级之间切换。", _elementMode));
-        page.Children.Add(Card(Icons.Power, "开机自动启动", null, _runAtStartup));
+        var nav = new Border
+        {
+            Width = NavWidth,
+            Background = Brush("NavBg"),
+            BorderBrush = Brush("CardBorder"),
+            BorderThickness = new Thickness(0, 0, 1, 0),
+            Padding = new Thickness(10, 14, 10, 14),
+            Child = _nav,
+        };
 
         var scroll = new ScrollViewer
         {
-            Content = page,
+            Content = _pageHost,
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-            Padding = new Thickness(PagePadding, 4, PagePadding - 8, PagePadding),
+            Padding = new Thickness(PagePadding, PagePadding - 6, PagePadding - 8, PagePadding),
             Focusable = false,
         };
+        Grid.SetColumn(scroll, 1);
+
+        var body = new Grid();
+        body.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        body.Children.Add(nav);
+        body.Children.Add(scroll);
 
         var ok = Button("确定", Commit, (Style)FindResource("AccentButton"));
         ok.IsDefault = true;
@@ -138,6 +137,7 @@ public sealed class SettingsWindow : Window
         cancel.IsCancel = true;
         cancel.MinWidth = 92;
 
+        // 页脚横跨整个窗口而不是只占右半边：确定/取消 管的是整份设置，不是当前这一页
         var footer = new Border
         {
             Background = Brush("FooterBg"),
@@ -151,14 +151,88 @@ public sealed class SettingsWindow : Window
                 Children = { ok, cancel },
             },
         };
+        Grid.SetRow(footer, 1);
 
         var root = new Grid();
         root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        Grid.SetRow(footer, 1);
-        root.Children.Add(scroll);
+        root.Children.Add(body);
         root.Children.Add(footer);
         return root;
+    }
+
+    private void BuildPages()
+    {
+        AddPage(Icons.Sliders, "通用",
+            Card(Icons.Power, "开机自动启动",
+                "登录 Windows 后自动常驻托盘。", _runAtStartup));
+
+        AddPage(Icons.Command, "热键",
+            Card(Icons.Camera, "开始截图",
+                "点进输入框后按下组合键。",
+                Line(_hotkey, Button("恢复默认", () => _hotkey.Value = HotkeySpec.CaptureDefault))));
+
+        AddPage(Icons.Crop, "截图",
+            Card(Icons.CornerDownLeft, "确认截图后",
+                "指按 Enter 或双击选区，工具条上的按钮不受影响。", _defaultAction),
+            Card(Icons.Eye, "显示快捷键提示面板",
+                "截图中按 H 也能开关。", _showHints),
+            Card(Icons.Cursor, "默认用控件级检测",
+                "截图中按 Tab 在整窗与控件级之间切换。", _elementMode));
+
+        AddPage(Icons.Folder, "保存",
+            StackedCard(Icons.Folder, "默认目录",
+                "留空则用系统「图片」文件夹。",
+                Fill(_directory, Button("浏览…", BrowseDirectory))),
+            Card(Icons.Type, "文件名前缀",
+                "形如 前缀_20260807_142530.png。", _prefix),
+            Card(Icons.Save, "保存时不弹对话框",
+                "直接存进上面的目录，重名自动加序号。", _saveWithoutPrompt));
+    }
+
+    /// <summary>
+    /// 加一个分类：左边一个导航项，右边一页卡片。
+    ///
+    /// 页面全部提前建好，切换只是换 <see cref="_pageHost"/> 的内容。没显示的那几页虽然不在
+    /// 可视树上，控件的值照样留着 —— 那是依赖属性，不靠界面存活。
+    /// </summary>
+    private void AddPage(Geometry icon, string title, params UIElement[] cards)
+    {
+        var page = new StackPanel();
+        page.Children.Add(new TextBlock
+        {
+            Text = title,
+            FontSize = 20,
+            FontWeight = FontWeights.SemiBold,
+            Foreground = Brush("Text"),
+            Margin = new Thickness(2, 0, 0, 14),
+        });
+        foreach (var card in cards) page.Children.Add(card);
+
+        var item = new RadioButton
+        {
+            Style = (Style)FindResource("NavItem"),
+            GroupName = "SettingsNav",
+            Content = NavLabel(icon, title),
+        };
+        item.Checked += (_, _) => _pageHost.Content = page;
+
+        _nav.Children.Add(item);
+        // 第一个分类默认打开，Checked 会顺带把它那一页装上
+        if (_nav.Children.Count == 1) item.IsChecked = true;
+    }
+
+    private UIElement NavLabel(Geometry icon, string title)
+    {
+        var panel = new StackPanel { Orientation = Orientation.Horizontal };
+        panel.Children.Add(IconBox(icon, 17, gap: 12));
+        panel.Children.Add(new TextBlock
+        {
+            Text = title,
+            VerticalAlignment = VerticalAlignment.Center,
+            Foreground = Brush("Text"),
+        });
+        return panel;
     }
 
     // ---------------- 卡片 ----------------
@@ -174,7 +248,7 @@ public sealed class SettingsWindow : Window
         host.Margin = new Thickness(ContentGap, 0, 0, 0);
         Grid.SetColumn(host, 2);
 
-        grid.Children.Add(IconBox(icon));
+        grid.Children.Add(IconBox(icon, IconSize, IconGap));
         grid.Children.Add(text);
         grid.Children.Add(host);
         return Shell(grid);
@@ -194,7 +268,7 @@ public sealed class SettingsWindow : Window
         Grid.SetColumn(control, 1);
         Grid.SetRow(control, 1);
 
-        var box = IconBox(icon);
+        var box = IconBox(icon, IconSize, IconGap);
         box.VerticalAlignment = VerticalAlignment.Top;
         Grid.SetRowSpan(box, 2);
 
@@ -226,10 +300,10 @@ public sealed class SettingsWindow : Window
     };
 
     /// <summary>
-    /// 图标按 24×24 的设计尺寸画，再用 Viewbox 整体缩到 20 ——
+    /// 图标按 24×24 的设计尺寸画，再用 Viewbox 整体缩到目标大小 ——
     /// 线宽跟着一起缩，视觉重量才和覆盖层上那套图标一致。
     /// </summary>
-    private FrameworkElement IconBox(Geometry icon)
+    private FrameworkElement IconBox(Geometry icon, double size, double gap)
     {
         // 全名限定：System.IO.Path 也在场，短名是歧义的
         var path = new System.Windows.Shapes.Path
@@ -247,9 +321,9 @@ public sealed class SettingsWindow : Window
         return new Viewbox
         {
             Child = path,
-            Width = IconSize,
-            Height = IconSize,
-            Margin = new Thickness(2, 0, IconGap, 0),
+            Width = size,
+            Height = size,
+            Margin = new Thickness(2, 0, gap, 0),
             VerticalAlignment = VerticalAlignment.Center,
         };
     }
@@ -279,13 +353,6 @@ public sealed class SettingsWindow : Window
         Grid.SetColumn(stack, 1);
         return stack;
     }
-
-    private static TextBlock Section(string title, bool first = false) => new()
-    {
-        Text = title,
-        FontWeight = FontWeights.SemiBold,
-        Margin = new Thickness(2, first ? 12 : 22, 0, 8),
-    };
 
     // ---------------- 小零件 ----------------
 

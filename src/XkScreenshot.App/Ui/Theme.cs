@@ -48,6 +48,9 @@ public static class Theme
         if (dark)
         {
             Put(r, "PageBg", 0x20, 0x20, 0x20);
+            Put(r, "NavBg", 0x26, 0x26, 0x26);
+            Put(r, "NavHover", 0x2F, 0x2F, 0x2F);
+            Put(r, "NavSelected", 0x38, 0x38, 0x38);
             Put(r, "CardBg", 0x2B, 0x2B, 0x2B);
             Put(r, "CardBgHover", 0x30, 0x30, 0x30);
             Put(r, "CardBorder", 0x3A, 0x3A, 0x3A);
@@ -70,6 +73,9 @@ public static class Theme
         else
         {
             Put(r, "PageBg", 0xF3, 0xF3, 0xF3);
+            Put(r, "NavBg", 0xFA, 0xFA, 0xFA);
+            Put(r, "NavHover", 0xEC, 0xEC, 0xEC);
+            Put(r, "NavSelected", 0xE3, 0xE3, 0xE3);
             Put(r, "CardBg", 0xFF, 0xFF, 0xFF);
             Put(r, "CardBgHover", 0xFA, 0xFA, 0xFA);
             Put(r, "CardBorder", 0xE5, 0xE5, 0xE5);
