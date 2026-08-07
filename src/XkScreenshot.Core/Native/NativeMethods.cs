@@ -118,6 +118,12 @@ public static class NativeMethods
     [DllImport("dwmapi.dll")]
     public static extern int DwmGetWindowAttribute(IntPtr hWnd, int attr, out int value, int size);
 
+    [DllImport("dwmapi.dll")]
+    public static extern int DwmSetWindowAttribute(IntPtr hWnd, int attr, ref int value, int size);
+
     public const int DWMWA_EXTENDED_FRAME_BOUNDS = 9;
     public const int DWMWA_CLOAKED = 14;
+
+    /// <summary>让系统把标题栏画成深色。Win10 2004 以前的版本不认这个值，调用会失败但无副作用。</summary>
+    public const int DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
 }

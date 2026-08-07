@@ -24,6 +24,7 @@ public sealed class SelectionLayer : FrameworkElement
     private const double HandleSize = 7;
     private const double LabelFontSize = 12;
     private const double LabelPadding = 5;
+    private const double TagGap = 4;
 
     /// <summary>
     /// 当前高亮区在本窗口内的 DIP 矩形；null 表示本屏没有高亮区。
@@ -36,6 +37,12 @@ public sealed class SelectionLayer : FrameworkElement
 
     /// <summary>只有拥有高亮区左上角的那块屏才画尺寸标签，避免跨屏时重复显示。</summary>
     public bool ShowSizeLabel { get; set; }
+
+    /// <summary>
+    /// 跟在尺寸标签后面的一枚小徽标，null 表示不画。
+    /// 检测模式是隐式状态，不标出来的话用户按了 Tab 只会看到高亮忽大忽小，不知道发生了什么。
+    /// </summary>
+    public string? HighlightTag { get; set; }
 
     public void Refresh() => InvalidateVisual();
 
@@ -88,22 +95,33 @@ public sealed class SelectionLayer : FrameworkElement
     private void DrawSizeLabel(DrawingContext dc, Rect rect)
     {
         double pixelsPerDip = VisualTreeHelper.GetDpi(this).PixelsPerDip;
-        var text = new FormattedText(
-            $"{HighlightPixels.Width} × {HighlightPixels.Height} px",
-            CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
-            LabelTypeface, LabelFontSize, Brushes.White, pixelsPerDip);
+
+        FormattedText Make(string s, Brush brush) => new(
+            s, CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
+            LabelTypeface, LabelFontSize, brush, pixelsPerDip);
+
+        var text = Make($"{HighlightPixels.Width} × {HighlightPixels.Height} px", Brushes.White);
+        var tag = HighlightTag is null ? null : Make(HighlightTag, Brushes.White);
 
         double w = text.Width + LabelPadding * 2;
         double h = text.Height + LabelPadding;
+        double tagW = tag is null ? 0 : tag.Width + LabelPadding * 2 + TagGap;
 
-        // 默认放在高亮区上方；顶到屏幕边缘就翻到区域内部，别跑出可视区
+        // 默认放在高亮区上方；顶到屏幕边缘就翻到区域内部，别跑出可视区。
+        // 靠右夹的时候要连徽标一起算，否则徽标会被挤出屏幕。
         double x = rect.Left;
         double y = rect.Top - h - 4;
         if (y < 0) y = Math.Min(rect.Top + 4, ActualHeight - h);
-        if (x + w > ActualWidth) x = Math.Max(0, ActualWidth - w);
+        if (x + w + tagW > ActualWidth) x = Math.Max(0, ActualWidth - w - tagW);
 
         dc.DrawRoundedRectangle(LabelBackground, null, new Rect(x, y, w, h), 3, 3);
         dc.DrawText(text, new Point(x + LabelPadding, y + LabelPadding / 2));
+
+        if (tag is null) return;
+
+        var tagRect = new Rect(x + w + TagGap, y, tag.Width + LabelPadding * 2, h);
+        dc.DrawRoundedRectangle(AccentBrush, null, tagRect, 3, 3);
+        dc.DrawText(tag, new Point(tagRect.X + LabelPadding, y + LabelPadding / 2));
     }
 
     private static Rect Inflate(Rect r, double by)
