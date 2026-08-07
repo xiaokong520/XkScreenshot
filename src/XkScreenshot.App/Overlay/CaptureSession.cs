@@ -625,6 +625,11 @@ public sealed class CaptureSession : IDisposable
     /// <summary>正翻到历史的第几条，-1 表示没在回溯（看的是实时冻屏）。见 <see cref="StartFreshSelection"/>。</summary>
     private int _historyIndex = -1;
 
+    /// <summary>正翻到第几条（从 1 数起），0 表示没在回溯。</summary>
+    public int HistoryPosition => _historyIndex + 1;
+
+    public int HistoryCount => _history?.Items.Count ?? 0;
+
     /// <summary>
     /// 回溯截屏历史。<paramref name="back"/> 为 true 往更早翻，false 往更近翻。
     /// 返回 false 表示这个方向已经没有了。
