@@ -4,6 +4,7 @@ using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Input;
 using System.Windows.Media;
 using Microsoft.Win32;
 using XkScreenshot.App.Overlay;
@@ -49,6 +50,9 @@ public sealed class SettingsWindow : Window
     private readonly AppSettings _draft;
     private readonly bool _dark;
 
+    /// <summary>问「这个组合键是不是本程序自己占着的」。见 <see cref="IsTakenByOthers"/>。</summary>
+    private readonly Func<HotkeySpec, bool> _heldBySelf;
+
     private readonly HotkeyBox _captureHotkey = new() { Width = 132 };
     private readonly HotkeyBox _pinHotkey = new() { Width = 132 };
     private readonly TextBlock _captureStatus = new();
@@ -56,6 +60,9 @@ public sealed class SettingsWindow : Window
 
     /// <summary>探热键占用的那个探针。窗口一关就撤，别一直占着一个消息窗口。</summary>
     private readonly HotkeyProbe _probe = new();
+
+    /// <summary>上一次通知出去的录制状态，用来只在真正变化时才发事件。</summary>
+    private bool _recording;
 
     private readonly TextBox _directory = new();
     private readonly TextBox _prefix = new() { Width = 200 };
@@ -71,9 +78,17 @@ public sealed class SettingsWindow : Window
     /// <summary>用户点了「确定」才有值，取消时保持 null。</summary>
     public AppSettings? Result { get; private set; }
 
-    public SettingsWindow(AppSettings current)
+    /// <summary>
+    /// 正在录热键 —— 这期间本程序必须让出全部热键，否则用户想把某个键录进框里时，
+    /// 那个键会被自己的全局热键截走，当场触发一次截图而不是被记下来。
+    /// </summary>
+    public event Action<bool>? RecordingChanged;
+
+    /// <param name="heldBySelf">判断某个组合键是不是本程序自己正占着的。</param>
+    public SettingsWindow(AppSettings current, Func<HotkeySpec, bool> heldBySelf)
     {
         _draft = current.Clone();
+        _heldBySelf = heldBySelf;
         _dark = Theme.IsSystemDark();
 
         Title = "XkScreenshot 设置";
@@ -107,8 +122,27 @@ public sealed class SettingsWindow : Window
         BuildPages();
         LoadFrom(_draft);
 
-        _captureHotkey.ValueChanged += RefreshHotkeyStatus;
-        _pinHotkey.ValueChanged += RefreshHotkeyStatus;
+        foreach (var box in new[] { _captureHotkey, _pinHotkey })
+        {
+            box.ValueChanged += RefreshHotkeyStatus;
+            box.GotKeyboardFocus += (_, _) => UpdateRecording();
+            box.LostKeyboardFocus += (_, _) => UpdateRecording();
+        }
+
+        // 窗口切走切回也要重算：人都去用别的程序了，热键就该是活的
+        Activated += (_, _) => UpdateRecording();
+        Deactivated += (_, _) => UpdateRecording();
+
+        // 点在别处就把热键框的焦点收走。WPF 里点空白区域并不会让 TextBox 失焦，
+        // 而框一直握着焦点就意味着热键一直让在外面 —— 用户录完键把窗口晾在那儿，
+        // 热键就再也不响应了，这正是「打开设置就没热键」的另一种形态。
+        PreviewMouseDown += (_, e) =>
+        {
+            if (e.OriginalSource is DependencyObject source && InsideHotkeyBox(source)) return;
+            if (_captureHotkey.IsKeyboardFocusWithin || _pinHotkey.IsKeyboardFocusWithin)
+                Keyboard.ClearFocus();
+        };
+
         RefreshHotkeyStatus();
 
         // 深色窗体配一条亮白标题栏是最扎眼的一种半吊子深色模式，但要等窗口有了句柄才能改
@@ -462,11 +496,34 @@ public sealed class SettingsWindow : Window
     // ---------------- 热键冲突 ----------------
 
     /// <summary>
-    /// 重算两个热键框的冲突提示。
+    /// 重算「此刻是不是在录热键」，变了才通知。
     ///
-    /// 探测要求本程序此刻没有占着自己的热键，否则每一项都会把自己认成冲突 ——
-    /// 所以设置窗一打开，App 就先把全部热键撤掉，关窗时再统一装回去。
+    /// 只认一个判据（本窗口是活动窗口，且某个热键框握着键盘焦点），而不是在
+    /// Got/Lost/Activated 几个事件里各记各的状态 —— 那几个事件会交错触发，
+    /// 各记各的迟早会对不上，然后热键就永远地让在外面了。
     /// </summary>
+    private void UpdateRecording()
+    {
+        bool recording = IsActive
+                         && (_captureHotkey.IsKeyboardFocusWithin || _pinHotkey.IsKeyboardFocusWithin);
+        if (recording == _recording) return;
+
+        _recording = recording;
+        RecordingChanged?.Invoke(recording);
+        // 让出/收回热键会改变「谁占着它」，提示得跟着重算一次
+        RefreshHotkeyStatus();
+    }
+
+    private static bool InsideHotkeyBox(DependencyObject? node)
+    {
+        while (node is not null)
+        {
+            if (node is HotkeyBox) return true;
+            node = node is Visual ? VisualTreeHelper.GetParent(node) : LogicalTreeHelper.GetParent(node);
+        }
+        return false;
+    }
+
     private void RefreshHotkeyStatus()
     {
         Describe(_captureHotkey.Value, _pinHotkey.Value, _captureStatus);
@@ -481,12 +538,22 @@ public sealed class SettingsWindow : Window
             message = null;
         else if (spec == other)
             message = "和另一个热键设成了同一个组合键。";
-        else if (_probe.IsTaken(spec.Modifiers, spec.VirtualKey))
+        else if (IsTakenByOthers(spec))
             message = "已被其他程序占用，这样保存不会生效。";
 
         status.Text = message ?? string.Empty;
         status.Visibility = message is null ? Visibility.Collapsed : Visibility.Visible;
     }
+
+    /// <summary>
+    /// 这个组合键是不是被「别人」占了。
+    ///
+    /// 探测的办法是真去注册一次，而 <c>RegisterHotKey</c> 是全系统去重的 ——
+    /// 本程序此刻正占着的那些同样会失败。所以先把自己排掉：那不是冲突，
+    /// 那正是用户当初设的。
+    /// </summary>
+    private bool IsTakenByOthers(HotkeySpec spec)
+        => spec.IsSet && !_heldBySelf(spec) && _probe.IsTaken(spec.Modifiers, spec.VirtualKey);
 
     // ---------------- 读写 ----------------
 
@@ -562,8 +629,8 @@ public sealed class SettingsWindow : Window
         }
 
         var taken = new List<string>();
-        if (IsTaken(_captureHotkey.Value)) taken.Add($"开始截图（{_captureHotkey.Value}）");
-        if (IsTaken(_pinHotkey.Value)) taken.Add($"贴图（{_pinHotkey.Value}）");
+        if (IsTakenByOthers(_captureHotkey.Value)) taken.Add($"开始截图（{_captureHotkey.Value}）");
+        if (IsTakenByOthers(_pinHotkey.Value)) taken.Add($"贴图（{_pinHotkey.Value}）");
         if (taken.Count == 0) return true;
 
         return MessageBox.Show(this,
@@ -572,7 +639,4 @@ public sealed class SettingsWindow : Window
             + "以上热键已被其他程序占用，保存后不会生效。仍然保存吗？",
             "XkScreenshot", MessageBoxButton.OKCancel, MessageBoxImage.Warning) == MessageBoxResult.OK;
     }
-
-    private bool IsTaken(HotkeySpec spec)
-        => spec.IsSet && _probe.IsTaken(spec.Modifiers, spec.VirtualKey);
 }
