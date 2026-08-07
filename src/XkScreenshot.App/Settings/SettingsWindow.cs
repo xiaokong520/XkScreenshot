@@ -247,7 +247,7 @@ public sealed class SettingsWindow : Window
             Card(Icons.Cursor, "默认用控件级检测",
                 "截图中按 Tab 在整窗与控件级之间切换。", _elementMode),
             Card(Icons.History, "记住多少条截屏区域",
-                "截图中按 [ 和 ] 回溯用过的区域，同一块只占一条。0 = 关闭。",
+                "截图中按 , 和 . 回溯用过的区域，同一块只占一条。0 = 关闭。",
                 Line(_historyCapacity, Suffix("条"))));
 
         AddPage(Icons.Folder, "保存",

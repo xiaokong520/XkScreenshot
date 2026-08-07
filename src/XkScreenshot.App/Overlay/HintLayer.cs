@@ -25,7 +25,7 @@ public sealed class HintLayer : FrameworkElement
         new(["滚轮"], false, "调粗细 / 字号 / 马赛克粒度"),
         new(["Delete"], false, "删除选中的标注"),
         new(["Ctrl", "A"], true, "选中整屏 / 整个桌面"),
-        new(["[", "]"], false, "回溯截屏区域历史"),
+        new([",", "."], false, "回溯截屏区域历史"),
         new(["C"], false, "复制颜色值"),
         new(["Shift"], false, "切换 RGB / HEX"),
         new(["Enter"], false, "确认截图，双击选区亦可"),
@@ -111,7 +111,7 @@ public sealed class HintLayer : FrameworkElement
             {
                 var text = measured.Keys[k];
                 double w = measured.KeyWidths[k];
-                DrawChip(dc, new Rect(chipX, chipTop, w, ChipHeight), text);
+                DrawChip(dc, new Rect(chipX, chipTop, w, ChipHeight), text, measured.KeyInk[k]);
                 chipX += w;
 
                 if (k == measured.Keys.Length - 1) break;
@@ -137,7 +137,14 @@ public sealed class HintLayer : FrameworkElement
         }
     }
 
-    private static void DrawChip(DrawingContext dc, Rect rect, FormattedText label)
+    /// <summary>
+    /// 画一个键帽。
+    ///
+    /// 字按**墨迹**居中，不是按整行盒 —— 行盒含上伸部和下伸部，而键帽上多半只有
+    /// 大写字母那么高的一块。按行盒居中的话，逗号、句点这种贴着基线的字形会缩到
+    /// 键帽左下角，看起来就是个空白键帽（这一层的字才十来像素，差几像素就认不出了）。
+    /// </summary>
+    private static void DrawChip(DrawingContext dc, Rect rect, FormattedText label, Rect ink)
     {
         dc.DrawRoundedRectangle(ChipBrush, ChipBorder, rect, 4, 4);
 
@@ -146,8 +153,8 @@ public sealed class HintLayer : FrameworkElement
         dc.DrawLine(ChipShade, new Point(rect.Left + 3, bottom), new Point(rect.Right - 3, bottom));
 
         dc.DrawText(label, new Point(
-            rect.X + (rect.Width - label.Width) / 2,
-            rect.Y + (rect.Height - label.Height) / 2));
+            rect.X + (rect.Width - ink.Width) / 2 - ink.X,
+            rect.Y + (rect.Height - ink.Height) / 2 - ink.Y));
     }
 
     private sealed class Layout
@@ -174,6 +181,7 @@ public sealed class HintLayer : FrameworkElement
                 {
                     Keys = keys,
                     KeyWidths = widths,
+                    KeyInk = keys.Select(InkBounds).ToArray(),
                     TotalKeyWidth = total,
                     Plus = r.Plus ? Make("+", ActionFace, KeyFontSize, TitleTextBrush) : null,
                     Action = Make(r.Action, ActionFace, ActionFontSize, ActionTextBrush),
@@ -196,10 +204,23 @@ public sealed class HintLayer : FrameworkElement
         }
     }
 
+    /// <summary>
+    /// 字形实际占的那一块（相对于绘制原点）。取不到就退回整行盒，
+    /// 那正是它原来的样子 —— 拿不准的时候不要比原来更糟。
+    /// </summary>
+    private static Rect InkBounds(FormattedText text)
+    {
+        var bounds = text.BuildGeometry(new Point(0, 0))?.Bounds ?? Rect.Empty;
+        return bounds.IsEmpty || double.IsInfinity(bounds.Width) || double.IsInfinity(bounds.Height)
+            ? new Rect(0, 0, text.Width, text.Height)
+            : bounds;
+    }
+
     private sealed class MeasuredRow
     {
         public required FormattedText[] Keys { get; init; }
         public required double[] KeyWidths { get; init; }
+        public required Rect[] KeyInk { get; init; }
         public required double TotalKeyWidth { get; init; }
         public required FormattedText? Plus { get; init; }
         public required FormattedText Action { get; init; }
