@@ -124,7 +124,17 @@ public partial class App : Application
         // 截图进行中不打扰：那时候满屏都是覆盖层，弹出来的贴图会被压在下面
         if (_controller?.IsActive == true) return;
 
-        var image = ClipboardReader.ReadPinnable(CursorScale()) ?? _lastCapture;
+        var image = ClipboardReader.ReadPinnable(CursorScale(), out bool busy);
+
+        // 抢不到剪贴板时不能退到上次截图：用户要的是剪贴板里那份东西，
+        // 端一张旧截图上来，他会以为自己复制的内容没进剪贴板。
+        if (busy)
+        {
+            ShowTrayWarning("剪贴板正被其他程序占用，稍后再按一次");
+            return;
+        }
+
+        image ??= _lastCapture;
         if (image is null)
         {
             ShowTrayInfo("剪贴板里没有可以贴的内容，也还没有截过图");
