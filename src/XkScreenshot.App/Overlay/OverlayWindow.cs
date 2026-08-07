@@ -827,6 +827,16 @@ public sealed class OverlayWindow : Window
                 _session.StepHistory(back: false);
                 break;
 
+            // 数字键直接指定回溯到第几条，编号就是角标上那个。0 = 回到实时冻屏。
+            // 覆盖层里数字键本来是空着的，拿来做这个不必跟谁抢。
+            case >= Key.D0 and <= Key.D9 when !ctrl:
+                _session.TypeHistoryDigit(key - Key.D0);
+                break;
+
+            case >= Key.NumPad0 and <= Key.NumPad9 when !ctrl:
+                _session.TypeHistoryDigit(key - Key.NumPad0);
+                break;
+
             case Key.H:
                 _session.ToggleHints();
                 UpdateHintVisibility();
