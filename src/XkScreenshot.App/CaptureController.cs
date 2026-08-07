@@ -28,6 +28,12 @@ public sealed class CaptureController
     /// </summary>
     public CaptureDefaults Defaults { get; set; } = CaptureDefaults.Standard;
 
+    /// <summary>
+    /// 截过的区域，供覆盖层回溯。挂在这一层而不是会话里 ——
+    /// 它要跨越一次次截图活下去，而会话每次都是新的。
+    /// </summary>
+    public CaptureHistory History { get; } = new();
+
     /// <summary>截图完成，参数是烧好标注的成品与用户选的去向。</summary>
     public event Action<CaptureResult>? Captured;
 
@@ -44,7 +50,7 @@ public sealed class CaptureController
         var snapshot = DesktopSnapshot.Take(_capture, own);
         if (snapshot.Frames.Count == 0) return;
 
-        _session = new CaptureSession(snapshot, Defaults);
+        _session = new CaptureSession(snapshot, Defaults, History);
         _session.Confirmed += OnConfirmed;
         _session.Cancelled += Cancel;
 
@@ -72,6 +78,10 @@ public sealed class CaptureController
     /// </summary>
     private void OnConfirmed(CaptureResult result)
     {
+        // 只记真截下来的那些。取消掉的选区不算截过 ——
+        // 那多半正是一个框歪了、用户不想要的框，把它塞进历史只会占掉一格。
+        History.Record(result.Bounds);
+
         Teardown();
         Captured?.Invoke(result);
     }

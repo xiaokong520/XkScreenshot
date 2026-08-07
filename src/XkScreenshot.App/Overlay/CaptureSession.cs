@@ -129,11 +129,15 @@ public sealed class CaptureSession : IDisposable
     private Annotation? _styleOrigin;
     private int _styleIndex = -1;
 
-    public CaptureSession(DesktopSnapshot snapshot, CaptureDefaults? defaults = null)
+    public CaptureSession(
+        DesktopSnapshot snapshot,
+        CaptureDefaults? defaults = null,
+        CaptureHistory? history = null)
     {
         var d = defaults ?? CaptureDefaults.Standard;
 
         Snapshot = snapshot;
+        _history = history;
         DefaultAction = d.Action;
         ShowHints = d.ShowHints;
         ElementMode = d.ElementMode;
@@ -591,6 +595,51 @@ public sealed class CaptureSession : IDisposable
             "{0}, {1}, {2}", CursorColor.R, CursorColor.G, CursorColor.B),
     };
 
+    // ---------------- 截屏区域历史 ----------------
+
+    private readonly CaptureHistory? _history;
+
+    /// <summary>正翻到历史的第几条，-1 表示没在回溯。见 <see cref="StartFreshSelection"/>。</summary>
+    private int _historyIndex = -1;
+
+    /// <summary>
+    /// 回溯截屏区域历史。<paramref name="back"/> 为 true 往更早翻，false 往更近翻。
+    /// 返回 false 表示这个方向已经没有了。
+    ///
+    /// 只往回走到最近那一条为止，不记「进入回溯之前是什么样」：
+    /// 走错了按 Esc 就是重选，多存一份返回态换来的只是同一件事的第二种做法。
+    /// </summary>
+    public bool StepHistory(bool back)
+    {
+        if (_history is null) return false;
+
+        var items = _history.Items;
+        int index = _historyIndex;
+
+        while (true)
+        {
+            index += back ? 1 : -1;
+            if (index < 0 || index >= items.Count) return false;
+
+            // 显示器插拔、改分辨率之后，旧矩形可能整个落到桌面外面去了。
+            // 那种条目直接跳过 —— 摆出来是一个框不住任何东西的空选区，
+            // 比按了没反应更让人摸不着头脑。
+            var rect = items[index].Intersect(Snapshot.VirtualBounds);
+            if (rect.IsEmpty) continue;
+
+            StartFreshSelection(rect);
+            // StartFreshSelection 会把下标清成 -1（那是给「用户自己重新框」用的），
+            // 所以这一句必须排在它后面
+            _historyIndex = index;
+
+            Phase = SelectionPhase.Settled;
+            HoverWindow = PixelRect.Empty;
+            _press = PressKind.None;
+            Changed?.Invoke();
+            return true;
+        }
+    }
+
     /// <summary>
     /// 选中一整块屏幕。第一次取光标所在的那台显示器，
     /// 已经是单屏全屏时再按一次扩展到整个虚拟桌面。
@@ -905,6 +954,9 @@ public sealed class CaptureSession : IDisposable
         Selection = next;
         ActiveTool = ToolKind.None;
         SelectedAnnotation = -1;
+        // 用户自己框了一块新的，回溯就该从头（最近那一条）重新数起，
+        // 而不是接着上次翻到的位置往下走
+        _historyIndex = -1;
         // 标注连同历史一起丢掉，攒着的那个起点也就没有落脚处了
         _styleOrigin = null;
         _styleIndex = -1;
