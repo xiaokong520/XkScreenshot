@@ -164,7 +164,7 @@ public sealed class OverlayWindow : Window
             _selectionLayer.HighlightLocal = ToLocalDip(highlight.Intersect(bounds));
             _selectionLayer.HighlightPixels = highlight;
             _selectionLayer.ShowSizeLabel = OwnsLabelAnchor(highlight);
-            _selectionLayer.HighlightTag = selection.IsEmpty ? DetectionTag() : null;
+            _selectionLayer.HighlightTag = selection.IsEmpty ? DetectionTag() : HistoryTag();
         }
         else
         {
@@ -193,6 +193,23 @@ public sealed class OverlayWindow : Window
             ElementHit.Scanning => "控件 · 识别中",
             _ => "控件 · 整窗",
         };
+    }
+
+    /// <summary>
+    /// 回溯角标。
+    ///
+    /// 没有它的话，回溯成功和「按了没反应」长得一模一样 —— 存档画面跟此刻的屏幕往往只差
+    /// 几个像素，选区又是刚才那一块，用户凭什么看出自己已经翻到了三分钟前那一屏？
+    /// 顺带把「第几条 / 共几条」说清楚，翻到底了心里有数。
+    /// 画面没能装出来时如实标「仅选区」：那时候底下的画面确实还是现在这一屏。
+    /// </summary>
+    private string? HistoryTag()
+    {
+        int position = _session.HistoryPosition;
+        if (position <= 0) return null;
+
+        string label = $"历史 {position}/{_session.HistoryCount}";
+        return _session.InHistory ? label : label + " · 仅选区";
     }
 
     private void SyncAnnotationState()
@@ -714,19 +731,38 @@ public sealed class OverlayWindow : Window
         if (!_session.StepBack()) _session.Escape();
     }
 
+    /// <summary>
+    /// 这一下按的到底是哪个键。
+    ///
+    /// 不能直接用 e.Key：装了中日韩输入法时，被输入法吃掉的按键在 e.Key 里一律是
+    /// ImeProcessed，真正的键被挪到 ImeProcessedKey 上。中文输入法处于中文模式时，
+    /// 逗号句点恰恰是它要转成全角标点的那一类 —— 只认 e.Key 的话，用户切着中文输入法
+    /// 按回溯键就是完全没反应，而他根本不会想到这跟输入法有关。
+    /// Alt 组合键（e.Key 为 System）同理。
+    /// </summary>
+    private static Key EffectiveKey(KeyEventArgs e) => e.Key switch
+    {
+        Key.ImeProcessed => e.ImeProcessedKey,
+        Key.DeadCharProcessed => e.DeadCharProcessedKey,
+        Key.System => e.SystemKey,
+        _ => e.Key,
+    };
+
     protected override void OnKeyDown(KeyEventArgs e)
     {
         base.OnKeyDown(e);
 
+        var key = EffectiveKey(e);
+
         // Shift 单独按下才切换颜色格式；Shift 作为组合键修饰符时不能触发。
         // 记下「Shift 按住期间还按过别的键」，抬起时据此决定是不是一次纯粹的 Shift。
-        if (e.Key is not (Key.LeftShift or Key.RightShift))
+        if (key is not (Key.LeftShift or Key.RightShift))
             _shiftConsumed = true;
 
         int step = (Keyboard.Modifiers & ModifierKeys.Shift) != 0 ? 10 : 1;
         bool ctrl = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
 
-        switch (e.Key)
+        switch (key)
         {
             case Key.Escape:
                 // 逐级返回：标注选中 → 工具 → 重选 → 退出
@@ -809,7 +845,7 @@ public sealed class OverlayWindow : Window
     {
         base.OnKeyUp(e);
 
-        if (e.Key is Key.LeftShift or Key.RightShift)
+        if (EffectiveKey(e) is Key.LeftShift or Key.RightShift)
         {
             if (!_shiftConsumed) _session.ToggleColorFormat();
             _shiftConsumed = false;
