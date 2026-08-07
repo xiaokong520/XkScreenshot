@@ -625,6 +625,15 @@ public sealed class CaptureSession : IDisposable
     /// <summary>正翻到历史的第几条，-1 表示没在回溯（看的是实时冻屏）。见 <see cref="StartFreshSelection"/>。</summary>
     private int _historyIndex = -1;
 
+    /// <summary>连着敲数字算作同一个数的间隔。见 <see cref="TypeHistoryDigit"/>。</summary>
+    private const long DigitWindowMs = 1200;
+
+    /// <summary>正在拼的那个跳转编号，0 表示没在拼。</summary>
+    private int _pendingJump;
+
+    /// <summary>上一位数字是什么时候敲的。用开机计时而不是墙上时间：改系统时间不该影响手速判定。</summary>
+    private long _digitTypedAt = long.MinValue;
+
     /// <summary>
     /// 正翻到第几条，0 表示没在回溯。
     ///
@@ -648,7 +657,6 @@ public sealed class CaptureSession : IDisposable
     {
         if (_history is null) return false;
 
-        var items = _history.Items;
         int index = _historyIndex;
 
         while (true)
@@ -657,33 +665,83 @@ public sealed class CaptureSession : IDisposable
 
             // 往回走到 -1 就是走出历史。没在历史里时再往回走才是真的没有了
             if (index < 0) return !back && InHistory && ReturnToLive();
-            if (index >= items.Count) return false;
+            if (index >= HistoryCount) return false;
 
-            var entry = items[index];
-
-            // 显示器插拔、改分辨率之后，旧矩形可能整个落到当前桌面外面去了。
-            // 那种条目直接跳过 —— 摆出来是一个框不住任何东西的空选区，
-            // 比按了没反应更让人摸不着头脑。
-            var rect = entry.Bounds.Intersect(LiveSnapshot.VirtualBounds);
-            if (rect.IsEmpty) continue;
-
-            // 画面装不出来（文件没了、解码失败）就退回「只把框摆回来」那一层，
-            // 而不是把这一条跳过去 —— 选区本身仍然是用户要的东西
-            var loaded = entry.Image is null ? null : _historyLoader?.Invoke(entry);
-            HistorySource = loaded is null ? null : entry;
-            Swap(loaded ?? LiveSnapshot);
-
-            StartFreshSelection(rect);
-            // StartFreshSelection 会把下标清成 -1（那是给「用户自己重新框」用的），
-            // 所以这一句必须排在它后面
-            _historyIndex = index;
-
-            Phase = SelectionPhase.Settled;
-            HoverWindow = PixelRect.Empty;
-            _press = PressKind.None;
-            Changed?.Invoke();
-            return true;
+            // 装不出来的那一条直接跳过 —— 停在上面摆出的是一个框不住任何东西的
+            // 空选区，比按了没反应更让人摸不着头脑
+            if (Show(index)) return true;
         }
+    }
+
+    /// <summary>
+    /// 直接跳到时间轴上的第 <paramref name="position"/> 条，编号与角标上显示的一致
+    /// （最早那条是 1，最近那条是 <see cref="HistoryCount"/>）。0 表示走出历史、回到实时冻屏。
+    ///
+    /// 存了几十条的时候，一下一下按 `,` 要按到第 20 条实在难为人。
+    /// 越界、或者那一条已经不在当前桌面上时返回 false 并保持原样 ——
+    /// 用户指名要第 20 条，退而求其次给他第 19 条是自作主张。
+    /// </summary>
+    public bool JumpHistory(int position)
+    {
+        if (_history is null) return false;
+        if (position == 0) return InHistory && ReturnToLive();
+        if (position < 0 || position > HistoryCount) return false;
+
+        return Show(HistoryCount - position);
+    }
+
+    /// <summary>
+    /// 键入一位数字来指定跳到第几条。
+    ///
+    /// 连着敲的几位拼成一个数（「1」「2」= 第 12 条），停手一会儿再敲就重新起一个数 ——
+    /// 否则想去第 2 条的人得先想清楚上一次敲的是什么。每敲一位就跳一次，
+    /// 不必再按回车确认：回车在这套覆盖层里是「确认截图」，占不得。
+    /// </summary>
+    public bool TypeHistoryDigit(int digit)
+    {
+        if (digit is < 0 or > 9) return false;
+
+        long now = Environment.TickCount64;
+        int pending = now - _digitTypedAt <= DigitWindowMs ? _pendingJump : 0;
+
+        // 接上去超出范围就当作重新起一个数：条数只有 7 的时候敲「1」「2」，
+        // 用户要的显然是第 2 条，而不是一个不存在的第 12 条
+        int target = pending * 10 + digit;
+        if (target > HistoryCount) target = digit;
+
+        bool jumped = JumpHistory(target);
+
+        // 必须排在跳转后面：跳转内部会走 StartFreshSelection，那里会把待拼的数清掉
+        _pendingJump = target;
+        _digitTypedAt = now;
+        return jumped;
+    }
+
+    /// <summary>把第 <paramref name="index"/> 条（内部下标，0 = 最近）摆到台面上。</summary>
+    private bool Show(int index)
+    {
+        var entry = _history!.Items[index];
+
+        // 显示器插拔、改分辨率之后，旧矩形可能整个落到当前桌面外面去了
+        var rect = entry.Bounds.Intersect(LiveSnapshot.VirtualBounds);
+        if (rect.IsEmpty) return false;
+
+        // 画面装不出来（文件没了、解码失败）就退回「只把框摆回来」那一层，
+        // 而不是把这一条作废 —— 选区本身仍然是用户要的东西
+        var loaded = entry.Image is null ? null : _historyLoader?.Invoke(entry);
+        HistorySource = loaded is null ? null : entry;
+        Swap(loaded ?? LiveSnapshot);
+
+        StartFreshSelection(rect);
+        // StartFreshSelection 会把下标清成 -1（那是给「用户自己重新框」用的），
+        // 所以这一句必须排在它后面
+        _historyIndex = index;
+
+        Phase = SelectionPhase.Settled;
+        HoverWindow = PixelRect.Empty;
+        _press = PressKind.None;
+        Changed?.Invoke();
+        return true;
     }
 
     /// <summary>走出历史，回到按下热键那一刻的实时冻屏。选区一并清掉：它是历史那张图上的框。</summary>
@@ -1031,6 +1089,7 @@ public sealed class CaptureSession : IDisposable
         // 用户自己框了一块新的，回溯就该从头（最近那一条）重新数起，
         // 而不是接着上次翻到的位置往下走
         _historyIndex = -1;
+        _pendingJump = 0;
         // 标注连同历史一起丢掉，攒着的那个起点也就没有落脚处了
         _styleOrigin = null;
         _styleIndex = -1;
