@@ -744,13 +744,13 @@ public sealed class OverlayWindow : Window
                 CopyColor();
                 break;
 
-            // 回溯截屏区域历史。挑 [ ] 是因为它俩在这套覆盖层里还没人用，
-            // 而且「上一个 / 下一个」的方向感是现成的。
-            case Key.OemOpenBrackets:
+            // 回溯截屏区域历史。挑 , . 是因为它俩在这套覆盖层里还没人用，
+            // 而且「上一个 / 下一个」的方向感是现成的（键面上就印着 < >）。
+            case Key.OemComma:
                 _session.StepHistory(back: true);
                 break;
 
-            case Key.OemCloseBrackets:
+            case Key.OemPeriod:
                 _session.StepHistory(back: false);
                 break;
 
