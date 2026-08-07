@@ -63,6 +63,12 @@ public sealed class OverlayWindow : Window
         // Tab 要留给「切换检测模式」，不能被 WPF 拿去做焦点跳转
         KeyboardNavigation.SetTabNavigation(this, KeyboardNavigationMode.None);
 
+        // 覆盖层整个关掉输入法。这里的按键全是命令，没有一个是要往里打字的；
+        // 而中文输入法开着的时候，逗号句点这类要被转成全角标点的键会在到达 WPF 之前
+        // 就被输入法吃掉 —— 连 KeyDown 都不会有，用户按了完全没反应还找不到原因。
+        // 文字标注那个输入框单独把输入法开回来，中文标注照样打。
+        InputMethod.SetIsInputMethodEnabled(this, false);
+
         _image = new Image { Stretch = Stretch.Fill };
         // 冻结图必须逐像素原样呈现，插值会让文字发虚 —— OCR 阶段尤其致命
         RenderOptions.SetBitmapScalingMode(_image, BitmapScalingMode.NearestNeighbor);
@@ -651,6 +657,9 @@ public sealed class OverlayWindow : Window
             CaretBrush = Brushes.White,
         };
 
+        // 覆盖层那一层把输入法关了（见构造函数），这里得单独开回来 —— 中文标注要靠它
+        InputMethod.SetIsInputMethodEnabled(box, true);
+
         box.LostFocus += (_, _) => CommitPendingText();
         box.PreviewKeyDown += (_, e) =>
         {
@@ -734,11 +743,12 @@ public sealed class OverlayWindow : Window
     /// <summary>
     /// 这一下按的到底是哪个键。
     ///
-    /// 不能直接用 e.Key：装了中日韩输入法时，被输入法吃掉的按键在 e.Key 里一律是
-    /// ImeProcessed，真正的键被挪到 ImeProcessedKey 上。中文输入法处于中文模式时，
-    /// 逗号句点恰恰是它要转成全角标点的那一类 —— 只认 e.Key 的话，用户切着中文输入法
-    /// 按回溯键就是完全没反应，而他根本不会想到这跟输入法有关。
-    /// Alt 组合键（e.Key 为 System）同理。
+    /// 不能直接用 e.Key：被输入法处理过的键在 e.Key 里是 ImeProcessed，真正的键在
+    /// ImeProcessedKey 上；Alt 组合键（e.Key 为 System）同理。
+    ///
+    /// 注意这只是补漏。真正把中文输入法挡在外面的是构造函数里那一句关掉输入法 ——
+    /// 实测输入法开着的时候，逗号句点在到达 WPF 之前就被它整个吃掉了，
+    /// 连 KeyDown 都不产生，这里根本够不着。
     /// </summary>
     private static Key EffectiveKey(KeyEventArgs e) => e.Key switch
     {
