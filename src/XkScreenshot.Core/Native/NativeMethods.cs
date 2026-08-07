@@ -77,6 +77,13 @@ public static class NativeMethods
     public const uint SWP_SHOWWINDOW = 0x0040;
     public const uint SWP_NOZORDER = 0x0004;
 
+    /// <summary>
+    /// 别把旧的客户区位图搬过来。缩放一个内容会跟着尺寸变的窗口时必须带上它 ——
+    /// 否则系统先把旧画面按老比例贴到新尺寸里，等应用重绘才换成对的，
+    /// 中间那一帧就是一次肉眼可见的错位。
+    /// </summary>
+    public const uint SWP_NOCOPYBITS = 0x0100;
+
     public const int WM_HOTKEY = 0x0312;
 
     // ---------------- gdi32 ----------------
