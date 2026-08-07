@@ -50,7 +50,15 @@ public sealed class ToolbarLayer : FrameworkElement
     private static readonly Pen ActivePen = Freeze(new Pen(new SolidColorBrush(Color.FromArgb(0xB0, 0x3B, 0x9E, 0xFF)), 1));
     private static readonly Brush IconBrush = Freeze(new SolidColorBrush(Color.FromRgb(0xE4, 0xE8, 0xEE)));
     private static readonly Brush ActiveIconBrush = Freeze(new SolidColorBrush(Color.FromRgb(0xA8, 0xD4, 0xFF)));
-    private static readonly Brush DisabledIconBrush = Freeze(new SolidColorBrush(Color.FromRgb(0x55, 0x5B, 0x66)));
+    /// <summary>
+    /// 禁用态用「同色降透明度」，而不是一个固定的深灰。
+    ///
+    /// 面板是毛玻璃：底下截到什么，它就有多亮。白底下面板会亮到 90 上下，
+    /// 而固定深灰恰好也在那个亮度，撞在一起之后按钮整个消失 —— 用户看到的是
+    /// 分隔线右边空了一截，而不是「这几个按钮现在不可用」。
+    /// 半透明白则永远是在面板自身的亮度上提一档，深底浅底都保得住对比。
+    /// </summary>
+    private static readonly Brush DisabledIconBrush = Freeze(new SolidColorBrush(Color.FromArgb(0x70, 0xE4, 0xE8, 0xEE)));
     private static readonly Brush DangerIconBrush = Freeze(new SolidColorBrush(Color.FromRgb(0xFF, 0x8A, 0x84)));
     private static readonly Brush TipBackBrush = Freeze(new SolidColorBrush(Color.FromArgb(0xEE, 0x0E, 0x10, 0x14)));
     private static readonly Brush TipTextBrush = Freeze(new SolidColorBrush(Color.FromRgb(0xDA, 0xDF, 0xE6)));
