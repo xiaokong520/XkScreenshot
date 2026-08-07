@@ -112,7 +112,7 @@ public sealed class CaptureController
 
         var snapshot = _session.Snapshot;
         var desktop = snapshot.VirtualBounds;
-        History.Record(bounds, desktop, null);
+        if (History.Record(bounds, desktop, null) is not { } entry) return;
 
         // 存画面整个排到 UI 空下来之后。多屏合成那一步只能在 UI 线程做（要 RenderTargetBitmap），
         // 实测 3840×1080 要九十来毫秒 —— 压在确认那一下上，用户会看到覆盖层关掉之前顿一下，
@@ -136,7 +136,7 @@ public sealed class CaptureController
                 if (t.Result is not { } id) return;
 
                 // 编码期间那一条可能已经被后来的截图挤出去了，那就把白存的文件删掉
-                if (!History.Attach(bounds, id)) HistoryStore.PruneImages(History.ImageIds());
+                if (!History.Attach(entry, id)) HistoryStore.PruneImages(History.ImageIds());
             }, TaskScheduler.FromCurrentSynchronizationContext());
         });
     }

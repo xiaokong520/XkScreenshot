@@ -57,16 +57,25 @@ public sealed class CaptureHistory
             if (item.Image is not null) yield return item.Image;
     }
 
-    public void Record(PixelRect bounds, PixelRect desktop, string? image)
+    /// <summary>
+    /// 记一次截图，返回刚记下的那一条（容量为 0 或选区为空时返回 null）。
+    ///
+    /// 不按选区去重：每一次截图都是一个独立的时刻。「同一块地方内容变了、再截一次」
+    /// 正是这个功能存在的理由，把位置相同的旧条目顶掉，顶掉的恰恰是用户最想翻回去的那一张。
+    /// （只记矩形的那一版是去重的 —— 那时候位置相同确实就是同一条信息，
+    /// 加上画面之后这个前提就不成立了。）
+    /// </summary>
+    public HistoryEntry? Record(PixelRect bounds, PixelRect desktop, string? image)
     {
-        if (_capacity == 0 || bounds.IsEmpty) return;
+        if (_capacity == 0 || bounds.IsEmpty) return null;
 
-        // 同一块区域反复截是常事（就是为了看它变成什么样了）。旧的那条要整个换掉：
-        // 位置一样，但画面是新的那一张才对得上「我刚才截的是什么」。
-        _items.RemoveAll(e => e.Bounds == bounds);
-        _items.Insert(0, new HistoryEntry(bounds, desktop, image));
+        var entry = new HistoryEntry(bounds, desktop, image);
+        _items.Insert(0, entry);
         Trim();
         Changed?.Invoke();
+
+        // 容量为 1 时上面那次 Trim 可能已经把它自己裁掉了
+        return _items.Contains(entry) ? entry : null;
     }
 
     /// <summary>
@@ -83,7 +92,7 @@ public sealed class CaptureHistory
         foreach (var item in items)
         {
             if (_items.Count >= _capacity) break;
-            if (item.Bounds.IsEmpty || _items.Exists(e => e.Bounds == item.Bounds)) continue;
+            if (item.Bounds.IsEmpty) continue;
             _items.Add(item);
         }
     }
@@ -94,13 +103,16 @@ public sealed class CaptureHistory
     /// 记条目和存画面是分开的两步：PNG 编码是几百毫秒的事，压在确认截图那一下上，
     /// 用户会感到「截完之后卡了一顿」。所以先把选区记上，图在后台编码完再回来认领。
     /// 返回 false 表示那一条已经被后来的挤掉了 —— 调用方据此把白存的文件删掉。
+    ///
+    /// 认的是条目本身而不是选区：同一块区域可以有好几条（不同时刻各截了一次），
+    /// 按选区找会认到别人头上去。
     /// </summary>
-    public bool Attach(PixelRect bounds, string image)
+    public bool Attach(HistoryEntry entry, string image)
     {
-        int i = _items.FindIndex(e => e.Bounds == bounds && e.Image is null);
+        int i = _items.FindIndex(e => ReferenceEquals(e, entry));
         if (i < 0) return false;
 
-        _items[i] = _items[i] with { Image = image };
+        _items[i] = entry with { Image = image };
         Changed?.Invoke();
         return true;
     }
