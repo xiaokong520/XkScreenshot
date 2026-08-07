@@ -1,10 +1,15 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Interop;
+using System.Windows.Media.Imaging;
+using System.Windows.Threading;
 using XkScreenshot.App.Overlay;
+using XkScreenshot.App.Settings;
 using XkScreenshot.Capture;
+using XkScreenshot.Core.Geometry;
 
 namespace XkScreenshot.App;
 
@@ -17,6 +22,10 @@ public sealed class CaptureController
     private readonly IScreenCapture _capture;
     private readonly List<OverlayWindow> _overlays = [];
     private CaptureSession? _session;
+
+    /// <summary>上一次装出来的历史画面。来回翻同两条时省掉反复解码。</summary>
+    private string? _cachedId;
+    private DesktopSnapshot? _cachedSnapshot;
 
     public CaptureController(IScreenCapture capture) => _capture = capture;
 
@@ -50,7 +59,7 @@ public sealed class CaptureController
         var snapshot = DesktopSnapshot.Take(_capture, own);
         if (snapshot.Frames.Count == 0) return;
 
-        _session = new CaptureSession(snapshot, Defaults, History);
+        _session = new CaptureSession(snapshot, Defaults, History, LoadHistorySnapshot);
         _session.Confirmed += OnConfirmed;
         _session.Cancelled += Cancel;
 
@@ -80,10 +89,78 @@ public sealed class CaptureController
     {
         // 只记真截下来的那些。取消掉的选区不算截过 ——
         // 那多半正是一个框歪了、用户不想要的框，把它塞进历史只会占掉一格。
-        History.Record(result.Bounds);
+        RecordHistory(result.Bounds);
 
         Teardown();
         Captured?.Invoke(result);
+    }
+
+    /// <summary>
+    /// 把这一次记进历史：选区当场记，整屏画面丢给后台编码，编码完再回来认领。
+    /// 必须在 <see cref="Teardown"/> 之前调 —— 画面要从还活着的那个会话上取。
+    /// </summary>
+    private void RecordHistory(PixelRect bounds)
+    {
+        if (_session is null || History.Capacity == 0) return;
+
+        // 从历史画面上确认的：图就是刚才装进来的那一张，再存一遍纯属浪费磁盘
+        if (_session.HistorySource is { Image: not null } source)
+        {
+            History.Record(bounds, source.Desktop, source.Image);
+            return;
+        }
+
+        var snapshot = _session.Snapshot;
+        var desktop = snapshot.VirtualBounds;
+        History.Record(bounds, desktop, null);
+
+        // 存画面整个排到 UI 空下来之后。多屏合成那一步只能在 UI 线程做（要 RenderTargetBitmap），
+        // 实测 3840×1080 要九十来毫秒 —— 压在确认那一下上，用户会看到覆盖层关掉之前顿一下，
+        // 而这一顿换来的东西他此刻根本不关心。编码更慢，那个能甩就甩到后台线程。
+        var dispatcher = Application.Current?.Dispatcher ?? Dispatcher.CurrentDispatcher;
+        dispatcher.BeginInvoke(DispatcherPriority.Background, () =>
+        {
+            BitmapSource full;
+            try
+            {
+                full = snapshot.Crop(desktop);
+            }
+            catch (Exception)
+            {
+                // 合成失败就让这一条停在「只有框」，不该反过来影响已经截好的图
+                return;
+            }
+
+            Task.Run(() => HistoryStore.SaveImage(full)).ContinueWith(t =>
+            {
+                if (t.Result is not { } id) return;
+
+                // 编码期间那一条可能已经被后来的截图挤出去了，那就把白存的文件删掉
+                if (!History.Attach(bounds, id)) HistoryStore.PruneImages(History.ImageIds());
+            }, TaskScheduler.FromCurrentSynchronizationContext());
+        });
+    }
+
+    /// <summary>
+    /// 把历史里的一条装成可以顶替实时冻屏的快照。
+    ///
+    /// 按当前这几台显示器切帧，所以用的是本次会话的显示器列表而不是重新枚举一遍 ——
+    /// 覆盖层窗口就是照着它摆的，两边必须是同一份，否则会出现「画面切了、窗口还在老位置」。
+    /// </summary>
+    private DesktopSnapshot? LoadHistorySnapshot(HistoryEntry entry)
+    {
+        if (_session is null || entry.Image is null || entry.Desktop.IsEmpty) return null;
+
+        // 来回翻的时候别反复解码同一张 PNG：一张 3840×1080 解出来是十几兆
+        if (_cachedId == entry.Image) return _cachedSnapshot;
+
+        var image = HistoryStore.LoadImage(entry.Image);
+        if (image is null) return null;
+
+        var monitors = _session.LiveSnapshot.Frames.Select(f => f.Monitor).ToList();
+        _cachedSnapshot = DesktopSnapshot.FromImage(image, entry.Desktop, monitors);
+        _cachedId = entry.Image;
+        return _cachedSnapshot;
     }
 
     public void Cancel() => Teardown();

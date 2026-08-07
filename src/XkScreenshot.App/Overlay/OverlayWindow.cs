@@ -33,7 +33,8 @@ public sealed class OverlayWindow : Window
     private readonly ToolOptionsLayer _toolOptionsLayer = new();
     private readonly AnnotationController _annotations;
     private readonly TextBox _textInput;
-    private readonly FrostedBackdrop _backdrop;
+    private readonly Image _image;
+    private FrostedBackdrop _backdrop = null!;
     private bool _capturing;
     private bool _magnifierWasVisible;
     private bool _shiftConsumed;
@@ -62,22 +63,12 @@ public sealed class OverlayWindow : Window
         // Tab 要留给「切换检测模式」，不能被 WPF 拿去做焦点跳转
         KeyboardNavigation.SetTabNavigation(this, KeyboardNavigationMode.None);
 
-        var image = new Image
-        {
-            Source = frame.Image,
-            Stretch = Stretch.Fill,
-        };
+        _image = new Image { Stretch = Stretch.Fill };
         // 冻结图必须逐像素原样呈现，插值会让文字发虚 —— OCR 阶段尤其致命
-        RenderOptions.SetBitmapScalingMode(image, BitmapScalingMode.NearestNeighbor);
+        RenderOptions.SetBitmapScalingMode(_image, BitmapScalingMode.NearestNeighbor);
+        var image = _image;
 
-        // 毛玻璃背景三层共用一份：模糊一次全屏画面就够了，没必要各算各的
-        var backdrop = new FrostedBackdrop(frame.Frame);
-        _magnifierLayer.Frame = frame.Frame;
-        _magnifierLayer.Backdrop = backdrop;
-        _hintLayer.Backdrop = backdrop;
-        _toolbarLayer.Backdrop = backdrop;
-        _toolOptionsLayer.Backdrop = backdrop;
-        _backdrop = backdrop;
+        AttachFrame(frame.Frame);
 
         _annotations = new AnnotationController { Document = session.Annotations };
         _annotationLayer.Document = session.Annotations;
@@ -99,12 +90,48 @@ public sealed class OverlayWindow : Window
 
         _session.Changed += OnSessionChanged;
         _session.CursorMoved += OnCursorMoved;
+        _session.SnapshotSwapped += OnSnapshotSwapped;
         SourceInitialized += OnSourceInitialized;
         Closed += (_, _) =>
         {
             _session.Changed -= OnSessionChanged;
             _session.CursorMoved -= OnCursorMoved;
+            _session.SnapshotSwapped -= OnSnapshotSwapped;
         };
+    }
+
+    /// <summary>
+    /// 把这一帧挂上去：底图、放大镜取样源、毛玻璃背景。
+    /// 三处都得换 —— 只换底图的话，回溯到历史画面后放大镜里放的还是实时那一屏，
+    /// 而工具条底下透出来的也还是旧的模糊图。
+    /// </summary>
+    private void AttachFrame(CapturedFrame frame)
+    {
+        _image.Source = frame.Image;
+
+        // 毛玻璃背景四层共用一份：模糊一次全屏画面就够了，没必要各算各的
+        var backdrop = new FrostedBackdrop(frame);
+        _magnifierLayer.Frame = frame;
+        _magnifierLayer.Backdrop = backdrop;
+        _hintLayer.Backdrop = backdrop;
+        _toolbarLayer.Backdrop = backdrop;
+        _toolOptionsLayer.Backdrop = backdrop;
+        _backdrop = backdrop;
+    }
+
+    /// <summary>
+    /// 会话换了画面（回溯到历史 / 走回实时）。按显示器句柄去认自己那一帧 ——
+    /// 历史快照是按当前这几台显示器切的，句柄一一对得上。
+    /// </summary>
+    private void OnSnapshotSwapped()
+    {
+        var frame = _session.Snapshot.Frames
+            .FirstOrDefault(f => f.Monitor.Handle == _frame.Monitor.Handle);
+        if (frame is null) return;
+
+        AttachFrame(frame.Frame);
+        _magnifierLayer.Refresh();
+        _hintLayer.Refresh();
     }
 
     public MonitorInfo Monitor => _frame.Monitor;

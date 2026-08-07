@@ -5,12 +5,23 @@ using XkScreenshot.Core.Geometry;
 namespace XkScreenshot.App.Overlay;
 
 /// <summary>
-/// 截过的区域，最近的排在最前。
+/// 历史里的一条。
 ///
-/// 只记矩形，不记图 —— 用途是「刚才那块地方内容变了，再截一次」，
-/// 要的是那个框，不是那张旧图。这也让缓存三十条的代价小到可以忽略。
+/// <paramref name="Bounds"/> 是截过的那块区域，<paramref name="Desktop"/> 是当时整个虚拟桌面的
+/// 范围，<paramref name="Image"/> 指向盖住 Desktop 那一整张冻结画面。
+/// Desktop 必须单独记：PNG 只带得出宽高，带不出它在虚拟屏幕坐标系里的原点，
+/// 而副屏在主屏左边时那个原点是负数。
 ///
-/// 这个类只管数据，不碰文件：往哪儿存、什么时候存是 <see cref="Settings.HistoryStore"/> 的事。
+/// Image 为 null 表示只剩选区了 —— 画面没存下来（写盘失败），或者文件后来被删了。
+/// 那种条目照样能回溯，只是把框摆在当前画面上，退回到「记住那块地方」这一层，
+/// 而不是整条作废。
+/// </summary>
+public sealed record HistoryEntry(PixelRect Bounds, PixelRect Desktop, string? Image);
+
+/// <summary>
+/// 截过的东西，最近的排在最前。
+///
+/// 这个类只管顺序和去重，不碰文件：往哪儿存、什么时候存是 <see cref="Settings.HistoryStore"/> 的事。
 /// </summary>
 public sealed class CaptureHistory
 {
@@ -19,7 +30,7 @@ public sealed class CaptureHistory
     /// <summary>上限只是防呆。回溯是一格一格按过去的，几百条根本翻不到底。</summary>
     public const int MaxCapacity = 200;
 
-    private readonly List<PixelRect> _items = [];
+    private readonly List<HistoryEntry> _items = [];
     private int _capacity = DefaultCapacity;
 
     /// <summary>内容变了。落盘的时机就看它。</summary>
@@ -37,16 +48,23 @@ public sealed class CaptureHistory
     }
 
     /// <summary>下标越大越早。</summary>
-    public IReadOnlyList<PixelRect> Items => _items;
+    public IReadOnlyList<HistoryEntry> Items => _items;
 
-    public void Record(PixelRect rect)
+    /// <summary>还活着的画面文件，供清理孤儿用。</summary>
+    public IEnumerable<string> ImageIds()
     {
-        if (_capacity == 0 || rect.IsEmpty) return;
+        foreach (var item in _items)
+            if (item.Image is not null) yield return item.Image;
+    }
 
-        // 同一块区域反复截是常事（就是为了看它变成什么样了）。不去重的话，
-        // 三十格会被同一个矩形占满，回溯就再也翻不到别的区域上去了。
-        _items.Remove(rect);
-        _items.Insert(0, rect);
+    public void Record(PixelRect bounds, PixelRect desktop, string? image)
+    {
+        if (_capacity == 0 || bounds.IsEmpty) return;
+
+        // 同一块区域反复截是常事（就是为了看它变成什么样了）。旧的那条要整个换掉：
+        // 位置一样，但画面是新的那一张才对得上「我刚才截的是什么」。
+        _items.RemoveAll(e => e.Bounds == bounds);
+        _items.Insert(0, new HistoryEntry(bounds, desktop, image));
         Trim();
         Changed?.Invoke();
     }
@@ -56,18 +74,35 @@ public sealed class CaptureHistory
     ///
     /// 这里**不**剔除「已经不在当前桌面上」的条目：开机那一刻某台显示器可能还没醒、
     /// 笔记本可能正拔着扩展坞，照那时候的桌面去删，删掉的是过会儿就会回来的东西。
-    /// 错位的条目在真要用它的时候由 <see cref="CaptureSession.StepHistory"/> 跳过，
+    /// 错位的条目在真要用它的时候由 <see cref="CaptureSession.StepHistory"/> 处理，
     /// 那时候的桌面才是作数的那一个。
     /// </summary>
-    public void Restore(IEnumerable<PixelRect> items)
+    public void Restore(IEnumerable<HistoryEntry> items)
     {
         _items.Clear();
-        foreach (var rect in items)
+        foreach (var item in items)
         {
             if (_items.Count >= _capacity) break;
-            if (rect.IsEmpty || _items.Contains(rect)) continue;
-            _items.Add(rect);
+            if (item.Bounds.IsEmpty || _items.Exists(e => e.Bounds == item.Bounds)) continue;
+            _items.Add(item);
         }
+    }
+
+    /// <summary>
+    /// 把画面补挂到已经记下的那一条上。
+    ///
+    /// 记条目和存画面是分开的两步：PNG 编码是几百毫秒的事，压在确认截图那一下上，
+    /// 用户会感到「截完之后卡了一顿」。所以先把选区记上，图在后台编码完再回来认领。
+    /// 返回 false 表示那一条已经被后来的挤掉了 —— 调用方据此把白存的文件删掉。
+    /// </summary>
+    public bool Attach(PixelRect bounds, string image)
+    {
+        int i = _items.FindIndex(e => e.Bounds == bounds && e.Image is null);
+        if (i < 0) return false;
+
+        _items[i] = _items[i] with { Image = image };
+        Changed?.Invoke();
+        return true;
     }
 
     private bool Trim()
