@@ -7,9 +7,11 @@ using System.Windows.Interop;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using XkScreenshot.App.Overlay;
+using XkScreenshot.App.Scroll;
 using XkScreenshot.App.Settings;
 using XkScreenshot.Capture;
 using XkScreenshot.Core.Geometry;
+using XkScreenshot.Scroll;
 
 namespace XkScreenshot.App;
 
@@ -21,21 +23,36 @@ public sealed class CaptureController
 {
     private readonly IScreenCapture _capture;
     private readonly List<OverlayWindow> _overlays = [];
+    private readonly ScrollCaptureController _scroll = new();
     private CaptureSession? _session;
 
     /// <summary>上一次装出来的历史画面。来回翻同两条时省掉反复解码。</summary>
     private string? _cachedId;
     private DesktopSnapshot? _cachedSnapshot;
 
-    public CaptureController(IScreenCapture capture) => _capture = capture;
+    /// <summary>
+    /// 开始长截图那一刻要存下的实时冻屏。覆盖层关掉之后快照就没了，
+    /// 但历史要等长截图完了才记 —— 只能先把画面暂存在这里。
+    /// </summary>
+    private DesktopSnapshot? _scrollSnapshot;
 
-    public bool IsActive => _session is not null;
+    public CaptureController(IScreenCapture capture)
+    {
+        _capture = capture;
+        _scroll.Completed += OnScrollCompleted;
+        _scroll.Notice += message => Notice?.Invoke(message);
+    }
+
+    public bool IsActive => _session is not null || _scroll.IsRunning;
 
     /// <summary>
     /// 下一次会话的起手状态。设置改完直接换掉这一份即可 ——
     /// 正在进行的会话不受影响，它已经拿走了自己那份快照。
     /// </summary>
     public CaptureDefaults Defaults { get; set; } = CaptureDefaults.Standard;
+
+    /// <summary>长截图的参数。设置界面改完直接换掉这一份。</summary>
+    public ScrollOptions ScrollOptions { get; set; } = ScrollOptions.Standard;
 
     /// <summary>
     /// 截过的区域，供覆盖层回溯。挂在这一层而不是会话里 ——
@@ -45,6 +62,9 @@ public sealed class CaptureController
 
     /// <summary>截图完成，参数是烧好标注的成品与用户选的去向。</summary>
     public event Action<CaptureResult>? Captured;
+
+    /// <summary>有需要告知用户但不算错误的事情（比如长截图到上限停了）。</summary>
+    public event Action<string>? Notice;
 
     public void Start()
     {
@@ -62,6 +82,7 @@ public sealed class CaptureController
         _session = new CaptureSession(snapshot, Defaults, History, LoadHistorySnapshot);
         _session.Confirmed += OnConfirmed;
         _session.Cancelled += Cancel;
+        _session.ScrollRequested += OnScrollRequested;
 
         foreach (var frame in snapshot.Frames)
         {
@@ -165,12 +186,45 @@ public sealed class CaptureController
 
     public void Cancel() => Teardown();
 
+    /// <summary>
+    /// 覆盖层上点了「长截图」或按了 L：记下当前画面、关掉覆盖层、启动长截图引擎。
+    ///
+    /// 画面必须在关覆盖层之前取：冻屏是覆盖层底下的那张图，覆盖层一关它就没了。
+    /// 存下来等长截图收工后记历史用 —— 那会儿才能知道成品多大、要不要存。
+    /// </summary>
+    private void OnScrollRequested(PixelRect region)
+    {
+        if (_session is null) return;
+
+        _scrollSnapshot = _session.Snapshot;
+        Teardown();
+        _scroll.Start(region, ScrollOptions, Defaults.Action);
+    }
+
+    /// <summary>长截图引擎收工了。记历史、当普通截图一样往外发。</summary>
+    private void OnScrollCompleted(BitmapSource image, PixelRect region, CaptureAction action)
+    {
+        // 只记一个选区框，没有全桌面快照：覆盖层早关了，而且长截图期间屏幕内容早变了
+        if (History.Capacity > 0)
+        {
+            var desktop = _scrollSnapshot?.VirtualBounds ?? PixelRect.Empty;
+            History.Record(region, desktop, null);
+        }
+
+        _scrollSnapshot = null;
+        Captured?.Invoke(new CaptureResult(image, region, action));
+    }
+
+    /// <summary>程序退出时把还开着的长截图收掉。</summary>
+    public void AbortScroll() => _scroll.Abort();
+
     private void Teardown()
     {
         if (_session is not null)
         {
             _session.Confirmed -= OnConfirmed;
             _session.Cancelled -= Cancel;
+            _session.ScrollRequested -= OnScrollRequested;
             _session.Dispose();
             _session = null;
         }

@@ -14,6 +14,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "XkScreenshot.Pin", "src\XkS
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "XkScreenshot.Annotate", "src\XkScreenshot.Annotate\XkScreenshot.Annotate.csproj", "{A478280F-5A79-4038-A3CA-2F3C885BA8A4}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "XkScreenshot.Scroll", "src\XkScreenshot.Scroll\XkScreenshot.Scroll.csproj", "{5831BC00-E9C0-4D16-AB44-583CEF39314A}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -40,6 +42,10 @@ Global
 		{A478280F-5A79-4038-A3CA-2F3C885BA8A4}.Debug|x64.Build.0 = Debug|x64
 		{A478280F-5A79-4038-A3CA-2F3C885BA8A4}.Release|x64.ActiveCfg = Release|x64
 		{A478280F-5A79-4038-A3CA-2F3C885BA8A4}.Release|x64.Build.0 = Release|x64
+		{5831BC00-E9C0-4D16-AB44-583CEF39314A}.Debug|x64.ActiveCfg = Debug|x64
+		{5831BC00-E9C0-4D16-AB44-583CEF39314A}.Debug|x64.Build.0 = Debug|x64
+		{5831BC00-E9C0-4D16-AB44-583CEF39314A}.Release|x64.ActiveCfg = Release|x64
+		{5831BC00-E9C0-4D16-AB44-583CEF39314A}.Release|x64.Build.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -47,5 +53,6 @@ Global
 	GlobalSection(NestedProjects) = preSolution
 		{AC89BAF1-FC59-4680-81A7-7FBF9FC730F8} = {8F58A295-207A-4E5A-BBD6-B516A632C4A8}
 		{A478280F-5A79-4038-A3CA-2F3C885BA8A4} = {8F58A295-207A-4E5A-BBD6-B516A632C4A8}
+		{5831BC00-E9C0-4D16-AB44-583CEF39314A} = {8F58A295-207A-4E5A-BBD6-B516A632C4A8}
 	EndGlobalSection
 EndGlobal

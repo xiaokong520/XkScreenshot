@@ -60,6 +60,7 @@ public partial class App : Application
 
         _controller = new CaptureController(new GdiScreenCapture());
         _controller.Captured += OnCaptured;
+        _controller.Notice += ShowTrayWarning;
         _controller.History.Changed += SaveHistory;
 
         _pins.CopyRequested += CopyImage;
@@ -116,6 +117,7 @@ public partial class App : Application
         if (_controller is not null)
         {
             _controller.Defaults = _settings.ToCaptureDefaults();
+            _controller.ScrollOptions = _settings.ToScrollOptions();
             // 调小了就当场裁掉多余的那几条，不必等下一次截图
             _controller.History.Capacity = _settings.HistoryCapacity;
         }
@@ -356,6 +358,7 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        _controller?.AbortScroll();
         _hotkeys?.Dispose();
 
         if (_trayIcon is not null)

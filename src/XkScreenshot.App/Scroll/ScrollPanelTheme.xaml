@@ -1,0 +1,131 @@
+<!--
+  长截图控制面板的控件皮肤。
+
+  和设置界面那份不同，这里的颜色是写死的深色：面板浮在**实时**画面上（长截图期间
+  屏幕是活的，不是冻屏），底下什么内容都可能有，跟随系统浅色会在浅色壁纸上糊成一片。
+  覆盖层用深色也是同一个理由。
+
+  结构仍然在 ScrollPanelWindow.cs 里搭，这里只放控件模板。
+-->
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+  <SolidColorBrush x:Key="PanelBg" Color="#F2141820" />
+  <SolidColorBrush x:Key="PanelBorder" Color="#2EFFFFFF" />
+  <SolidColorBrush x:Key="PanelText" Color="#ECEFF3" />
+  <SolidColorBrush x:Key="PanelTextSecondary" Color="#B4BAC4" />
+  <SolidColorBrush x:Key="PanelTextMuted" Color="#7A8290" />
+  <SolidColorBrush x:Key="PanelAccent" Color="#3B9EFF" />
+  <SolidColorBrush x:Key="PanelWarn" Color="#FFC46B" />
+  <SolidColorBrush x:Key="PanelControlBg" Color="#1AFFFFFF" />
+  <SolidColorBrush x:Key="PanelControlHover" Color="#2EFFFFFF" />
+  <SolidColorBrush x:Key="PanelControlPressed" Color="#12FFFFFF" />
+  <SolidColorBrush x:Key="PanelPreviewBg" Color="#14000000" />
+
+  <!-- ================= 按钮 ================= -->
+
+  <Style x:Key="PanelButton" TargetType="{x:Type Button}">
+    <Setter Property="Height" Value="30" />
+    <Setter Property="Padding" Value="14,0,14,0" />
+    <Setter Property="Margin" Value="6,0,0,0" />
+    <Setter Property="Foreground" Value="{StaticResource PanelText}" />
+    <Setter Property="Cursor" Value="Hand" />
+    <Setter Property="SnapsToDevicePixels" Value="True" />
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="{x:Type Button}">
+          <Border x:Name="Bd"
+                  Background="{StaticResource PanelControlBg}"
+                  BorderBrush="{StaticResource PanelBorder}"
+                  BorderThickness="1"
+                  CornerRadius="5"
+                  SnapsToDevicePixels="True">
+            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                              Margin="{TemplateBinding Padding}" />
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+              <Setter TargetName="Bd" Property="Background" Value="{StaticResource PanelControlHover}" />
+            </Trigger>
+            <Trigger Property="IsPressed" Value="True">
+              <Setter TargetName="Bd" Property="Background" Value="{StaticResource PanelControlPressed}" />
+            </Trigger>
+            <Trigger Property="IsKeyboardFocused" Value="True">
+              <Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource PanelAccent}" />
+            </Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
+  <Style x:Key="PanelAccentButton" TargetType="{x:Type Button}" BasedOn="{StaticResource PanelButton}">
+    <Setter Property="FontWeight" Value="SemiBold" />
+    <Setter Property="Foreground" Value="White" />
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="{x:Type Button}">
+          <Border x:Name="Bd"
+                  Background="#CC3B9EFF"
+                  BorderBrush="#EE3B9EFF"
+                  BorderThickness="1"
+                  CornerRadius="5"
+                  SnapsToDevicePixels="True">
+            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                              Margin="{TemplateBinding Padding}" />
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+              <Setter TargetName="Bd" Property="Background" Value="#EE4FA9FF" />
+            </Trigger>
+            <Trigger Property="IsPressed" Value="True">
+              <Setter TargetName="Bd" Property="Background" Value="#CC2E86DB" />
+            </Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
+  <!-- ================= 自动 / 手动 ================= -->
+  <!--
+    做成两枚并排的胶囊而不是一个开关：这两项是并列的两种做法，不是「开」和「关」。
+    开关只能表达「自动模式：开/关」，而关掉自动之后到底是什么，用户得自己猜。
+  -->
+
+  <Style x:Key="ModeChip" TargetType="{x:Type RadioButton}">
+    <Setter Property="Height" Value="24" />
+    <Setter Property="Padding" Value="12,0,12,0" />
+    <Setter Property="Margin" Value="4,0,0,0" />
+    <Setter Property="FontSize" Value="12" />
+    <Setter Property="Foreground" Value="{StaticResource PanelTextSecondary}" />
+    <Setter Property="Cursor" Value="Hand" />
+    <Setter Property="SnapsToDevicePixels" Value="True" />
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="{x:Type RadioButton}">
+          <Border x:Name="Bd"
+                  Background="Transparent"
+                  BorderBrush="Transparent"
+                  BorderThickness="1"
+                  CornerRadius="12"
+                  SnapsToDevicePixels="True">
+            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                              Margin="{TemplateBinding Padding}" />
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+              <Setter TargetName="Bd" Property="Background" Value="{StaticResource PanelControlBg}" />
+            </Trigger>
+            <Trigger Property="IsChecked" Value="True">
+              <Setter TargetName="Bd" Property="Background" Value="#443B9EFF" />
+              <Setter TargetName="Bd" Property="BorderBrush" Value="#B03B9EFF" />
+              <Setter Property="Foreground" Value="#A8D4FF" />
+            </Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
+</ResourceDictionary>

@@ -11,6 +11,7 @@ using Microsoft.Win32;
 using XkScreenshot.App.Overlay;
 using XkScreenshot.App.Ui;
 using XkScreenshot.Core.Hotkeys;
+using XkScreenshot.Scroll;
 
 namespace XkScreenshot.App.Settings;
 
@@ -69,6 +70,8 @@ public sealed class SettingsWindow : Window
     private readonly TextBox _prefix = new() { Width = 200 };
     private readonly TextBox _historyCapacity = new() { Width = 64, MaxLength = 3 };
     private readonly ComboBox _defaultAction = new() { Width = 168 };
+    private readonly ComboBox _scrollMode = new() { Width = 168 };
+    private readonly TextBox _scrollMaxHeight = new() { Width = 72, MaxLength = 5 };
     private readonly ToggleButton _saveWithoutPrompt = new();
     private readonly ToggleButton _showHints = new();
     private readonly ToggleButton _elementMode = new();
@@ -129,7 +132,19 @@ public sealed class SettingsWindow : Window
             }
         };
 
+        _scrollMaxHeight.PreviewTextInput += (_, e) =>
+        {
+            foreach (char c in e.Text)
+            {
+                if (char.IsAsciiDigit(c)) continue;
+                e.Handled = true;
+                return;
+            }
+        };
+
         foreach (var (_, label) in Actions) _defaultAction.Items.Add(label);
+        _scrollMode.Items.Add("自动（推荐）");
+        _scrollMode.Items.Add("手动");
         foreach (var toggle in new[] { _saveWithoutPrompt, _showHints, _elementMode, _runAtStartup })
             toggle.Style = (Style)FindResource("ToggleSwitch");
 
@@ -249,6 +264,13 @@ public sealed class SettingsWindow : Window
             Card(Icons.History, "记住多少条截屏历史",
                 "截图中按「,」「.」回溯当时的整屏画面与选区，每条约 1 MB。0 = 关闭。",
                 Line(_historyCapacity, Suffix("条"))));
+
+        AddPage(Icons.Scroll, "长截图",
+            Card(Icons.Scroll, "默认滚动方式",
+                "自动：程序帮你滚，光标别动就好；手动：你自己滚，滚到哪儿拼到哪儿。", _scrollMode),
+            Card(Icons.Save, "最大高度",
+                "拼到这么高就停，免得内存爆掉。超长网页提高它之前先想想是不是真要那么长。",
+                Line(_scrollMaxHeight, Suffix("像素（1000–60000）"))));
 
         AddPage(Icons.Folder, "保存",
             StackedCard(Icons.Folder, "默认目录",
@@ -597,6 +619,9 @@ public sealed class SettingsWindow : Window
         _runAtStartup.IsChecked = s.RunAtStartup;
         _historyCapacity.Text = s.HistoryCapacity.ToString(CultureInfo.InvariantCulture);
 
+        _scrollMode.SelectedIndex = s.ScrollMode == ScrollMode.Auto ? 0 : 1;
+        _scrollMaxHeight.Text = s.ScrollMaxHeight.ToString(CultureInfo.InvariantCulture);
+
         int index = Array.FindIndex(Actions, a => a.Action == s.DefaultAction);
         _defaultAction.SelectedIndex = index < 0 ? 0 : index;
     }
@@ -641,6 +666,11 @@ public sealed class SettingsWindow : Window
             _historyCapacity.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out int capacity)
             ? Math.Clamp(capacity, 0, CaptureHistory.MaxCapacity)
             : CaptureHistory.DefaultCapacity;
+
+        _draft.ScrollMode = _scrollMode.SelectedIndex == 1 ? ScrollMode.Manual : ScrollMode.Auto;
+        _draft.ScrollMaxHeight = int.TryParse(
+            _scrollMaxHeight.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out int maxHeight)
+            ? Math.Clamp(maxHeight, 1000, 60000) : ScrollOptions.Standard.MaxHeight;
 
         Result = _draft;
         Close();

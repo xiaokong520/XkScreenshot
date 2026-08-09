@@ -22,6 +22,7 @@
     <ProjectReference Include="..\XkScreenshot.Capture\XkScreenshot.Capture.csproj" />
     <ProjectReference Include="..\XkScreenshot.Pin\XkScreenshot.Pin.csproj" />
     <ProjectReference Include="..\XkScreenshot.Annotate\XkScreenshot.Annotate.csproj" />
+    <ProjectReference Include="..\XkScreenshot.Scroll\XkScreenshot.Scroll.csproj" />
   </ItemGroup>
 
 </Project>

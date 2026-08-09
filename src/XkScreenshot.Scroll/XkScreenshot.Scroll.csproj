@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>XkScreenshot.Scroll</RootNamespace>
+    <!-- 只为最后出图那一下用 BitmapSource；拼接全程走裸 byte[]，不碰 WPF 的任何东西，
+         所以整个拼接内核可以在后台线程上跑 -->
+    <UseWPF>true</UseWPF>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\XkScreenshot.Core\XkScreenshot.Core.csproj" />
+  </ItemGroup>
+
+</Project>

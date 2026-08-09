@@ -21,6 +21,8 @@ public enum ToolbarCommand
     Copy,
     Save,
     Cancel,
+    /// <summary>从当前选区开始长截图。</summary>
+    Scroll,
 }
 
 /// <summary>工具条上的一个按钮：要么切换标注工具，要么触发一次命令。</summary>
@@ -88,6 +90,7 @@ public sealed class ToolbarLayer : FrameworkElement
         new(Icons.Trash, "删除选中的标注  Delete", ToolKind.None, ToolbarCommand.Delete),
         new(Icons.Undo, "撤销  Ctrl+Z", ToolKind.None, ToolbarCommand.Undo),
         new(Icons.Redo, "重做  Ctrl+Y", ToolKind.None, ToolbarCommand.Redo),
+        new(Icons.Scroll, "长截图  L", ToolKind.None, ToolbarCommand.Scroll),
         new(Icons.Pin, "贴图  Ctrl+T", ToolKind.None, ToolbarCommand.Pin),
         new(Icons.Close, "取消  Esc", ToolKind.None, ToolbarCommand.Cancel),
         // 保存和复制这两个「拿走成品」的动作排在最右：一条工具条从左看到右，
