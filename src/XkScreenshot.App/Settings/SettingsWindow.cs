@@ -93,6 +93,22 @@ public sealed class SettingsWindow : Window
     private readonly TextBox _modelsDir = new();
     private readonly TextBlock _paddleStatus = new();
     private readonly StackPanel _langPairsPanel = new();
+    private readonly ProgressBar _dlProgress = new()
+    {
+        Height = 4,
+        Minimum = 0,
+        Maximum = 100,
+        Value = 0,
+        Visibility = Visibility.Collapsed,
+    };
+    private readonly ProgressBar _langPairProgress = new()
+    {
+        Height = 4,
+        Minimum = 0,
+        Maximum = 100,
+        Value = 0,
+        Visibility = Visibility.Collapsed,
+    };
 
     private readonly StackPanel _nav = new();
     private readonly ContentControl _pageHost = new();
@@ -315,10 +331,10 @@ public sealed class SettingsWindow : Window
                 Fill(_modelsDir, Button("浏览…", BrowseModelsDir))),
             Card(Icons.Scroll, "PaddleOCR 模型",
                 "检测 + 识别 + 字典，共约 17 MB。",
-                Line(_paddleStatus, Button("下载", DownloadPaddleOcr))),
+                PaddleOcrRow()),
             Card(Icons.Languages, "离线翻译语言对",
                 "每个语言对约 50 MB。默认内置中↔英互译。已下载的语言对：",
-                _langPairsPanel));
+                LangPairRow()));
 
         AddPage(Icons.Folder, "保存",
             StackedCard(Icons.Folder, "默认目录",
@@ -739,40 +755,88 @@ public sealed class SettingsWindow : Window
         string targetDir = Path.Combine(root, "paddleocr");
         Directory.CreateDirectory(targetDir);
 
-        _paddleStatus.Text = "下载中…";
+        _dlProgress.Visibility = Visibility.Visible;
+        _dlProgress.Value = 0;
+        var progress = new Progress<int>(p => _dlProgress.Value = p);
 
         try
         {
             using var http = new HttpClient();
             // PaddleOCR ONNX 模型来自 HuggingFace SWHL/RapidOCR
+            _paddleStatus.Text = "下载中… det.onnx";
             await DownloadFile(http,
                 "https://huggingface.co/SWHL/RapidOCR/resolve/main/PP-OCRv4/ch_PP-OCRv4_det_infer.onnx",
-                Path.Combine(targetDir, "det.onnx"));
+                Path.Combine(targetDir, "det.onnx"), progress);
+            _paddleStatus.Text = "下载中… rec.onnx";
             await DownloadFile(http,
                 "https://huggingface.co/SWHL/RapidOCR/resolve/main/PP-OCRv4/ch_PP-OCRv4_rec_infer.onnx",
-                Path.Combine(targetDir, "rec.onnx"));
+                Path.Combine(targetDir, "rec.onnx"), progress);
+            _paddleStatus.Text = "下载中… cls.onnx";
             await DownloadFile(http,
                 "https://huggingface.co/SWHL/RapidOCR/resolve/main/PP-OCRv3/ch_ppocr_mobile_v2.0_cls_train.onnx",
-                Path.Combine(targetDir, "cls.onnx"));
+                Path.Combine(targetDir, "cls.onnx"), progress);
+            _paddleStatus.Text = "下载中… dict.txt";
             await DownloadFile(http,
                 "https://raw.githubusercontent.com/PaddlePaddle/PaddleOCR/release/2.7/ppocr/utils/ppocr_keys_v1.txt",
-                Path.Combine(targetDir, "dict.txt"));
+                Path.Combine(targetDir, "dict.txt"), progress);
             _paddleStatus.Text = "已安装 ✓";
+            _dlProgress.Visibility = Visibility.Collapsed;
             MessageBox.Show(this, "PaddleOCR 模型下载完成。", "XkScreenshot",
                 MessageBoxButton.OK, MessageBoxImage.Information);
         }
         catch (Exception ex)
         {
             _paddleStatus.Text = "下载失败";
+            _dlProgress.Visibility = Visibility.Collapsed;
             MessageBox.Show(this, "下载失败：" + ex.Message, "XkScreenshot",
                 MessageBoxButton.OK, MessageBoxImage.Warning);
         }
     }
 
-    private static async Task DownloadFile(HttpClient http, string url, string path)
+    private UIElement PaddleOcrRow()
     {
-        var bytes = await http.GetByteArrayAsync(url);
-        await File.WriteAllBytesAsync(path, bytes);
+        var stack = new StackPanel();
+        stack.Children.Add(Line(_paddleStatus, Button("下载", DownloadPaddleOcr)));
+        stack.Children.Add(_dlProgress);
+        return stack;
+    }
+
+    private UIElement LangPairRow()
+    {
+        var stack = new StackPanel();
+        stack.Children.Add(_langPairsPanel);
+        stack.Children.Add(_langPairProgress);
+        return stack;
+    }
+
+    private static async Task DownloadFile(HttpClient http, string url, string path,
+        IProgress<int>? progress = null)
+    {
+        using var response = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
+        response.EnsureSuccessStatusCode();
+
+        long total = response.Content.Headers.ContentLength ?? -1;
+        using var src = await response.Content.ReadAsStreamAsync();
+        using var dst = File.Create(path);
+
+        if (total > 0 && progress is not null)
+        {
+            var buf = new byte[8192];
+            long read = 0;
+            int n;
+            while ((n = await src.ReadAsync(buf)) > 0)
+            {
+                await dst.WriteAsync(buf.AsMemory(0, n));
+                read += n;
+                progress.Report((int)(read * 100 / total));
+            }
+        }
+        else
+        {
+            await src.CopyToAsync(dst);
+        }
+
+        progress?.Report(100);
     }
 
     private void RefreshLangPairs()
@@ -817,30 +881,40 @@ public sealed class SettingsWindow : Window
         string pairDir = Path.Combine(ResolveCurrentModelsDir(), "opus-mt", $"{from}-{to}");
         Directory.CreateDirectory(pairDir);
 
+        _langPairProgress.Visibility = Visibility.Visible;
+        _langPairProgress.Value = 0;
+        var progress = new Progress<int>(p => _langPairProgress.Value = p);
+
         try
         {
             using var http = new HttpClient();
-            // onnx-community 提供了 Helsinki-NLP 模型的 ONNX 转换版
-            string baseUrl = "https://huggingface.co/onnx-community/resolve/main";
             string modelName = $"opus-mt-{from}-{to}";
+            // en→zh 在 onnx-community，zh→en 在 Xenova
+            string org = (from == "zh") ? "Xenova" : "onnx-community";
+            string baseUrl = $"https://huggingface.co/{org}/{modelName}/resolve/main";
+
+            // ONNX 模型在 onnx/ 子目录，tokenizer 在根目录
             await DownloadFile(http,
-                $"{baseUrl}/{modelName}/onnx/encoder_model.onnx",
-                Path.Combine(pairDir, "encoder_model.onnx"));
+                $"{baseUrl}/onnx/encoder_model.onnx",
+                Path.Combine(pairDir, "encoder_model.onnx"), progress);
             await DownloadFile(http,
-                $"{baseUrl}/{modelName}/onnx/decoder_model.onnx",
-                Path.Combine(pairDir, "decoder_model.onnx"));
+                $"{baseUrl}/onnx/decoder_model.onnx",
+                Path.Combine(pairDir, "decoder_model.onnx"), progress);
             await DownloadFile(http,
-                $"{baseUrl}/{modelName}/onnx/source.spm",
-                Path.Combine(pairDir, "source.spm"));
+                $"{baseUrl}/source.spm",
+                Path.Combine(pairDir, "source.spm"), progress);
             await DownloadFile(http,
-                $"{baseUrl}/{modelName}/onnx/target.spm",
-                Path.Combine(pairDir, "target.spm"));
+                $"{baseUrl}/target.spm",
+                Path.Combine(pairDir, "target.spm"), progress);
+
+            _langPairProgress.Visibility = Visibility.Collapsed;
             RefreshLangPairs();
             MessageBox.Show(this, $"{from}→{to} 翻译模型下载完成。", "XkScreenshot",
                 MessageBoxButton.OK, MessageBoxImage.Information);
         }
         catch (Exception ex)
         {
+            _langPairProgress.Visibility = Visibility.Collapsed;
             MessageBox.Show(this, "下载失败：" + ex.Message, "XkScreenshot",
                 MessageBoxButton.OK, MessageBoxImage.Warning);
         }
