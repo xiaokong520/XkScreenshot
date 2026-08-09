@@ -291,6 +291,9 @@ public sealed class CaptureSession : IDisposable
     /// <summary>用户放弃了本次截图。</summary>
     public event Action? Cancelled;
 
+    /// <summary>用户请求从当前选区开始长截图。参数是选区在虚拟屏幕上的物理像素坐标。</summary>
+    public event Action<PixelRect>? ScrollRequested;
+
     public void UpdateCursor(PixelPoint cursor)
     {
         Cursor = cursor;
@@ -1165,6 +1168,17 @@ public sealed class CaptureSession : IDisposable
         if (Selection.IsEmpty) return;
         FlushStyleEdit();
         Confirmed?.Invoke(new CaptureResult(RenderResult(), Selection, action ?? DefaultAction));
+    }
+
+    /// <summary>
+    /// 启动长截图。选区为空时什么都不做 —— 没选区就没有目标窗口，
+    /// 滚轮不知道往哪儿发，拍出来的也不知道是哪一块。
+    /// </summary>
+    public void RequestScroll()
+    {
+        if (Selection.IsEmpty) return;
+        FlushStyleEdit();
+        ScrollRequested?.Invoke(Selection);
     }
 
     /// <summary>

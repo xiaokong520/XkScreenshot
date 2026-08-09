@@ -22,6 +22,40 @@ public static class NativeMethods
     [DllImport("user32.dll")]
     public static extern bool SetCursorPos(int x, int y);
 
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern uint SendInput(uint nInputs, INPUT[] inputs, int cbSize);
+
+    /// <summary>SendInput 的鼠标输入。</summary>
+    public const uint INPUT_MOUSE = 0;
+
+    public const uint MOUSEEVENTF_WHEEL = 0x0800;
+
+    /// <summary>滚轮一格。SendInput 的 mouseData 用它的整数倍，负数是往下滚。</summary>
+    public const int WHEEL_DELTA = 120;
+
+    /// <summary>
+    /// 把某个窗口排除在截屏之外。长截图的控制面板与区域边框都设它 ——
+    /// 抓帧走的是屏幕 DC，面板压在目标区域上就会被拍进去。
+    /// Win10 2004（19041）起才有 WDA_EXCLUDEFROMCAPTURE，更早的系统上调用会失败，
+    /// 那时只能靠把面板摆到区域外面躲开。
+    /// </summary>
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool SetWindowDisplayAffinity(IntPtr hWnd, uint dwAffinity);
+
+    public const uint WDA_NONE = 0x00000000;
+    public const uint WDA_EXCLUDEFROMCAPTURE = 0x00000011;
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr WindowFromPoint(POINT point);
+
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")]
+    public static extern IntPtr GetWindowLongPtr(IntPtr hWnd, int index);
+
+    [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW")]
+    public static extern IntPtr SetWindowLongPtr(IntPtr hWnd, int index, IntPtr value);
+
+    public const int GWL_EXSTYLE = -20;
+
     [DllImport("user32.dll")]
     public static extern bool EnumWindows(EnumWindowsProc callback, IntPtr lParam);
 
@@ -74,6 +108,9 @@ public static class NativeMethods
     /// <summary>置顶带。贴图的右键菜单用它：贴图自己是 TopMost，菜单不加这个会被压在底下。</summary>
     public const int WS_EX_TOPMOST = 0x00000008;
 
+    /// <summary>鼠标穿透。长截图那圈区域边框用它 —— 它盖在目标窗口上，绝不能挡住点击。</summary>
+    public const int WS_EX_TRANSPARENT = 0x00000020;
+
     /// <summary>
     /// 分层窗口。贴图用它：内容走 UpdateLayeredWindow 整幅送上去，DWM 原子合成，
     /// 几何和画面在同一帧到位，缩放不会闪（见 PinForm 类注释）。
@@ -85,6 +122,7 @@ public static class NativeMethods
     public static readonly IntPtr HWND_TOPMOST = new(-1);
     public const uint SWP_NOACTIVATE = 0x0010;
     public const uint SWP_SHOWWINDOW = 0x0040;
+    public const uint SWP_NOZORDER = 0x0004;
 
     public const int WM_HOTKEY = 0x0312;
 

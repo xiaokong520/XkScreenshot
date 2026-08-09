@@ -5,6 +5,7 @@ using System.Text.Json.Serialization;
 using XkScreenshot.App.Overlay;
 using XkScreenshot.Core.Hotkeys;
 using XkScreenshot.Core.Native;
+using XkScreenshot.Scroll;
 
 namespace XkScreenshot.App.Settings;
 
@@ -56,6 +57,14 @@ public sealed class AppSettings
     /// <summary>回溯截屏历史缓存多少条。每条含一张整屏画面，0 = 关掉。</summary>
     public int HistoryCapacity { get; set; } = CaptureHistory.DefaultCapacity;
 
+    // ---------------- 长截图 ----------------
+
+    /// <summary>长截图默认滚动方式：自动（程序发滚轮）或手动（用户自己滚）。</summary>
+    public ScrollMode ScrollMode { get; set; } = ScrollOptions.Standard.Mode;
+
+    /// <summary>长截图最大高度（像素），防内存爆掉。</summary>
+    public int ScrollMaxHeight { get; set; } = ScrollOptions.Standard.MaxHeight;
+
     public bool RunAtStartup { get; set; }
 
     /// <summary>实际写文件的目录。设置里留空就用系统「图片」文件夹。</summary>
@@ -80,6 +89,9 @@ public sealed class AppSettings
 
     /// <summary>会话起手用的那三项。</summary>
     public CaptureDefaults ToCaptureDefaults() => new(DefaultAction, ShowHints, ElementMode);
+
+    /// <summary>长截图起手用的参数。Sanitized 会把越界的值拉回来。</summary>
+    public ScrollOptions ToScrollOptions() => new(ScrollMode, 1, ScrollMaxHeight);
 
     /// <summary>给设置界面改着玩的副本。字段全是不可变类型，浅拷贝就够。</summary>
     public AppSettings Clone() => (AppSettings)MemberwiseClone();

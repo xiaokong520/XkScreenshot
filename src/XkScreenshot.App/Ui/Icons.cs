@@ -133,6 +133,10 @@ public static class Icons
         ellipses: [(12, 13, 3, 3)],
         paths: ["M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"]);
 
+    /// <summary>长截图：箭头朝下，底边一道横线表示「拼到底」。</summary>
+    public static readonly Geometry Scroll = Build(
+        paths: ["M12 2v14", "m7 11 5 5 5-5", "M5 21h14"]);
+
     private static readonly Dictionary<Brush, Pen> PenCache = [];
 
     /// <summary>

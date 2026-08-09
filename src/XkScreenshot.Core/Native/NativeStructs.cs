@@ -22,6 +22,31 @@ public struct SIZE
     public int cx, cy;
 }
 
+/// <summary>SendInput 的鼠标事件。滚轮的格数放在 mouseData 里（一格 = WHEEL_DELTA）。</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct MOUSEINPUT
+{
+    public int dx;
+    public int dy;
+    public uint mouseData;
+    public uint dwFlags;
+    public uint time;
+    public IntPtr dwExtraInfo;
+}
+
+/// <summary>
+/// SendInput 的输入项。原生结构里跟在 type 后面的是一个联合体（鼠标/键盘/硬件），
+/// 这里只声明最大的那个成员（鼠标）—— 本项目只发滚轮，其余两种用不上，
+/// 而联合体的整体大小由最大成员决定，所以布局和 cbSize 都是对的。
+/// 仅限 x64：本解决方案 Platforms 就只有 x64。
+/// </summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct INPUT
+{
+    public uint type;
+    public MOUSEINPUT mi;
+}
+
 /// <summary>UpdateLayeredWindow 用的混合参数。四个字节，顺序不能错。</summary>
 [StructLayout(LayoutKind.Sequential)]
 public struct BLENDFUNCTION
