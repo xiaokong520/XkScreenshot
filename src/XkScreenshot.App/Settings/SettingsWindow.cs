@@ -101,7 +101,7 @@ public sealed class SettingsWindow : Window
         // 定高而不是随内容伸缩：切换分类时窗口跟着一页一页地变高变矮，比任何滚动条都晃眼。
         // 这个高度要能装下最长的那一页（此刻是「截图」的四张卡）—— 定高的意义在于不用滚，
         // 装不下就退化成「既不能自适应、又还是要滚」，两头都不讨好。加分类时记得重新对一下。
-        Height = Math.Min(540, Math.Max(360, SystemParameters.WorkArea.Height - 80));
+        Height = Math.Min(620, Math.Max(360, SystemParameters.WorkArea.Height - 80));
         ResizeMode = ResizeMode.NoResize;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         // 托盘程序没有主窗口，设置窗被别的窗口盖住之后，任务栏是唯一能把它找回来的地方
@@ -143,7 +143,7 @@ public sealed class SettingsWindow : Window
         };
 
         foreach (var (_, label) in Actions) _defaultAction.Items.Add(label);
-        _scrollMode.Items.Add("自动（推荐）");
+        _scrollMode.Items.Add("自动");
         _scrollMode.Items.Add("手动");
         foreach (var toggle in new[] { _saveWithoutPrompt, _showHints, _elementMode, _runAtStartup })
             toggle.Style = (Style)FindResource("ToggleSwitch");
@@ -263,12 +263,10 @@ public sealed class SettingsWindow : Window
                 "截图中按 Tab 在整窗与控件级之间切换。", _elementMode),
             Card(Icons.History, "记住多少条截屏历史",
                 "截图中按「,」「.」回溯当时的整屏画面与选区，每条约 1 MB。0 = 关闭。",
-                Line(_historyCapacity, Suffix("条"))));
-
-        AddPage(Icons.Scroll, "长截图",
-            Card(Icons.Scroll, "默认滚动方式",
+                Line(_historyCapacity, Suffix("条"))),
+            Card(Icons.Scroll, "长截图滚动方式",
                 "自动：程序帮你滚，光标别动就好；手动：你自己滚，滚到哪儿拼到哪儿。", _scrollMode),
-            Card(Icons.Save, "最大高度",
+            Card(Icons.Save, "长截图最大高度",
                 "拼到这么高就停，免得内存爆掉。超长网页提高它之前先想想是不是真要那么长。",
                 Line(_scrollMaxHeight, Suffix("像素（1000–60000）"))));
 
