@@ -594,6 +594,8 @@ public sealed class OverlayWindow : Window
             case ToolbarCommand.Copy: _session.Confirm(CaptureAction.Copy); break;
             case ToolbarCommand.Save: _session.Confirm(CaptureAction.Save); break;
             case ToolbarCommand.Scroll: _session.RequestScroll(); break;
+            case ToolbarCommand.Ocr: _session.Confirm(CaptureAction.Ocr); break;
+            case ToolbarCommand.Translate: _session.Confirm(CaptureAction.Translate); break;
             case ToolbarCommand.Cancel: _session.Escape(); break;
         }
     }
@@ -820,6 +822,14 @@ public sealed class OverlayWindow : Window
 
             case Key.L:
                 _session.RequestScroll();
+                break;
+
+            case Key.O:
+                _session.Confirm(CaptureAction.Ocr);
+                break;
+
+            case Key.G:
+                _session.Confirm(CaptureAction.Translate);
                 break;
 
             // 回溯截屏区域历史。挑 , . 是因为它俩在这套覆盖层里还没人用，

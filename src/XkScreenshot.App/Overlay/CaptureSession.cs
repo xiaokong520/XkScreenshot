@@ -26,6 +26,10 @@ public enum CaptureAction
     Copy,
     Pin,
     Save,
+    /// <summary>截图后直接跑 OCR，结果弹出独立窗口。</summary>
+    Ocr,
+    /// <summary>截图后 OCR + 翻译，译文弹出独立窗口。</summary>
+    Translate,
 }
 
 /// <summary>一次截图的成品：已烧好标注的位图，以及它在屏幕上的原始位置（贴图要用）。</summary>

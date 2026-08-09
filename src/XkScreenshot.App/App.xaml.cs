@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Media.Imaging;
 using XkScreenshot.Core.Geometry;
@@ -13,7 +14,10 @@ using XkScreenshot.App.Settings;
 using XkScreenshot.Capture;
 using XkScreenshot.Pin;
 using XkScreenshot.Core.Hotkeys;
+using XkScreenshot.Core.Llm;
 using XkScreenshot.Core.Native;
+using XkScreenshot.Ocr;
+using XkScreenshot.Translate;
 using WinForms = System.Windows.Forms;
 
 namespace XkScreenshot.App;
@@ -36,6 +40,10 @@ public partial class App : Application
     private SettingsWindow? _settingsWindow;
     private AppSettings _settings = new();
     private BitmapSource? _lastCapture;
+    private IOcrEngine? _ocrEngine;
+    private ITranslator? _translator;
+    private TranslationCache? _translationCache;
+    private LlmApiClient? _llmClient;
 
     /// <summary>上一次截图的原始位置。F3 贴图若贴的正是这一张，回到原位而不是落在光标下。</summary>
     private PixelRect _lastCaptureBounds;
@@ -65,6 +73,9 @@ public partial class App : Application
 
         _pins.CopyRequested += CopyImage;
         _pins.SaveRequested += SaveImage;
+
+        CreateEngines();
+        _translationCache = new TranslationCache();
 
         _hotkeys = new HotkeyManager();
         _hotkeys.Pressed += OnHotkeyPressed;
@@ -121,6 +132,9 @@ public partial class App : Application
             // 调小了就当场裁掉多余的那几条，不必等下一次截图
             _controller.History.Capacity = _settings.HistoryCapacity;
         }
+
+        CreateEngines();
+        _translationCache?.Clear();
 
         // 注册失败必须说出来。RegisterHotKey 失败是静默的，
         // 不提示的话用户只会感知到「按了没反应」，然后放弃这个软件。
@@ -297,13 +311,166 @@ public partial class App : Application
         window.Activate();
     }
 
-    private void OnCaptured(CaptureResult result)
+    private void CreateEngines()
+    {
+        string modelRoot = _settings.ResolveModelsDirectory();
+        string paddleOcrDir = System.IO.Path.Combine(modelRoot, "paddleocr");
+        string opusMtDir = System.IO.Path.Combine(modelRoot, "opus-mt");
+
+        // OCR engine
+        (_ocrEngine as IDisposable)?.Dispose();
+        if (_settings.Recognition.Mode == OcrMode.Online)
+        {
+            var config = new LlmApiConfig(
+                _settings.Translation.ApiProtocol == ApiProtocolSetting.Anthropic
+                    ? ApiProtocol.Anthropic : ApiProtocol.OpenAI,
+                _settings.Translation.ApiBase,
+                _settings.Translation.ApiKey,
+                _settings.Translation.Model);
+            _llmClient = new LlmApiClient();
+            _ocrEngine = new LLMOcrEngine(_llmClient, config);
+        }
+        else
+        {
+            if (System.IO.Directory.Exists(paddleOcrDir))
+            {
+                try
+                {
+                    _ocrEngine = new PaddleOcrEngine(paddleOcrDir);
+                }
+                catch (Exception ex)
+                {
+                    ShowTrayWarning("PaddleOCR 初始化失败：" + ex.Message);
+                }
+            }
+        }
+
+        // Translation engine
+        (_translator as IDisposable)?.Dispose();
+        if (_settings.Translation.Mode == OcrMode.Online)
+        {
+            _llmClient ??= new LlmApiClient();
+            var config = new LlmApiConfig(
+                _settings.Translation.ApiProtocol == ApiProtocolSetting.Anthropic
+                    ? ApiProtocol.Anthropic : ApiProtocol.OpenAI,
+                _settings.Translation.ApiBase,
+                _settings.Translation.ApiKey,
+                _settings.Translation.Model);
+            _translator = new LLMTranslator(_llmClient, config);
+        }
+        else
+        {
+            if (System.IO.Directory.Exists(opusMtDir) && _settings.Translation.OfflinePairs.Count > 0)
+            {
+                try
+                {
+                    _translator = new OpusMtTranslator(opusMtDir,
+                        _settings.Translation.OfflinePairs.Select(p => (p.From, p.To)));
+                }
+                catch
+                {
+                    // 模型文件缺失，translator 保持 null
+                }
+            }
+        }
+    }
+
+    private async Task RunOcrAsync(BitmapSource image)
+    {
+        if (_ocrEngine is null)
+        {
+            ShowTrayWarning("OCR 引擎未就绪。请检查模型文件或在线 API 配置。");
+            return;
+        }
+
+        var window = new OcrResultWindow(image, "文字识别结果");
+        window.Show();
+
+        try
+        {
+            var lines = await _ocrEngine.RecognizeAsync(image);
+            var text = string.Join(Environment.NewLine, lines.Select(l => l.Text));
+
+            string? rawText = _ocrEngine is LLMOcrEngine llm ? llm.LastRawResponse : null;
+            window.ShowResult(text, rawText);
+        }
+        catch (Exception ex)
+        {
+            window.Close();
+            ShowTrayWarning("OCR 失败：" + ex.Message);
+        }
+    }
+
+    private async Task RunTranslateAsync(BitmapSource image)
+    {
+        if (_ocrEngine is null)
+        {
+            ShowTrayWarning("OCR 引擎未就绪。");
+            return;
+        }
+        if (_translator is null)
+        {
+            ShowTrayWarning("翻译引擎未就绪。请检查模型文件或在线 API 配置。");
+            return;
+        }
+
+        var window = new OcrResultWindow(image, "翻译结果");
+        window.Show();
+
+        try
+        {
+            // 第一阶段：OCR
+            window.ShowLoading("识别中...");
+            var lines = await _ocrEngine.RecognizeAsync(image);
+            var sourceText = string.Join(Environment.NewLine, lines.Select(l => l.Text));
+
+            // 第二阶段：翻译
+            window.ShowLoading("翻译中...");
+
+            var cached = _translationCache?.Get(sourceText,
+                _settings.Translation.SourceLanguage, _settings.Translation.TargetLanguage);
+
+            string translated;
+            if (cached is not null)
+            {
+                translated = cached;
+            }
+            else
+            {
+                translated = await _translator.TranslateAsync(
+                    sourceText,
+                    _settings.Translation.SourceLanguage,
+                    _settings.Translation.TargetLanguage);
+
+                _translationCache?.Set(sourceText,
+                    _settings.Translation.SourceLanguage, _settings.Translation.TargetLanguage,
+                    translated);
+            }
+
+            window.ShowResult(translated);
+        }
+        catch (Exception ex)
+        {
+            window.Close();
+            ShowTrayWarning("翻译失败：" + ex.Message);
+        }
+    }
+
+    private async void OnCaptured(CaptureResult result)
     {
         _lastCapture = result.Image;
         _lastCaptureBounds = result.Bounds;
 
         switch (result.Action)
         {
+            case CaptureAction.Ocr:
+                await RunOcrAsync(result.Image);
+                break;
+
+            case CaptureAction.Translate:
+                await RunTranslateAsync(result.Image);
+                break;
+
             case CaptureAction.Pin:
                 _pins.Create(result.Image, result.Bounds);
                 break;
@@ -359,6 +526,9 @@ public partial class App : Application
     protected override void OnExit(ExitEventArgs e)
     {
         _controller?.AbortScroll();
+        (_ocrEngine as IDisposable)?.Dispose();
+        (_translator as IDisposable)?.Dispose();
+        _llmClient?.Dispose();
         _hotkeys?.Dispose();
 
         if (_trayIcon is not null)
