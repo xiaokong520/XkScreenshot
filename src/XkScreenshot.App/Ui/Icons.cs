@@ -137,6 +137,17 @@ public static class Icons
     public static readonly Geometry Scroll = Build(
         paths: ["M12 2v14", "m7 11 5 5 5-5", "M5 21h14"]);
 
+    /// <summary>文字识别 —— 扫描线 + 文本。</summary>
+    public static readonly Geometry ScanLine = Build(
+        paths: ["M3 7V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v2",
+                "M3 17v2a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-2",
+                "M7 12h10"]);
+
+    /// <summary>翻译 —— 切换语言。</summary>
+    public static readonly Geometry Languages = Build(
+        paths: ["m5 8 3 7 3-7", "M11 12H7", "M16 8v7",
+                "m16 8 3 4 3-4", "M19 8h-6"]);
+
     private static readonly Dictionary<Brush, Pen> PenCache = [];
 
     /// <summary>

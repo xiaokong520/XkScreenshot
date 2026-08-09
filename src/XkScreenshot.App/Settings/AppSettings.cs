@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -67,6 +68,14 @@ public sealed class AppSettings
 
     public bool RunAtStartup { get; set; }
 
+    // ---------------- 文字识别与翻译 ----------------
+
+    /// <summary>离线模型存放目录。留空 = 软件根目录下的 models/。</summary>
+    public string ModelsDirectory { get; set; } = string.Empty;
+
+    public RecognitionSettings Recognition { get; set; } = new();
+    public TranslationSettings Translation { get; set; } = new();
+
     /// <summary>实际写文件的目录。设置里留空就用系统「图片」文件夹。</summary>
     public string ResolveSaveDirectory()
         => string.IsNullOrWhiteSpace(SaveDirectory)
@@ -93,8 +102,63 @@ public sealed class AppSettings
     /// <summary>长截图起手用的参数。Sanitized 会把越界的值拉回来。</summary>
     public ScrollOptions ToScrollOptions() => new(ScrollMode, 1, ScrollMaxHeight);
 
-    /// <summary>给设置界面改着玩的副本。字段全是不可变类型，浅拷贝就够。</summary>
-    public AppSettings Clone() => (AppSettings)MemberwiseClone();
+    /// <summary>找模型文件的实际目录。开发阶段往上走到 sln 根目录。</summary>
+    public string ResolveModelsDirectory()
+    {
+        if (!string.IsNullOrWhiteSpace(ModelsDirectory))
+            return ModelsDirectory;
+
+        string baseDir = AppContext.BaseDirectory;
+        var dir = new System.IO.DirectoryInfo(baseDir);
+        while (dir is not null && !System.IO.File.Exists(System.IO.Path.Combine(dir.FullName, "XkScreenshot.sln")))
+            dir = dir.Parent;
+        return System.IO.Path.Combine(dir?.FullName ?? baseDir, "models");
+    }
+
+    /// <summary>给设置界面改着玩的副本。引用类型字段也要逐层克隆。</summary>
+    public AppSettings Clone()
+    {
+        var c = (AppSettings)MemberwiseClone();
+        c.Recognition = new RecognitionSettings { Mode = Recognition.Mode };
+        c.Translation = new TranslationSettings
+        {
+            Mode = Translation.Mode,
+            ApiProtocol = Translation.ApiProtocol,
+            ApiBase = Translation.ApiBase,
+            ApiKey = Translation.ApiKey,
+            Model = Translation.Model,
+            SourceLanguage = Translation.SourceLanguage,
+            TargetLanguage = Translation.TargetLanguage,
+            OfflinePairs = [..Translation.OfflinePairs],
+        };
+        return c;
+    }
+}
+
+// ---------------- 文字识别与翻译设置类型 ----------------
+
+public enum OcrMode { Offline, Online }
+
+public sealed class RecognitionSettings
+{
+    public OcrMode Mode { get; set; } = OcrMode.Offline;
+}
+
+public enum ApiProtocolSetting { OpenAI, Anthropic }
+
+/// <summary>一个离线翻译语言对，如 en→zh。</summary>
+public sealed record LanguagePair(string From, string To);
+
+public sealed class TranslationSettings
+{
+    public OcrMode Mode { get; set; } = OcrMode.Offline;
+    public ApiProtocolSetting ApiProtocol { get; set; } = ApiProtocolSetting.Anthropic;
+    public string ApiBase { get; set; } = string.Empty;
+    public string ApiKey { get; set; } = string.Empty;
+    public string Model { get; set; } = string.Empty;
+    public string SourceLanguage { get; set; } = "auto";
+    public string TargetLanguage { get; set; } = "zh-CN";
+    public List<LanguagePair> OfflinePairs { get; set; } = [new("en", "zh"), new("zh", "en")];
 }
 
 /// <summary>

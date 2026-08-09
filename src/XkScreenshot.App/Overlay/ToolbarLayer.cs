@@ -23,6 +23,10 @@ public enum ToolbarCommand
     Cancel,
     /// <summary>从当前选区开始长截图。</summary>
     Scroll,
+    /// <summary>识别选区内的文字。</summary>
+    Ocr,
+    /// <summary>识别并翻译选区内的文字。</summary>
+    Translate,
 }
 
 /// <summary>工具条上的一个按钮：要么切换标注工具，要么触发一次命令。</summary>
@@ -91,6 +95,8 @@ public sealed class ToolbarLayer : FrameworkElement
         new(Icons.Undo, "撤销  Ctrl+Z", ToolKind.None, ToolbarCommand.Undo),
         new(Icons.Redo, "重做  Ctrl+Y", ToolKind.None, ToolbarCommand.Redo),
         new(Icons.Scroll, "长截图  L", ToolKind.None, ToolbarCommand.Scroll),
+        new(Icons.ScanLine, "文字识别  O", ToolKind.None, ToolbarCommand.Ocr),
+        new(Icons.Languages, "翻译  G", ToolKind.None, ToolbarCommand.Translate),
         new(Icons.Pin, "贴图  Ctrl+T", ToolKind.None, ToolbarCommand.Pin),
         new(Icons.Close, "取消  Esc", ToolKind.None, ToolbarCommand.Cancel),
         // 保存和复制这两个「拿走成品」的动作排在最右：一条工具条从左看到右，

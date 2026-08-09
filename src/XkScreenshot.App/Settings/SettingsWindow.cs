@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Net.Http;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -77,6 +79,21 @@ public sealed class SettingsWindow : Window
     private readonly ToggleButton _elementMode = new();
     private readonly ToggleButton _runAtStartup = new();
 
+    // ---------------- 文字识别与翻译 ----------------
+
+    private readonly ComboBox _ocrMode = new() { Width = 168 };
+    private readonly ComboBox _translationMode = new() { Width = 168 };
+    private readonly ComboBox _apiProtocol = new() { Width = 168 };
+    private readonly TextBox _apiBase = new();
+    private readonly TextBox _apiKey = new();
+    private readonly TextBox _model = new() { Width = 200 };
+
+    // ---------------- 模型管理 ----------------
+
+    private readonly TextBox _modelsDir = new();
+    private readonly TextBlock _paddleStatus = new();
+    private readonly StackPanel _langPairsPanel = new();
+
     private readonly StackPanel _nav = new();
     private readonly ContentControl _pageHost = new();
 
@@ -101,7 +118,7 @@ public sealed class SettingsWindow : Window
         // 定高而不是随内容伸缩：切换分类时窗口跟着一页一页地变高变矮，比任何滚动条都晃眼。
         // 这个高度要能装下最长的那一页（此刻是「截图」的四张卡）—— 定高的意义在于不用滚，
         // 装不下就退化成「既不能自适应、又还是要滚」，两头都不讨好。加分类时记得重新对一下。
-        Height = Math.Min(620, Math.Max(360, SystemParameters.WorkArea.Height - 80));
+        Height = Math.Min(680, Math.Max(360, SystemParameters.WorkArea.Height - 80));
         ResizeMode = ResizeMode.NoResize;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         // 托盘程序没有主窗口，设置窗被别的窗口盖住之后，任务栏是唯一能把它找回来的地方
@@ -145,6 +162,12 @@ public sealed class SettingsWindow : Window
         foreach (var (_, label) in Actions) _defaultAction.Items.Add(label);
         _scrollMode.Items.Add("自动");
         _scrollMode.Items.Add("手动");
+        _ocrMode.Items.Add("离线");
+        _ocrMode.Items.Add("在线");
+        _translationMode.Items.Add("离线");
+        _translationMode.Items.Add("在线");
+        _apiProtocol.Items.Add("OpenAI");
+        _apiProtocol.Items.Add("Anthropic");
         foreach (var toggle in new[] { _saveWithoutPrompt, _showHints, _elementMode, _runAtStartup })
             toggle.Style = (Style)FindResource("ToggleSwitch");
 
@@ -269,6 +292,33 @@ public sealed class SettingsWindow : Window
             Card(Icons.Save, "长截图最大高度",
                 "拼到这么高就停，免得内存爆掉。超长网页提高它之前先想想是不是真要那么长。",
                 Line(_scrollMaxHeight, Suffix("像素（1000–60000）"))));
+
+        AddPage(Icons.ScanLine, "识别 / 翻译",
+            Card(Icons.Crop, "OCR 工作模式",
+                "离线：PaddleOCR ONNX（约 17 MB）；在线：调用大模型识别。", _ocrMode),
+            Card(Icons.Languages, "翻译工作模式",
+                "离线：OPUS-MT ONNX（约 50 MB/语言对）；在线：调用大模型翻译。", _translationMode),
+            Card(Icons.Command, "在线 · API 协议",
+                "OCR 和翻译共用同一个协议与 Key。", _apiProtocol),
+            StackedCard(Icons.Folder, "在线 · API 地址",
+                "完整的端点 URL，如 https://api.openai.com/v1/responses。",
+                _apiBase),
+            StackedCard(Icons.Command, "在线 · API Key",
+                "仅本地存储，掩码显示。",
+                _apiKey),
+            Card(Icons.Cursor, "在线 · 模型",
+                "如 gpt-4o、claude-sonnet-5、deepseek-chat。", _model),
+
+            // ---- 模型管理 ----
+            StackedCard(Icons.Folder, "离线模型目录",
+                "留空则用软件根目录下的 models/ 文件夹。",
+                Fill(_modelsDir, Button("浏览…", BrowseModelsDir))),
+            Card(Icons.Scroll, "PaddleOCR 模型",
+                "检测 + 识别 + 字典，共约 17 MB。",
+                Line(_paddleStatus, Button("下载", DownloadPaddleOcr))),
+            Card(Icons.Languages, "离线翻译语言对",
+                "每个语言对约 50 MB。默认内置中↔英互译。已下载的语言对：",
+                _langPairsPanel));
 
         AddPage(Icons.Folder, "保存",
             StackedCard(Icons.Folder, "默认目录",
@@ -617,6 +667,16 @@ public sealed class SettingsWindow : Window
         _runAtStartup.IsChecked = s.RunAtStartup;
         _historyCapacity.Text = s.HistoryCapacity.ToString(CultureInfo.InvariantCulture);
 
+        _ocrMode.SelectedIndex = s.Recognition.Mode == OcrMode.Online ? 1 : 0;
+        _translationMode.SelectedIndex = s.Translation.Mode == OcrMode.Online ? 1 : 0;
+        _apiProtocol.SelectedIndex = s.Translation.ApiProtocol == ApiProtocolSetting.Anthropic ? 1 : 0;
+        _apiBase.Text = s.Translation.ApiBase;
+        _apiKey.Text = s.Translation.ApiKey;
+        _model.Text = s.Translation.Model;
+        _modelsDir.Text = s.ModelsDirectory;
+        RefreshPaddleStatus();
+        RefreshLangPairs();
+
         _scrollMode.SelectedIndex = s.ScrollMode == ScrollMode.Auto ? 0 : 1;
         _scrollMaxHeight.Text = s.ScrollMaxHeight.ToString(CultureInfo.InvariantCulture);
 
@@ -633,6 +693,157 @@ public sealed class SettingsWindow : Window
         };
 
         if (dialog.ShowDialog(this) == true) _directory.Text = dialog.FolderName;
+    }
+
+    private void BrowseModelsDir()
+    {
+        var dialog = new OpenFolderDialog
+        {
+            Title = "选择离线模型存放目录",
+            InitialDirectory = Directory.Exists(_modelsDir.Text) ? _modelsDir.Text : null,
+        };
+        if (dialog.ShowDialog(this) == true) _modelsDir.Text = dialog.FolderName;
+    }
+
+    private void RefreshPaddleStatus()
+    {
+        string dir = ResolveCurrentModelsDir();
+        bool hasDet = File.Exists(Path.Combine(dir, "paddleocr", "det.onnx"));
+        bool hasRec = File.Exists(Path.Combine(dir, "paddleocr", "rec.onnx"));
+        bool hasCls = File.Exists(Path.Combine(dir, "paddleocr", "cls.onnx"));
+        bool hasDict = File.Exists(Path.Combine(dir, "paddleocr", "dict.txt"));
+        if (hasDet && hasRec && hasCls && hasDict)
+            _paddleStatus.Text = "已安装 ✓";
+        else if (hasDet || hasRec || hasCls || hasDict)
+            _paddleStatus.Text = "不完整，需重新下载";
+        else
+            _paddleStatus.Text = "未下载";
+    }
+
+    /// <summary>返回模型根目录，与 AppSettings.ResolveModelsDirectory 逻辑一致。</summary>
+    private string ResolveCurrentModelsDir()
+    {
+        string configured = _modelsDir.Text.Trim();
+        if (!string.IsNullOrWhiteSpace(configured)) return configured;
+        // 开发阶段用 sln 根目录下的 models/，运行期用 AppContext.BaseDirectory 下的 models/
+        string baseDir = AppContext.BaseDirectory;
+        var dir = new DirectoryInfo(baseDir);
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "XkScreenshot.sln")))
+            dir = dir.Parent;
+        return Path.Combine(dir?.FullName ?? baseDir, "models");
+    }
+
+    private async void DownloadPaddleOcr()
+    {
+        string root = ResolveCurrentModelsDir();
+        string targetDir = Path.Combine(root, "paddleocr");
+        Directory.CreateDirectory(targetDir);
+
+        _paddleStatus.Text = "下载中…";
+
+        try
+        {
+            using var http = new HttpClient();
+            // PaddleOCR ONNX 模型来自 HuggingFace SWHL/RapidOCR
+            await DownloadFile(http,
+                "https://huggingface.co/SWHL/RapidOCR/resolve/main/PP-OCRv4/ch_PP-OCRv4_det_infer.onnx",
+                Path.Combine(targetDir, "det.onnx"));
+            await DownloadFile(http,
+                "https://huggingface.co/SWHL/RapidOCR/resolve/main/PP-OCRv4/ch_PP-OCRv4_rec_infer.onnx",
+                Path.Combine(targetDir, "rec.onnx"));
+            await DownloadFile(http,
+                "https://huggingface.co/SWHL/RapidOCR/resolve/main/PP-OCRv3/ch_ppocr_mobile_v2.0_cls_train.onnx",
+                Path.Combine(targetDir, "cls.onnx"));
+            await DownloadFile(http,
+                "https://raw.githubusercontent.com/PaddlePaddle/PaddleOCR/release/2.7/ppocr/utils/ppocr_keys_v1.txt",
+                Path.Combine(targetDir, "dict.txt"));
+            _paddleStatus.Text = "已安装 ✓";
+            MessageBox.Show(this, "PaddleOCR 模型下载完成。", "XkScreenshot",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            _paddleStatus.Text = "下载失败";
+            MessageBox.Show(this, "下载失败：" + ex.Message, "XkScreenshot",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    private static async Task DownloadFile(HttpClient http, string url, string path)
+    {
+        var bytes = await http.GetByteArrayAsync(url);
+        await File.WriteAllBytesAsync(path, bytes);
+    }
+
+    private void RefreshLangPairs()
+    {
+        _langPairsPanel.Children.Clear();
+        string root = ResolveCurrentModelsDir();
+        string opusDir = Path.Combine(root, "opus-mt");
+
+        var pairs = new[] { ("en", "zh", "英语 → 中文"), ("zh", "en", "中文 → 英语") };
+        foreach (var (from, to, label) in pairs)
+        {
+            string pairDir = Path.Combine(opusDir, $"{from}-{to}");
+            bool installed = File.Exists(Path.Combine(pairDir, "encoder_model.onnx"));
+            string status = installed ? "已安装" : "未下载";
+
+            var row = new StackPanel { Orientation = Orientation.Horizontal };
+            row.Children.Add(new TextBlock
+            {
+                Text = $"{label}  {status}",
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 8, 0),
+            });
+            if (!installed)
+            {
+                row.Children.Add(Button("下载", () => _ = DownloadLangPair(from, to)));
+            }
+            else
+            {
+                row.Children.Add(Button("删除", () =>
+                {
+                    try { Directory.Delete(pairDir, recursive: true); }
+                    catch { /* ignore */ }
+                    RefreshLangPairs();
+                }));
+            }
+            _langPairsPanel.Children.Add(row);
+        }
+    }
+
+    private async Task DownloadLangPair(string from, string to)
+    {
+        string pairDir = Path.Combine(ResolveCurrentModelsDir(), "opus-mt", $"{from}-{to}");
+        Directory.CreateDirectory(pairDir);
+
+        try
+        {
+            using var http = new HttpClient();
+            // onnx-community 提供了 Helsinki-NLP 模型的 ONNX 转换版
+            string baseUrl = "https://huggingface.co/onnx-community/resolve/main";
+            string modelName = $"opus-mt-{from}-{to}";
+            await DownloadFile(http,
+                $"{baseUrl}/{modelName}/onnx/encoder_model.onnx",
+                Path.Combine(pairDir, "encoder_model.onnx"));
+            await DownloadFile(http,
+                $"{baseUrl}/{modelName}/onnx/decoder_model.onnx",
+                Path.Combine(pairDir, "decoder_model.onnx"));
+            await DownloadFile(http,
+                $"{baseUrl}/{modelName}/onnx/source.spm",
+                Path.Combine(pairDir, "source.spm"));
+            await DownloadFile(http,
+                $"{baseUrl}/{modelName}/onnx/target.spm",
+                Path.Combine(pairDir, "target.spm"));
+            RefreshLangPairs();
+            MessageBox.Show(this, $"{from}→{to} 翻译模型下载完成。", "XkScreenshot",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, "下载失败：" + ex.Message, "XkScreenshot",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
     }
 
     private void Commit()
@@ -664,6 +875,15 @@ public sealed class SettingsWindow : Window
             _historyCapacity.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out int capacity)
             ? Math.Clamp(capacity, 0, CaptureHistory.MaxCapacity)
             : CaptureHistory.DefaultCapacity;
+
+        _draft.Recognition.Mode = _ocrMode.SelectedIndex == 1 ? OcrMode.Online : OcrMode.Offline;
+        _draft.Translation.Mode = _translationMode.SelectedIndex == 1 ? OcrMode.Online : OcrMode.Offline;
+        _draft.Translation.ApiProtocol = _apiProtocol.SelectedIndex == 1
+            ? ApiProtocolSetting.Anthropic : ApiProtocolSetting.OpenAI;
+        _draft.Translation.ApiBase = _apiBase.Text.Trim();
+        _draft.Translation.ApiKey = _apiKey.Text.Trim();
+        _draft.Translation.Model = _model.Text.Trim();
+        _draft.ModelsDirectory = _modelsDir.Text.Trim();
 
         _draft.ScrollMode = _scrollMode.SelectedIndex == 1 ? ScrollMode.Manual : ScrollMode.Auto;
         _draft.ScrollMaxHeight = int.TryParse(
