@@ -34,14 +34,33 @@
                   BorderThickness="{TemplateBinding BorderThickness}"
                   CornerRadius="4"
                   SnapsToDevicePixels="True">
-            <ScrollViewer x:Name="PART_ContentHost"
-                          Margin="{TemplateBinding Padding}"
-                          VerticalAlignment="Center"
-                          Focusable="False"
-                          HorizontalScrollBarVisibility="Hidden"
-                          VerticalScrollBarVisibility="Hidden" />
+            <Grid>
+              <!-- 占位文字压在输入区下面，不吃鼠标：点在它上面要能落到光标 -->
+              <TextBlock x:Name="Ph"
+                         Margin="{TemplateBinding Padding}"
+                         VerticalAlignment="Center"
+                         Text="{Binding RelativeSource={RelativeSource TemplatedParent},
+                                        Path=(s:Placeholder.Text)}"
+                         Foreground="{DynamicResource TextSecondary}"
+                         TextTrimming="CharacterEllipsis"
+                         IsHitTestVisible="False"
+                         Visibility="Collapsed" />
+              <!-- 内边距两边都得给，而且必须是同一个值：差一像素，占位文字和真正敲进去的
+                   文字就不在同一个起点上，看着像字自己挪了一下 -->
+              <ScrollViewer x:Name="PART_ContentHost"
+                            Margin="{TemplateBinding Padding}"
+                            VerticalAlignment="Center"
+                            Focusable="False"
+                            HorizontalScrollBarVisibility="Hidden"
+                            VerticalScrollBarVisibility="Hidden" />
+            </Grid>
           </Border>
           <ControlTemplate.Triggers>
+            <!-- 空串才显示。这里不能顺手也在聚焦时藏起来：用户点进框只是想看清全路径，
+                 字一个都没敲，提示就先跑了反而是把信息拿走 -->
+            <Trigger Property="Text" Value="">
+              <Setter TargetName="Ph" Property="Visibility" Value="Visible" />
+            </Trigger>
             <Trigger Property="IsMouseOver" Value="True">
               <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ControlBgHover}" />
             </Trigger>
@@ -59,6 +78,51 @@
   <Style TargetType="{x:Type s:HotkeyBox}" BasedOn="{StaticResource {x:Type TextBox}}">
     <Setter Property="TextAlignment" Value="Center" />
     <Setter Property="FontWeight" Value="SemiBold" />
+  </Style>
+
+  <!--
+    掩码输入框。模板照着上面那个抄了一遍而不是共用：PasswordBox 不是 TextBox 的派生类，
+    两边只有 PART_ContentHost 这一处相同，而占位文字那个触发器要用 TextBox 才有的 Text 属性。
+    掩码框也用不着占位文字。
+  -->
+  <Style TargetType="{x:Type PasswordBox}">
+    <Setter Property="Height" Value="32" />
+    <Setter Property="Padding" Value="10,0,10,0" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="Background" Value="{DynamicResource ControlBg}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource ControlBorder}" />
+    <Setter Property="Foreground" Value="{DynamicResource Text}" />
+    <Setter Property="CaretBrush" Value="{DynamicResource Text}" />
+    <Setter Property="SelectionBrush" Value="{DynamicResource Accent}" />
+    <Setter Property="VerticalContentAlignment" Value="Center" />
+    <Setter Property="SnapsToDevicePixels" Value="True" />
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="{x:Type PasswordBox}">
+          <Border x:Name="Bd"
+                  Background="{TemplateBinding Background}"
+                  BorderBrush="{TemplateBinding BorderBrush}"
+                  BorderThickness="{TemplateBinding BorderThickness}"
+                  CornerRadius="4"
+                  SnapsToDevicePixels="True">
+            <ScrollViewer x:Name="PART_ContentHost"
+                          Margin="{TemplateBinding Padding}"
+                          VerticalAlignment="Center"
+                          Focusable="False"
+                          HorizontalScrollBarVisibility="Hidden"
+                          VerticalScrollBarVisibility="Hidden" />
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+              <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ControlBgHover}" />
+            </Trigger>
+            <Trigger Property="IsKeyboardFocusWithin" Value="True">
+              <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource Accent}" />
+            </Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
   </Style>
 
   <!-- ================= 按钮 ================= -->

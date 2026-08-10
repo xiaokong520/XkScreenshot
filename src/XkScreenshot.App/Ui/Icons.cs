@@ -108,6 +108,16 @@ public static class Icons
         ellipses: [(12, 12, 3, 3)],
         paths: ["M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"]);
 
+    /// <summary>盖住的眼睛 —— 「点一下就看得见」那颗按钮按下之后的样子。</summary>
+    public static readonly Geometry EyeOff = Build(
+        paths:
+        [
+            "M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49",
+            "M14.084 14.158a3 3 0 0 1-4.242-4.242",
+            "M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143",
+            "m2 2 20 20",
+        ]);
+
     public static readonly Geometry Power = Build(
         paths: ["M12 2v10", "M18.4 6.6a9 9 0 1 1-12.77.04"]);
 
@@ -143,10 +153,64 @@ public static class Icons
                 "M3 17v2a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-2",
                 "M7 12h10"]);
 
-    /// <summary>翻译 —— 切换语言。</summary>
+    /// <summary>
+    /// 翻译 —— 左上一个「文」字，右下一个拉丁字母 A，翻译类图标的通行画法。
+    ///
+    /// 路径按 Lucide 的 languages 原样抄，别照着感觉改：这几笔任意一笔挪了位置，
+    /// 出来就既不像「文」也不像 A —— 之前那版就是这样，24 像素下看着像「VTV」。
+    /// </summary>
     public static readonly Geometry Languages = Build(
-        paths: ["m5 8 3 7 3-7", "M11 12H7", "M16 8v7",
-                "m16 8 3 4 3-4", "M19 8h-6"]);
+        paths: ["m5 8 6 6", "m4 14 6-6 2-3", "M2 5h12", "M7 2h1",
+                "m22 22-5-10-5 10", "M14 18h6"]);
+
+    /// <summary>OCR —— 四角取景框圈住几行文字，比 <see cref="ScanLine"/> 更明确是「认字」。</summary>
+    public static readonly Geometry ScanText = Build(
+        paths: ["M3 7V5a2 2 0 0 1 2-2h2", "M17 3h2a2 2 0 0 1 2 2v2",
+                "M21 17v2a2 2 0 0 1-2 2h-2", "M7 21H5a2 2 0 0 1-2-2v-2",
+                "M7 8h8", "M7 12h10", "M7 16h6"]);
+
+    /// <summary>API 协议 —— 一对花括号，报文长什么样一眼就知道。</summary>
+    public static readonly Geometry Braces = Build(
+        paths: ["M8 3H7a2 2 0 0 0-2 2v5a2 2 0 0 1-2 2 2 2 0 0 1 2 2v5c0 1.1.9 2 2 2h1",
+                "M16 21h1a2 2 0 0 0 2-2v-5c0-1.1.9-2 2-2a2 2 0 0 1-2-2V5a2 2 0 0 0-2-2h-1"]);
+
+    /// <summary>API 地址 —— 链条。填的是 URL 而不是本机路径，所以不该用文件夹。</summary>
+    public static readonly Geometry Link = Build(
+        paths: ["M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71",
+                "M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"]);
+
+    /// <summary>API Key —— 钥匙。</summary>
+    public static readonly Geometry Key = Build(
+        ellipses: [(7.5, 15.5, 5.5, 5.5)],
+        paths: ["m15.5 7.5 2.3 2.3a1 1 0 0 0 1.4 0l2.1-2.1a1 1 0 0 0 0-1.4L19 4",
+                "m21 2-9.6 9.6"]);
+
+    /// <summary>大模型 —— 机器人。</summary>
+    public static readonly Geometry Bot = Build(
+        rects: [(4, 8, 16, 12, 2)],
+        paths: ["M12 8V4H8", "M2 14h2", "M20 14h2", "M15 13v2", "M9 13v2"]);
+
+    /// <summary>可下载的模型 —— 一个包裹。</summary>
+    public static readonly Geometry Package = Build(
+        paths:
+        [
+            "m7.5 4.27 9 5.15",
+            "M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z",
+            "m3.3 7 8.7 5 8.7-5",
+            "M12 22V12",
+        ]);
+
+    /// <summary>OCR 语言包 —— 一个 A 加一枚勾，「这些字认得了」。</summary>
+    public static readonly Geometry SpellCheck = Build(
+        paths: ["m6 16 6-12 6 12", "M8 12h8", "m16 20 2 2 4-4"]);
+
+    /// <summary>互译方向 —— 一来一回两支箭头。语言包是按「X ↔ 英语」成对装的。</summary>
+    public static readonly Geometry ArrowRightLeft = Build(
+        paths: ["m16 3 4 4-4 4", "M20 7H4", "m8 21-4-4 4-4", "M4 17h16"]);
+
+    /// <summary>高度上限 —— 上下双向箭头。</summary>
+    public static readonly Geometry MoveVertical = Build(
+        paths: ["M12 2v20", "m8 18 4 4 4-4", "m8 6 4-4 4 4"]);
 
     private static readonly Dictionary<Brush, Pen> PenCache = [];
 

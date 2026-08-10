@@ -76,11 +76,18 @@ public sealed class AppSettings
     public RecognitionSettings Recognition { get; set; } = new();
     public TranslationSettings Translation { get; set; } = new();
 
+    /// <summary>
+    /// <see cref="SaveDirectory"/> 留空时实际用的目录。
+    ///
+    /// 留空存的是空串而不是这个路径：存死了，用户哪天把系统的「图片」文件夹搬到别的盘，
+    /// 存图还留在老地方，而他明明什么都没改过。
+    /// </summary>
+    public static string DefaultSaveDirectory
+        => Environment.GetFolderPath(Environment.SpecialFolder.MyPictures);
+
     /// <summary>实际写文件的目录。设置里留空就用系统「图片」文件夹。</summary>
     public string ResolveSaveDirectory()
-        => string.IsNullOrWhiteSpace(SaveDirectory)
-            ? Environment.GetFolderPath(Environment.SpecialFolder.MyPictures)
-            : SaveDirectory;
+        => string.IsNullOrWhiteSpace(SaveDirectory) ? DefaultSaveDirectory : SaveDirectory;
 
     /// <summary>
     /// 清洗过的文件名前缀。用户在设置里能敲进任何字符，其中 \ / : * ? " &lt; &gt; | 会让
@@ -102,18 +109,25 @@ public sealed class AppSettings
     /// <summary>长截图起手用的参数。Sanitized 会把越界的值拉回来。</summary>
     public ScrollOptions ToScrollOptions() => new(ScrollMode, 1, ScrollMaxHeight);
 
-    /// <summary>找模型文件的实际目录。开发阶段往上走到 sln 根目录。</summary>
-    public string ResolveModelsDirectory()
+    /// <summary>
+    /// <see cref="ModelsDirectory"/> 留空时找模型的目录：程序目录下的 models/。
+    /// 开发阶段先往上走到 sln 根目录 —— 不然每次重新生成，模型都得跟着 bin 目录再下一遍。
+    /// </summary>
+    public static string DefaultModelsDirectory
     {
-        if (!string.IsNullOrWhiteSpace(ModelsDirectory))
-            return ModelsDirectory;
-
-        string baseDir = AppContext.BaseDirectory;
-        var dir = new System.IO.DirectoryInfo(baseDir);
-        while (dir is not null && !System.IO.File.Exists(System.IO.Path.Combine(dir.FullName, "XkScreenshot.sln")))
-            dir = dir.Parent;
-        return System.IO.Path.Combine(dir?.FullName ?? baseDir, "models");
+        get
+        {
+            string baseDir = AppContext.BaseDirectory;
+            var dir = new System.IO.DirectoryInfo(baseDir);
+            while (dir is not null && !System.IO.File.Exists(System.IO.Path.Combine(dir.FullName, "XkScreenshot.sln")))
+                dir = dir.Parent;
+            return System.IO.Path.Combine(dir?.FullName ?? baseDir, "models");
+        }
     }
+
+    /// <summary>找模型文件的实际目录。</summary>
+    public string ResolveModelsDirectory()
+        => string.IsNullOrWhiteSpace(ModelsDirectory) ? DefaultModelsDirectory : ModelsDirectory;
 
     /// <summary>给设置界面改着玩的副本。引用类型字段也要逐层克隆。</summary>
     public AppSettings Clone()
