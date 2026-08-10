@@ -387,8 +387,7 @@ public sealed class SettingsWindow : Window
             Card(Icons.Braces, "在线 · API 协议",
                 "OCR 和翻译共用同一个协议与 Key。", _apiProtocol),
             StackedCard(Icons.Link, "在线 · API 地址",
-                "填到服务地址就行，如 https://api.openai.com —— 后面那截端点路径由协议定，"
-                + "自动补。填到 /v1、或者整条端点都照样认。",
+                "填到域名就行，端点按协议自动补。",
                 ApiBaseRow()),
             StackedCard(Icons.Key, "在线 · API Key", null, ApiKeyRow()),
             Card(Icons.Bot, "在线 · 模型", null, _model),
@@ -398,15 +397,13 @@ public sealed class SettingsWindow : Window
                 "留空则用软件根目录下的 models/ 文件夹。",
                 Fill(_modelsDir, Button("浏览…", BrowseModelsDir))),
             Card(Icons.Package, "PaddleOCR 模型",
-                "检测 + 识别 + 字典，共约 21 MB。认汉字（简繁）、日文假名和拉丁字母。",
+                "约 21 MB，认中文、日文和拉丁字母。",
                 PaddleOcrRow()),
             StackedCard(Icons.SpellCheck, "OCR 语言包",
-                "默认模型已经认得中文（简繁）、日文和英文，下面这些是它认不了的文字系统。"
-                + "装上之后不用手动切：默认模型读得吃力时会自动拿装了的语言包各试一遍。",
+                "装上就认得更多文字系统，识别时自动试。",
                 OcrPackRow()),
             StackedCard(Icons.ArrowRightLeft, "离线翻译语言",
-                "每种语言两个方向一起下，约 30~120 MB。非英语之间靠英语中转，"
-                + "所以想中↔日就得中文和日语都装上。",
+                "每种 30~120 MB。非英语互译靠英语中转，两边都要装。",
                 LangPairRow()));
 
         AddPage(Icons.Folder, "保存",
