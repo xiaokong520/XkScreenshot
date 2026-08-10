@@ -88,6 +88,10 @@ public sealed class SettingsWindow : Window
     private readonly ComboBox _translationMode = new() { Width = 168 };
     private readonly ComboBox _apiProtocol = new() { Width = 168 };
     private readonly TextBox _apiBase = new();
+
+    /// <summary>地址栏下面那行「实际请求」。自动补出来的东西得看得见，不然只能靠猜。</summary>
+    private readonly TextBlock _apiEndpoint = new();
+
     private readonly TextBox _apiKey = new();
     private readonly TextBox _model = new() { Width = 200 };
 
@@ -230,6 +234,10 @@ public sealed class SettingsWindow : Window
         BuildPages();
         LoadFrom(_draft);
 
+        // 端点是地址和协议一起决定的，两边任一动了都得重算那行提示
+        _apiBase.TextChanged += (_, _) => RefreshApiEndpoint();
+        _apiProtocol.SelectionChanged += (_, _) => RefreshApiEndpoint();
+
         // 换了模型目录，上面的「已安装 / 未下载」得跟着重算，不能等下次开窗口
         _modelsDir.TextChanged += (_, _) =>
         {
@@ -362,8 +370,9 @@ public sealed class SettingsWindow : Window
             Card(Icons.Command, "在线 · API 协议",
                 "OCR 和翻译共用同一个协议与 Key。", _apiProtocol),
             StackedCard(Icons.Folder, "在线 · API 地址",
-                "完整的端点 URL，如 https://api.openai.com/v1/responses。",
-                _apiBase),
+                "填到服务地址就行，如 https://api.openai.com —— 后面那截端点路径由协议定，"
+                + "自动补。填到 /v1、或者整条端点都照样认。",
+                ApiBaseRow()),
             StackedCard(Icons.Command, "在线 · API Key",
                 "仅本地存储，掩码显示。",
                 _apiKey),
@@ -739,6 +748,7 @@ public sealed class SettingsWindow : Window
         _apiBase.Text = s.Translation.ApiBase;
         _apiKey.Text = s.Translation.ApiKey;
         _model.Text = s.Translation.Model;
+        RefreshApiEndpoint();
         _modelsDir.Text = s.ModelsDirectory;
         RefreshPaddleStatus();
         RefreshOcrPacks();
@@ -977,6 +987,31 @@ public sealed class SettingsWindow : Window
         stack.Children.Add(_paddlePanel);
         stack.Children.Add(_dlProgress);
         return stack;
+    }
+
+    /// <summary>地址栏 + 底下那行补全结果。</summary>
+    private UIElement ApiBaseRow()
+    {
+        _apiEndpoint.FontSize = 12;
+        _apiEndpoint.Foreground = Brush("TextSecondary");
+        _apiEndpoint.TextWrapping = TextWrapping.Wrap;
+        _apiEndpoint.Margin = new Thickness(0, 6, 0, 0);
+
+        var stack = new StackPanel();
+        stack.Children.Add(_apiBase);
+        stack.Children.Add(_apiEndpoint);
+        return stack;
+    }
+
+    /// <summary>重算「实际请求」那行。地址空着就整行收起来，不留一句半截话。</summary>
+    private void RefreshApiEndpoint()
+    {
+        var protocol = _apiProtocol.SelectedIndex == 1
+            ? Core.Llm.ApiProtocol.Anthropic : Core.Llm.ApiProtocol.OpenAI;
+        string endpoint = Core.Llm.LlmEndpoint.Resolve(protocol, _apiBase.Text);
+
+        _apiEndpoint.Text = "实际请求：" + endpoint;
+        _apiEndpoint.Visibility = endpoint.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
     }
 
     private UIElement LangPairRow()

@@ -11,16 +11,25 @@ namespace XkScreenshot.Core.Llm;
 /// <summary>大模型 API 协议。</summary>
 public enum ApiProtocol { OpenAI, Anthropic }
 
-/// <summary>在线模式的所有连接参数。不落盘，不内置任何预填值。</summary>
+/// <summary>
+/// 在线模式的所有连接参数。不落盘，不内置任何预填值。
+///
+/// <see cref="BaseUrl"/> 是用户填进来的原样，不一定是完整端点 ——
+/// 真正要请求的地址看 <see cref="Endpoint"/>。
+/// </summary>
 public sealed record LlmApiConfig(
     ApiProtocol Protocol,
     string BaseUrl,
     string ApiKey,
     string Model
-);
+)
+{
+    /// <summary>实际要 POST 的地址：<see cref="BaseUrl"/> 缺的那截由协议补齐。</summary>
+    public string Endpoint => LlmEndpoint.Resolve(Protocol, BaseUrl);
+}
 
 /// <summary>
-/// 封装 OpenAI Responses API 与 Anthropic Messages API 两种协议的 HTTP 通信。
+/// 封装 OpenAI Chat Completions API 与 Anthropic Messages API 两种协议的 HTTP 通信。
 /// 只负责发请求、拿回原始响应字符串 —— 解析逻辑由各调用方自己管。
 ///
 /// 不持有任何配置（配置由调用方在每次调用时传入），因此同一个实例可以给
@@ -157,7 +166,7 @@ public sealed class LlmApiClient : IDisposable
         var json = JsonSerializer.Serialize(body, JsonOptions);
         using var content = new StringContent(json, Encoding.UTF8, "application/json");
 
-        using var request = new HttpRequestMessage(HttpMethod.Post, config.BaseUrl)
+        using var request = new HttpRequestMessage(HttpMethod.Post, config.Endpoint)
         {
             Content = content,
         };
