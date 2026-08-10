@@ -14,7 +14,10 @@ namespace XkScreenshot.Translate;
 /// 模型是 Mozilla 为「浏览器里实时翻整页网页」训练的：大模型蒸馏出 tiny/base 学生模型，
 /// 再做 intgemm 8-bit 量化，一个方向 15~60 MB。截图 → OCR → 短句翻译这个场景对
 /// 速度和语种数量的要求跟翻网页几乎重合，所以拿它替掉了原来那套一个方向 426 MB 的
-/// OPUS-MT fp32 权重（见 <see cref="OpusMtTranslator"/>，只为老用户机器上的存量模型留着）。
+/// OPUS-MT fp32 权重。
+///
+/// 磁盘上小不等于跑起来小：一个方向真跑起来要 640 MB 内存（见 <see cref="_service"/>），
+/// 所以服务只留当前这一条路线，而且空闲久了整个放掉。
 ///
 /// 模型全是「某语言 ↔ 英语」，没有任何非英语之间的直连，所以中→日是中→英→日两跳 ——
 /// 这不是我们的取舍，是模型库本身就这么发的。原生库支持一次调用串起两个模型，
@@ -28,17 +31,35 @@ public sealed class BergamotTranslator : ITranslator, ILanguageCatalog, IDisposa
     /// <summary>一次送进去多少行。分批是为了让取消键有地方插进来 —— 原生调用本身不可中断。</summary>
     private const int LinesPerBatch = 16;
 
+    /// <summary>
+    /// 这么久没翻过东西就把已经建好的服务放掉，下次用再重建（加载约 80 MB / 两百毫秒）。
+    /// 理由和识别那边一样：常驻托盘的工具不该为一个偶尔用一次的功能长期占着内存。
+    /// </summary>
+    private static readonly TimeSpan IdleRelease = TimeSpan.FromMinutes(10);
+
     private readonly string _root;
     private readonly HashSet<string> _installed;
-    private readonly Dictionary<string, BlockingService> _services = [];
 
     /// <summary>
-    /// 一把锁管住服务表和翻译调用两件事。
+    /// 当前这条路线的服务，以及它是按哪条路线建的。
+    ///
+    /// 只留一条：一个方向跑起来要 640 MB（模型文件才 40~60 MB，剩下的是原生层为计算图
+    /// 开的内存，workspace、mini-batch-words 怎么调都压不下去，实测过），
+    /// 而中转路线一条就含两个方向。把翻过的方向都留着，换几次目标语种就是几个 G。
+    /// </summary>
+    private BlockingService? _service;
+    private string? _serviceKey;
+
+    /// <summary>
+    /// 一把锁管住服务和翻译调用两件事。
     ///
     /// 原生的 BlockingService 不是线程安全的，同一个实例并发调用会崩；而分成两把锁
-    /// （一把护表、一把护调用）并不能换来任何并行度 —— 整个程序同一时刻只有一次翻译在跑。
+    /// （一把护服务、一把护调用）并不能换来任何并行度 —— 整个程序同一时刻只有一次翻译在跑。
     /// </summary>
     private readonly object _gate = new();
+
+    /// <summary>空闲释放的闹钟。每次翻译完重新上弦。</summary>
+    private readonly Timer _idle;
 
     private bool _disposed;
 
@@ -53,6 +74,19 @@ public sealed class BergamotTranslator : ITranslator, ILanguageCatalog, IDisposa
         if (_installed.Count == 0)
             throw new InvalidOperationException(
                 $"{bergamotRoot} 下没有装好的离线翻译模型。请先在设置里下载。");
+
+        _idle = new Timer(_ => ReleaseService(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+    }
+
+    /// <summary>把已经建好的服务放掉。空闲到点了调，也可以在别处主动调来腾内存。</summary>
+    public void ReleaseService()
+    {
+        lock (_gate)
+        {
+            _service?.Dispose();
+            _service = null;
+            _serviceKey = null;
+        }
     }
 
     /// <inheritdoc />
@@ -250,16 +284,25 @@ public sealed class BergamotTranslator : ITranslator, ILanguageCatalog, IDisposa
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            var service = GetService(route);
 
-            for (int i = 0; i < lines.Length; i += LinesPerBatch)
+            try
             {
-                ct.ThrowIfCancellationRequested();
+                var service = GetService(route);
 
-                int count = Math.Min(LinesPerBatch, lines.Length - i);
-                var chunk = new string[count];
-                Array.Copy(lines, i, chunk, 0, count);
-                Array.Copy(TranslateChunk(service, chunk), 0, result, i, count);
+                for (int i = 0; i < lines.Length; i += LinesPerBatch)
+                {
+                    ct.ThrowIfCancellationRequested();
+
+                    int count = Math.Min(LinesPerBatch, lines.Length - i);
+                    var chunk = new string[count];
+                    Array.Copy(lines, i, chunk, 0, count);
+                    Array.Copy(TranslateChunk(service, chunk), 0, result, i, count);
+                }
+            }
+            finally
+            {
+                // 在结果窗口里连着换几次目标语种时闹钟一次次往后推，停下来才开始倒计时
+                if (!_disposed) _idle.Change(IdleRelease, Timeout.InfiniteTimeSpan);
             }
         }
 
@@ -345,11 +388,14 @@ public sealed class BergamotTranslator : ITranslator, ILanguageCatalog, IDisposa
     private BlockingService GetService(string[] route)
     {
         string key = string.Join("|", route);
-        if (_services.TryGetValue(key, out var cached)) return cached;
+        if (_serviceKey == key && _service is not null) return _service;
 
-        // 一个方向占 30~120 MB 内存，所以按需建、建完留着：翻第二张截图不用再等一次加载
+        // 换路线就先把上一条放掉再建新的。顺序不能反 —— 两条同时在内存里是一个多 G 的瞬间
+        ReleaseService();
+
         var service = new BlockingService(route);
-        _services[key] = service;
+        _service = service;
+        _serviceKey = key;
         return service;
     }
 
@@ -379,9 +425,11 @@ public sealed class BergamotTranslator : ITranslator, ILanguageCatalog, IDisposa
         {
             if (_disposed) return;
             _disposed = true;
-
-            foreach (var service in _services.Values) service.Dispose();
-            _services.Clear();
         }
+
+        // 不等回调收尾：它要拿的正是刚放开的这把锁，而它干的事（放掉服务）跟下面这行
+        // 一模一样，且能重复做。晚到一步的那次回调最多是对着已经空了的字段再走一遍
+        _idle.Dispose();
+        ReleaseService();
     }
 }

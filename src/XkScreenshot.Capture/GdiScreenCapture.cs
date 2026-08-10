@@ -61,25 +61,21 @@ public sealed class GdiScreenCapture : IScreenCapture
                     $"BitBlt 失败，Win32 错误码 {Marshal.GetLastWin32Error()}");
 
             int stride = rect.Width * 4;
-            var buffer = new byte[stride * rect.Height];
-            Marshal.Copy(bits, buffer, 0, buffer.Length);
 
-            // GDI 不维护 alpha 通道，BitBlt 出来的 A 是垃圾值（常见为 0）。
-            // 不强制刷成 255 的话，整张图会被 WPF 当成全透明 —— 这是抓屏最经典的坑。
-            for (int i = 3; i < buffer.Length; i += 4)
-                buffer[i] = 0xFF;
-
+            // 直接从 DIB 内存建位图，不在托管堆上过一手：整屏是 8~15 MB 一片，
+            // 中转那一份除了给大对象堆添垃圾之外什么也不做（WPF 无论如何都要自己拷一份）。
+            //
+            // 格式取 Bgr32 而不是 Bgra32：GDI 不维护 alpha，BitBlt 出来的第四个字节是垃圾值
+            // （常见为 0）。当成 Bgra32 的话整张图会被 WPF 判成全透明 —— 这是抓屏最经典的坑。
+            // 以前是抓完再整片刷一遍 A=255（一块 2K 屏就是三百多万次写），
+            // 而 Bgr32 本身就规定第四个字节无意义，那一趟白跑的活整个不必存在。
             var bmp = BitmapSource.Create(rect.Width, rect.Height, dpiX, dpiY,
-                PixelFormats.Bgra32, null, buffer, stride);
+                PixelFormats.Bgr32, null, bits, stride * rect.Height, stride);
             bmp.Freeze(); // 冻结后可跨线程使用，也免掉后续渲染的锁开销
 
-            // buffer 同时交给 CapturedFrame 保留：BitmapSource.Create 会自己拷一份，
-            // 两边互不影响，而放大镜/取色器读这份原始非预乘数据既快又准。
             return new CapturedFrame
             {
                 Image = bmp,
-                Bgra = buffer,
-                Stride = stride,
                 Bounds = rect,
             };
         }

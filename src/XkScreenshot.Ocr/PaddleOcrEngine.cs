@@ -55,41 +55,67 @@ public sealed class PaddleOcrEngine : IOcrEngine, IDisposable
     /// </summary>
     private const double SwitchMargin = 1.15;
 
+    /// <summary>
+    /// 这么久没有识别就把会话全放掉。
+    ///
+    /// 这是个常驻托盘的截图工具，识别是偶尔按一次的动作，而会话一旦跑过一张整屏图
+    /// 就会攥着几百兆不放（见 <see cref="Load"/> 里那段关于内存池的说明）。
+    /// 攥着换来的是下一次省掉三百毫秒的加载 —— 十分钟没动过的话，这笔交易不划算。
+    /// </summary>
+    private static readonly TimeSpan IdleRelease = TimeSpan.FromMinutes(10);
+
     private readonly string _modelDir;
     private readonly string _detPath;
     private readonly string _clsPath;
+    private readonly string _recPath;
+    private readonly string _keysPath;
 
-    private readonly RapidOcr _base;
+    /// <summary>
+    /// 默认识别会话。按需建、空闲久了放掉，所以可能为 null ——
+    /// 开机就把它建起来等于让一个多数时候用不到的功能白占内存。
+    /// </summary>
+    private RapidOcr? _base;
 
-    /// <summary>装了的语言包，按需加载 —— 多数截图根本用不上，不必开机就吃掉几十兆内存。</summary>
+    /// <summary>装了的语言包，同样按需加载 —— 多数截图根本用不上。</summary>
     private readonly Dictionary<string, RapidOcr> _packs = [];
 
     /// <summary>RapidOcr 实例不保证能并发调用，而同一时刻本来也只有一次识别在跑。</summary>
     private readonly object _gate = new();
+
+    /// <summary>空闲释放的闹钟。每次识别完重新上弦，没响之前一直往后推。</summary>
+    private readonly Timer _idle;
+
+    private bool _disposed;
 
     public PaddleOcrEngine(string modelDir)
     {
         _modelDir = modelDir;
         _detPath = Path.Combine(modelDir, "det.onnx");
         _clsPath = Path.Combine(modelDir, "cls.onnx");
+        _recPath = OcrLanguagePacks.RecPath(modelDir, null);
+        _keysPath = OcrLanguagePacks.DictPath(modelDir, null);
 
-        string recPath = OcrLanguagePacks.RecPath(modelDir, null);
-        string keysPath = OcrLanguagePacks.DictPath(modelDir, null);
-
+        // 文件在不在当场就查清楚，不留到第一次识别时才炸 ——
+        // 那时用户已经框完图了，报「模型没装」比按下热键就报要难受得多
         if (!File.Exists(_detPath))
             throw new FileNotFoundException($"检测模型未找到：{_detPath}");
-        if (!File.Exists(recPath))
-            throw new FileNotFoundException($"识别模型未找到：{recPath}");
+        if (!File.Exists(_recPath))
+            throw new FileNotFoundException($"识别模型未找到：{_recPath}");
         if (!File.Exists(_clsPath))
             throw new FileNotFoundException($"方向分类模型未找到：{_clsPath}。请到设置页面重新下载 PaddleOCR 模型。");
-        if (!File.Exists(keysPath))
-            throw new FileNotFoundException($"字典文件未找到：{keysPath}");
+        if (!File.Exists(_keysPath))
+            throw new FileNotFoundException($"字典文件未找到：{_keysPath}");
 
-        _base = Load(recPath, keysPath);
+        _idle = new Timer(_ => ReleaseSessions(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
     }
 
     /// <summary>
     /// 建一个识别会话。
+    ///
+    /// 关掉 CPU 内存池（arena）：ONNX Runtime 默认会把推理用过的内存留在自己的池子里
+    /// 等下次复用，而且**只涨不还**。这个模型的中间张量大小随图片尺寸走，一张放大后的
+    /// 整屏图（3840×2160）能让池子涨到 4.8 GB 并且一直挂着；关掉之后同样的图跑四遍
+    /// 稳定在 0.49 GB，耗时 5.0 秒对 5.1 秒 —— 池子在这里省不出时间，只在攒内存。
     ///
     /// 日志压到只报错误：这批模型是从 Paddle 转过来的，加载时 ONNX Runtime 会为几十个
     /// 用不上的初始化器各刷一行警告 —— 全是无害的转换残留，却能把控制台淹掉。
@@ -97,9 +123,24 @@ public sealed class PaddleOcrEngine : IOcrEngine, IDisposable
     private RapidOcr Load(string recPath, string keysPath)
     {
         var options = new SessionOptions { LogSeverityLevel = OrtLoggingLevel.ORT_LOGGING_LEVEL_ERROR };
+        options.EnableCpuMemArena = false;
+
         var ocr = new RapidOcr();
         ocr.InitModels(_detPath, _clsPath, recPath, keysPath, options);
         return ocr;
+    }
+
+    /// <summary>把所有会话放掉。空闲到点了调，也可以在别处主动调来腾内存。</summary>
+    public void ReleaseSessions()
+    {
+        lock (_gate)
+        {
+            _base?.Dispose();
+            _base = null;
+
+            foreach (var pack in _packs.Values) pack.Dispose();
+            _packs.Clear();
+        }
     }
 
     /// <inheritdoc />
@@ -124,20 +165,32 @@ public sealed class PaddleOcrEngine : IOcrEngine, IDisposable
 
         lock (_gate)
         {
-            var best = Run(_base, input, scale, options);
-            if (best.MeanScore >= SuspectMeanScore) return best.Lines;
+            ObjectDisposedException.ThrowIf(_disposed, this);
 
-            // 默认模型读得吃力。可能是图本身糊，也可能这段文字它压根不认识 ——
-            // 后者装了对应语言包就能救，前者试一圈也只是白花一两百毫秒
-            foreach (var pack in OcrLanguagePacks.Installed(_modelDir))
+            try
             {
-                ct.ThrowIfCancellationRequested();
+                _base ??= Load(_recPath, _keysPath);
 
-                var attempt = Run(GetPack(pack.Code), input, scale, options);
-                if (attempt.TotalScore > best.TotalScore * SwitchMargin) best = attempt;
+                var best = Run(_base, input, scale, options);
+                if (best.MeanScore >= SuspectMeanScore) return best.Lines;
+
+                // 默认模型读得吃力。可能是图本身糊，也可能这段文字它压根不认识 ——
+                // 后者装了对应语言包就能救，前者试一圈也只是白花一两百毫秒
+                foreach (var pack in OcrLanguagePacks.Installed(_modelDir))
+                {
+                    ct.ThrowIfCancellationRequested();
+
+                    var attempt = Run(GetPack(pack.Code), input, scale, options);
+                    if (attempt.TotalScore > best.TotalScore * SwitchMargin) best = attempt;
+                }
+
+                return best.Lines;
             }
-
-            return best.Lines;
+            finally
+            {
+                // 连着识别几张时闹钟一次次往后推，停下来之后才开始倒计时
+                if (!_disposed) _idle.Change(IdleRelease, Timeout.InfiniteTimeSpan);
+            }
         }
     }
 
@@ -209,10 +262,14 @@ public sealed class PaddleOcrEngine : IOcrEngine, IDisposable
     {
         lock (_gate)
         {
-            _base.Dispose();
-            foreach (var pack in _packs.Values) pack.Dispose();
-            _packs.Clear();
+            if (_disposed) return;
+            _disposed = true;
         }
+
+        // 不等回调收尾：它要拿的正是刚放开的这把锁，而它干的事（放掉会话）跟下面这行
+        // 一模一样，且能重复做。晚到一步的那次回调最多是对着已经空了的字段再走一遍
+        _idle.Dispose();
+        ReleaseSessions();
     }
 
     // ---------------- 坐标转换 ----------------

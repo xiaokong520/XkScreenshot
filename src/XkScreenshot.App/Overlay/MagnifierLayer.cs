@@ -115,18 +115,37 @@ public sealed class MagnifierLayer : FrameworkElement
         return new Rect(x, y, w, h);
     }
 
+    /// <summary>
+    /// 取景框那张位图，连同展开像素块用的缓冲。
+    ///
+    /// 本层跟着鼠标每动一下就重绘一次，而每一帧新建一张 BitmapSource 是要付两笔账的：
+    /// 一片托管缓冲的垃圾，和一个带终结器的 WIC 原生对象 —— 后者要等 GC 跑完终结队列
+    /// 才真正把那块非托管内存还掉。拖一次选区几百帧，攒出来的就是任务管理器里那几十兆。
+    /// 尺寸只跟 DPI 有关，画面每帧变的只是内容，所以一张可写位图原地更新正合适。
+    /// </summary>
+    private WriteableBitmap? _view;
+    private byte[] _blocks = [];
+
     private void DrawPixels(DrawingContext dc, PixelPoint cursor, Rect view,
         int blockW, int blockH, DpiScale dpi)
     {
-        // 直接取出已按设备像素展开好的方块阵列，绘制时严格 1:1，不经过任何缩放
-        var block = Frame!.SampleBlock(cursor, SourceCols, SourceRows, OutOfBoundsFill, blockW, blockH);
         int w = SourceCols * blockW;
         int h = SourceRows * blockH;
+        double dpiX = 96 * dpi.DpiScaleX;
+        double dpiY = 96 * dpi.DpiScaleY;
 
-        var bmp = BitmapSource.Create(w, h, 96 * dpi.DpiScaleX, 96 * dpi.DpiScaleY,
-            PixelFormats.Bgra32, null, block, w * 4);
-        bmp.Freeze();
-        dc.DrawImage(bmp, view);
+        // 跨屏拖动时 DPI 会变，方块尺寸随之变，那时候才需要换一张
+        if (_view is null || _view.PixelWidth != w || _view.PixelHeight != h
+            || Math.Abs(_view.DpiX - dpiX) > 0.01 || Math.Abs(_view.DpiY - dpiY) > 0.01)
+        {
+            _view = new WriteableBitmap(w, h, dpiX, dpiY, PixelFormats.Bgr32, null);
+            _blocks = new byte[w * h * 4];
+        }
+
+        // 按设备像素展开好的方块阵列，绘制时严格 1:1，不经过任何缩放
+        Frame!.SampleBlock(_blocks, cursor, SourceCols, SourceRows, OutOfBoundsFill, blockW, blockH);
+        _view.WritePixels(new Int32Rect(0, 0, w, h), _blocks, w * 4, 0);
+        dc.DrawImage(_view, view);
     }
 
     private static void DrawGrid(DrawingContext dc, Rect view, double cellW, double cellH)

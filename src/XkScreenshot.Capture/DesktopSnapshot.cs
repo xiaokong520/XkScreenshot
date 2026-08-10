@@ -63,20 +63,18 @@ public sealed class DesktopSnapshot
     public static DesktopSnapshot FromImage(
         BitmapSource image, PixelRect desktop, IReadOnlyList<MonitorInfo> monitors)
     {
-        // 统一转非预乘 BGRA：CapturedFrame.Bgra 的契约就是它，取色的精度全靠这一点
-        var source = image.Format == PixelFormats.Bgra32
+        // 统一转成 32bpp 不带 alpha：存档画面本来就是不透明的一屏，
+        // 而 CapturedFrame 的契约要的正是「B,G,R 各一字节、第四字节无意义」
+        var source = image.Format == PixelFormats.Bgr32
             ? image
-            : new FormatConvertedBitmap(image, PixelFormats.Bgra32, null, 0);
+            : new FormatConvertedBitmap(image, PixelFormats.Bgr32, null, 0);
 
         int srcW = source.PixelWidth;
         int srcH = source.PixelHeight;
-        int srcStride = srcW * 4;
-        var src = new byte[srcStride * srcH];
-        source.CopyPixels(src, srcStride, 0);
 
         var frames = new List<MonitorFrame>(monitors.Count);
         foreach (var monitor in monitors)
-            frames.Add(new MonitorFrame(monitor, Slice(src, srcStride, desktop, srcW, srcH, monitor.Bounds)));
+            frames.Add(new MonitorFrame(monitor, Slice(source, desktop, srcW, srcH, monitor.Bounds)));
 
         return new DesktopSnapshot
         {
@@ -89,13 +87,11 @@ public sealed class DesktopSnapshot
     }
 
     private static CapturedFrame Slice(
-        byte[] src, int srcStride, PixelRect desktop, int srcW, int srcH, PixelRect target)
+        BitmapSource source, PixelRect desktop, int srcW, int srcH, PixelRect target)
     {
         int stride = target.Width * 4;
+        // 零初始化就是不透明黑（Bgr32 没有 alpha 通道），盖不住的地方保持这个样子
         var dst = new byte[stride * target.Height];
-
-        // 先整片铺成不透明黑，盖不住的地方就保持这个样子
-        for (int i = 3; i < dst.Length; i += 4) dst[i] = 0xFF;
 
         // 存档画面的实际像素范围（存档时的桌面尺寸和图的尺寸理论上一致，
         // 但文件是可以被人动过的，以图为准才不会越界）
@@ -104,23 +100,22 @@ public sealed class DesktopSnapshot
 
         if (!overlap.IsEmpty)
         {
-            for (int y = 0; y < overlap.Height; y++)
-            {
-                int from = (overlap.Y + y - desktop.Y) * srcStride + (overlap.X - desktop.X) * 4;
-                int to = (overlap.Y + y - target.Y) * stride + (overlap.X - target.X) * 4;
-                Buffer.BlockCopy(src, from, dst, to, overlap.Width * 4);
-            }
+            // 逐行从解码结果里取，不先把整张存档摊成一个 byte[] ——
+            // 一张 2K 桌面摊开是 15 MB，而这里真正要的只是它落在本屏上的那一块
+            source.CopyPixels(
+                new System.Windows.Int32Rect(
+                    overlap.X - desktop.X, overlap.Y - desktop.Y, overlap.Width, overlap.Height),
+                dst, stride,
+                (overlap.Y - target.Y) * stride + (overlap.X - target.X) * 4);
         }
 
         var bitmap = BitmapSource.Create(
-            target.Width, target.Height, 96, 96, PixelFormats.Bgra32, null, dst, stride);
+            target.Width, target.Height, 96, 96, PixelFormats.Bgr32, null, dst, stride);
         bitmap.Freeze();
 
         return new CapturedFrame
         {
             Image = bitmap,
-            Bgra = dst,
-            Stride = stride,
             Bounds = target,
         };
     }

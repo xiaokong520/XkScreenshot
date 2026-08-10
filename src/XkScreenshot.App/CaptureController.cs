@@ -40,6 +40,7 @@ public sealed class CaptureController
     {
         _capture = capture;
         _scroll.Completed += OnScrollCompleted;
+        _scroll.Ended += OnScrollEnded;
         _scroll.Notice += message => Notice?.Invoke(message);
     }
 
@@ -114,6 +115,9 @@ public sealed class CaptureController
 
         Teardown();
         Captured?.Invoke(result);
+
+        // 冻屏那几张整屏位图到这儿就没人要了，排一次回收把它们真正还掉
+        Runtime.MemoryTrim.Schedule();
     }
 
     /// <summary>
@@ -184,7 +188,11 @@ public sealed class CaptureController
         return _cachedSnapshot;
     }
 
-    public void Cancel() => Teardown();
+    public void Cancel()
+    {
+        Teardown();
+        Runtime.MemoryTrim.Schedule();
+    }
 
     /// <summary>
     /// 覆盖层上点了「长截图」或按了 L：记下当前画面、关掉覆盖层、启动长截图引擎。
@@ -211,8 +219,16 @@ public sealed class CaptureController
             History.Record(region, desktop, null);
         }
 
-        _scrollSnapshot = null;
+        // 暂存的那张冻屏由 OnScrollEnded 放掉：取消掉的长截图不会走到这里，
+        // 而它一样得把那几张整屏位图放开
         Captured?.Invoke(new CaptureResult(image, region, action));
+    }
+
+    /// <summary>长截图这一摊结束了（拼出图了、取消了、退出时收掉了，都算）。</summary>
+    private void OnScrollEnded()
+    {
+        _scrollSnapshot = null;
+        Runtime.MemoryTrim.Schedule();
     }
 
     /// <summary>程序退出时把还开着的长截图收掉。</summary>
@@ -232,5 +248,11 @@ public sealed class CaptureController
         foreach (var overlay in _overlays)
             overlay.Close();
         _overlays.Clear();
+
+        // 装出来的历史画面跟着会话一起丢掉。它存在的意义是「同一次截图里来回翻别反复解码」，
+        // 而会话结束之后再留着，就只是一份三十来兆的整屏像素在后台一直挂着 ——
+        // 下次要用大不了再解一次码，那是几十毫秒的事
+        _cachedSnapshot = null;
+        _cachedId = null;
     }
 }

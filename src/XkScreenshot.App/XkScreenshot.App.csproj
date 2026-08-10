@@ -15,7 +15,21 @@
          本项目是 WPF：WPF 在启动早期就读走了进程的 DPI 感知模式，运行期再设已经晚了，
          必须留在清单里。这里只是因为引了 WinForms（托盘图标）才触发了这条分析器。 -->
     <NoWarn>$(NoWarn);WFAC010</NoWarn>
+
+    <!-- 工作站 GC。这是桌面程序的默认值，写出来是因为它对本程序尤其要紧：
+         服务器 GC 会按核心数各开一个堆并且乐于多占内存换吞吐，而这个进程绝大多数时间
+         待在托盘里什么也不干，一台 16 核机器上光堆的起步开销就要几十兆。 -->
+    <ServerGarbageCollector>false</ServerGarbageCollector>
+    <ConcurrentGarbageCollector>true</ConcurrentGarbageCollector>
+    <TieredPGO>true</TieredPGO>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 让 GC 更肯为省内存多花点 CPU：第二代回收会更常压缩，回收后也更愿意把内存段
+         还给系统。整屏位图全都落在大对象堆上，反复截几次就会留下一堆填不满的空洞，
+         不压缩的话提交内存只涨不降。对一个偶尔干一下活的托盘程序，这笔 CPU 花得值。 -->
+    <RuntimeHostConfigurationOption Include="System.GC.ConserveMemory" Value="5" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\XkScreenshot.Core\XkScreenshot.Core.csproj" />
