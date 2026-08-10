@@ -27,7 +27,9 @@ public static class ClipboardWriter
     {
         var data = new DataObject();
 
-        using var png = new MemoryStream();
+        // 预留容量：截图 PNG 大约压到每像素半字节上下，一次给够就不必让 MemoryStream
+        // 一路翻倍扩容 —— 那些中途丢掉的缓冲每一片都在大对象堆上
+        using var png = new MemoryStream(image.PixelWidth * image.PixelHeight / 2 + 1024);
         var encoder = new PngBitmapEncoder();
         encoder.Frames.Add(BitmapFrame.Create(image));
         encoder.Save(png);
@@ -35,8 +37,10 @@ public static class ClipboardWriter
 
         data.SetData(DataFormats.Dib, BuildDibV5(image), autoConvert: false);
 
-        // WPF 的 SetImage 走 CF_BITMAP/CF_DIB，是给旧程序兜底的那一份
-        data.SetImage(FlattenOntoWhite(image));
+        // WPF 的 SetImage 走 CF_BITMAP/CF_DIB，是给旧程序兜底的那一份。
+        // 图本身就不带 alpha 时不必合成 —— 那一步会再复制一整张图出来，
+        // 而没有透明区域可合成的图，合出来的和原图一模一样
+        data.SetImage(IsOpaque(image.Format) ? image : FlattenOntoWhite(image));
 
         // 剪贴板是全局独占资源，输入法、云剪贴板、密码管理器都可能正好占着它。
         // 这里必然偶发 CLIPBRD_E_CANT_OPEN，重试几次是标准做法，不是偷懒。
@@ -53,6 +57,12 @@ public static class ClipboardWriter
             }
         }
     }
+
+    /// <summary>这个格式压根没有 alpha 通道 —— 抓屏直出的冻结画面就是这一类。</summary>
+    private static bool IsOpaque(PixelFormat format)
+        => format == PixelFormats.Bgr32 || format == PixelFormats.Bgr24
+            || format == PixelFormats.Rgb24 || format == PixelFormats.Bgr565
+            || format == PixelFormats.Bgr555;
 
     /// <summary>把带 alpha 的图合成到白底，供不认识 alpha 的接收方使用。</summary>
     private static BitmapSource FlattenOntoWhite(BitmapSource image)
@@ -78,16 +88,18 @@ public static class ClipboardWriter
     /// </summary>
     private static MemoryStream BuildDibV5(BitmapSource source)
     {
-        var bgra = new FormatConvertedBitmap(source, PixelFormats.Bgra32, null, 0);
+        var bgra = source.Format == PixelFormats.Bgra32
+            ? source
+            : new FormatConvertedBitmap(source, PixelFormats.Bgra32, null, 0);
         int width = bgra.PixelWidth;
         int height = bgra.PixelHeight;
         int stride = width * 4;
 
-        var pixels = new byte[stride * height];
-        bgra.CopyPixels(pixels, stride, 0);
-
         const int headerSize = 124; // sizeof(BITMAPV5HEADER)
-        var ms = new MemoryStream(headerSize + pixels.Length);
+        // 一块缓冲干到底：头写在前面，像素逐行直接解到它该在的位置上。
+        // 先取一份完整像素再往流里搬一遍的话，同一张图会同时有两份在内存里。
+        var buffer = new byte[headerSize + stride * height];
+        var ms = new MemoryStream(buffer, 0, buffer.Length, writable: true, publiclyVisible: true);
         var w = new BinaryWriter(ms);
 
         w.Write(headerSize);          // bV5Size
@@ -96,7 +108,7 @@ public static class ClipboardWriter
         w.Write((short)1);            // bV5Planes
         w.Write((short)32);           // bV5BitCount
         w.Write(3);                   // bV5Compression = BI_BITFIELDS
-        w.Write(pixels.Length);       // bV5SizeImage
+        w.Write(stride * height);     // bV5SizeImage
         w.Write(2835);                // bV5XPelsPerMeter（72 DPI，接收方一般忽略）
         w.Write(2835);                // bV5YPelsPerMeter
         w.Write(0);                   // bV5ClrUsed
@@ -111,9 +123,13 @@ public static class ClipboardWriter
         w.Write(4);                   // bV5Intent = LCS_GM_IMAGES
         w.Write(0); w.Write(0); w.Write(0);     // bV5ProfileData / Size / Reserved
 
-        // DIB 是 bottom-up 的，必须逐行倒着写，否则粘出来上下颠倒
-        for (int y = height - 1; y >= 0; y--)
-            ms.Write(pixels, y * stride, stride);
+        // DIB 是 bottom-up 的，必须逐行倒着解，否则粘出来上下颠倒
+        for (int y = 0; y < height; y++)
+        {
+            bgra.CopyPixels(
+                new Int32Rect(0, y, width, 1), buffer, stride,
+                headerSize + (height - 1 - y) * stride);
+        }
 
         ms.Position = 0;
         return ms;

@@ -59,10 +59,7 @@ public sealed class FrostedBackdrop
 
     private BitmapSource Build()
     {
-        int w = _frame.Bounds.Width;
-        int h = _frame.Bounds.Height;
-
-        var small = Downscale(_frame.Bgra, w, h, _frame.Stride, DownscaleFactor, out int sw, out int sh);
+        var small = Downscale(_frame, DownscaleFactor, out int sw, out int sh);
         BoxBlur(small, sw, sh, BlurRadius, BlurPasses);
 
         // 保持降采样后的小尺寸，绘制时交给 WPF 放大 —— GPU 的双线性插值本身就是
@@ -77,33 +74,42 @@ public sealed class FrostedBackdrop
         return bitmap;
     }
 
-    private static byte[] Downscale(byte[] src, int srcW, int srcH, int stride, int factor,
-        out int dstW, out int dstH)
+    /// <summary>
+    /// 块平均降采样。一次只把 factor 行原始像素读进来（一块 2K 屏是 60 KB），
+    /// 而不是先要一份整帧的拷贝 —— 那是十几兆的一片，用完就扔，纯粹是给大对象堆添堵。
+    /// </summary>
+    private static byte[] Downscale(CapturedFrame frame, int factor, out int dstW, out int dstH)
     {
+        int srcW = frame.Bounds.Width;
+        int srcH = frame.Bounds.Height;
+        int stride = srcW * 4;
+
         dstW = Math.Max(1, srcW / factor);
         dstH = Math.Max(1, srcH / factor);
         var dst = new byte[dstW * dstH * 4];
+        var band = new byte[stride * factor];
 
         for (int y = 0; y < dstH; y++)
         {
+            int rows = Math.Min(factor, srcH - y * factor);
+            frame.CopyRows(y * factor, rows, band);
+
             for (int x = 0; x < dstW; x++)
             {
                 int sumB = 0, sumG = 0, sumR = 0, count = 0;
 
-                for (int dy = 0; dy < factor; dy++)
+                for (int dy = 0; dy < rows; dy++)
                 {
-                    int sy = y * factor + dy;
-                    if (sy >= srcH) break;
-                    int row = sy * stride;
+                    int row = dy * stride;
 
                     for (int dx = 0; dx < factor; dx++)
                     {
                         int sx = x * factor + dx;
                         if (sx >= srcW) break;
                         int i = row + sx * 4;
-                        sumB += src[i];
-                        sumG += src[i + 1];
-                        sumR += src[i + 2];
+                        sumB += band[i];
+                        sumG += band[i + 1];
+                        sumR += band[i + 2];
                         count++;
                     }
                 }

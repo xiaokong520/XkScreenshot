@@ -36,6 +36,12 @@ public sealed class ScrollCaptureController
     /// <summary>拼完了，参数是成品、它在屏幕上的原始位置（贴图要用）、以及去向。</summary>
     public event Action<BitmapSource, PixelRect, CaptureAction>? Completed;
 
+    /// <summary>
+    /// 这一摊结束了，不论拼出图没有。取消掉的长截图不会有 <see cref="Completed"/>，
+    /// 而调用方为它暂存的东西（那张冻屏）照样得有个地方放掉。
+    /// </summary>
+    public event Action? Ended;
+
     /// <summary>结束得不太顺利，得跟用户说一声。</summary>
     public event Action<string>? Notice;
 
@@ -94,6 +100,7 @@ public sealed class ScrollCaptureController
         engine.Cancel();
         engine.Dispose();
         CloseWindows();
+        Ended?.Invoke();
     }
 
     private void OnProgress(ScrollProgress progress)
@@ -117,9 +124,10 @@ public sealed class ScrollCaptureController
         CloseWindows();
 
         if (Describe(result) is { } message) Notice?.Invoke(message);
-        if (result.Image is null) return;
+        if (result.Image is not null) Completed?.Invoke(result.Image, _region, _action);
 
-        Completed?.Invoke(result.Image, _region, _action);
+        // 取消掉的那一趟没有 Completed，但它一样是结束了
+        Ended?.Invoke();
     }
 
     /// <summary>
