@@ -92,7 +92,19 @@ public sealed class SettingsWindow : Window
     /// <summary>地址栏下面那行「实际请求」。自动补出来的东西得看得见，不然只能靠猜。</summary>
     private readonly TextBlock _apiEndpoint = new();
 
-    private readonly TextBox _apiKey = new();
+    /// <summary>
+    /// API Key 的两个身子：平时用掩码框，点了眼睛换成明文框。
+    ///
+    /// 为什么要两个控件而不是一个：WPF 里掩码是 PasswordBox 的行为，改不成明文；
+    /// 反过来拿 TextBox 自己画圆点，就得一边显示假字符一边攥着真值，
+    /// 光标位置、选中、退格、粘贴每一样都要自己对齐 —— 那种输入框迟早会把 Key 弄坏。
+    /// 两个控件各干自己那份，切换时把值倒过去，只有「谁在台上」这一个状态要管。
+    /// </summary>
+    private readonly PasswordBox _apiKeyMasked = new();
+    private readonly TextBox _apiKeyPlain = new();
+    private readonly Button _apiKeyReveal = new();
+    private bool _apiKeyRevealed;
+
     private readonly TextBox _model = new() { Width = 200 };
 
     // ---------------- 模型管理 ----------------
@@ -229,6 +241,11 @@ public sealed class SettingsWindow : Window
         foreach (var toggle in new[] { _saveWithoutPrompt, _showHints, _elementMode, _runAtStartup })
             toggle.Style = (Style)FindResource("ToggleSwitch");
 
+        // 「留空则用默认」的框，把那个默认值当占位文字摆出来 ——
+        // 只说「留空则用系统「图片」文件夹」，用户还得自己去猜那是哪个盘的哪一层
+        Placeholder.SetText(_directory, AppSettings.DefaultSaveDirectory);
+        Placeholder.SetText(_modelsDir, AppSettings.DefaultModelsDirectory);
+
         Background = Brush("PageBg");
         Content = BuildLayout();
         BuildPages();
@@ -358,39 +375,36 @@ public sealed class SettingsWindow : Window
                 Line(_historyCapacity, Suffix("条"))),
             Card(Icons.Scroll, "长截图滚动方式",
                 "自动：程序帮你滚，光标别动就好；手动：你自己滚，滚到哪儿拼到哪儿。", _scrollMode),
-            Card(Icons.Save, "长截图最大高度",
+            Card(Icons.MoveVertical, "长截图最大高度",
                 "拼到这么高就停，免得内存爆掉。超长网页提高它之前先想想是不是真要那么长。",
                 Line(_scrollMaxHeight, Suffix("像素（1000–60000）"))));
 
         AddPage(Icons.ScanLine, "识别 / 翻译",
-            Card(Icons.Crop, "OCR 工作模式",
+            Card(Icons.ScanText, "OCR 工作模式",
                 "离线：PaddleOCR ONNX（约 17 MB）；在线：调用大模型识别。", _ocrMode),
             Card(Icons.Languages, "翻译工作模式",
                 "离线：Bergamot（每种语言 30~120 MB）；在线：调用大模型翻译。", _translationMode),
-            Card(Icons.Command, "在线 · API 协议",
+            Card(Icons.Braces, "在线 · API 协议",
                 "OCR 和翻译共用同一个协议与 Key。", _apiProtocol),
-            StackedCard(Icons.Folder, "在线 · API 地址",
+            StackedCard(Icons.Link, "在线 · API 地址",
                 "填到服务地址就行，如 https://api.openai.com —— 后面那截端点路径由协议定，"
                 + "自动补。填到 /v1、或者整条端点都照样认。",
                 ApiBaseRow()),
-            StackedCard(Icons.Command, "在线 · API Key",
-                "仅本地存储，掩码显示。",
-                _apiKey),
-            Card(Icons.Cursor, "在线 · 模型",
-                "如 gpt-4o、claude-sonnet-5、deepseek-chat。", _model),
+            StackedCard(Icons.Key, "在线 · API Key", null, ApiKeyRow()),
+            Card(Icons.Bot, "在线 · 模型", null, _model),
 
             // ---- 模型管理 ----
             StackedCard(Icons.Folder, "离线模型目录",
                 "留空则用软件根目录下的 models/ 文件夹。",
                 Fill(_modelsDir, Button("浏览…", BrowseModelsDir))),
-            Card(Icons.Scroll, "PaddleOCR 模型",
+            Card(Icons.Package, "PaddleOCR 模型",
                 "检测 + 识别 + 字典，共约 21 MB。认汉字（简繁）、日文假名和拉丁字母。",
                 PaddleOcrRow()),
-            StackedCard(Icons.ScanLine, "OCR 语言包",
+            StackedCard(Icons.SpellCheck, "OCR 语言包",
                 "默认模型已经认得中文（简繁）、日文和英文，下面这些是它认不了的文字系统。"
                 + "装上之后不用手动切：默认模型读得吃力时会自动拿装了的语言包各试一遍。",
                 OcrPackRow()),
-            StackedCard(Icons.Languages, "离线翻译语言",
+            StackedCard(Icons.ArrowRightLeft, "离线翻译语言",
                 "每种语言两个方向一起下，约 30~120 MB。非英语之间靠英语中转，"
                 + "所以想中↔日就得中文和日语都装上。",
                 LangPairRow()));
@@ -746,7 +760,13 @@ public sealed class SettingsWindow : Window
         _translationMode.SelectedIndex = s.Translation.Mode == OcrMode.Online ? 1 : 0;
         _apiProtocol.SelectedIndex = s.Translation.ApiProtocol == ApiProtocolSetting.Anthropic ? 1 : 0;
         _apiBase.Text = s.Translation.ApiBase;
-        _apiKey.Text = s.Translation.ApiKey;
+        // 每次装载都退回掩码：窗口关了再开，Key 不该还明晃晃摊在那儿
+        _apiKeyRevealed = false;
+        _apiKeyMasked.Password = s.Translation.ApiKey;
+        _apiKeyPlain.Text = string.Empty;
+        _apiKeyPlain.Visibility = Visibility.Collapsed;
+        _apiKeyMasked.Visibility = Visibility.Visible;
+        RefreshApiKeyReveal();
         _model.Text = s.Translation.Model;
         RefreshApiEndpoint();
         _modelsDir.Text = s.ModelsDirectory;
@@ -831,17 +851,14 @@ public sealed class SettingsWindow : Window
         RefreshPaddleStatus();
     }
 
-    /// <summary>返回模型根目录，与 AppSettings.ResolveModelsDirectory 逻辑一致。</summary>
+    /// <summary>
+    /// 模型根目录，按框里现在填的算 —— 「已安装 / 未下载」得跟着用户正在改的那个路径走，
+    /// 不能等按了确定才对。留空时的落点和 AppSettings 共用一份，免得两边各走一套逻辑。
+    /// </summary>
     private string ResolveCurrentModelsDir()
     {
         string configured = _modelsDir.Text.Trim();
-        if (!string.IsNullOrWhiteSpace(configured)) return configured;
-        // 开发阶段用 sln 根目录下的 models/，运行期用 AppContext.BaseDirectory 下的 models/
-        string baseDir = AppContext.BaseDirectory;
-        var dir = new DirectoryInfo(baseDir);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "XkScreenshot.sln")))
-            dir = dir.Parent;
-        return Path.Combine(dir?.FullName ?? baseDir, "models");
+        return configured.Length > 0 ? configured : AppSettings.DefaultModelsDirectory;
     }
 
     private async void DownloadPaddleOcr()
@@ -988,6 +1005,69 @@ public sealed class SettingsWindow : Window
         stack.Children.Add(_dlProgress);
         return stack;
     }
+
+    /// <summary>掩码框（或明文框）+ 右边那颗眼睛。</summary>
+    private UIElement ApiKeyRow()
+    {
+        _apiKeyPlain.Visibility = Visibility.Collapsed;
+
+        _apiKeyReveal.Width = 40;
+        // 按钮样式默认左右各留 16 的内边距，那是给文字的；40 宽的按钮减掉 32
+        // 只剩 8px 放图标，图标会被 Viewbox 压成一根弧线。图标按钮自己把内边距清掉
+        _apiKeyReveal.Padding = new Thickness(0);
+        _apiKeyReveal.Margin = new Thickness(8, 0, 0, 0);
+        _apiKeyReveal.VerticalAlignment = VerticalAlignment.Center;
+        _apiKeyReveal.Click += (_, _) => ToggleApiKeyRevealed();
+        RefreshApiKeyReveal();
+
+        // 两个框叠在同一格里：谁显示都占同一块地方，切换时输入框不会跳一下
+        var stack = new Grid();
+        stack.Children.Add(_apiKeyMasked);
+        stack.Children.Add(_apiKeyPlain);
+
+        return Fill(stack, _apiKeyReveal);
+    }
+
+    private void ToggleApiKeyRevealed()
+    {
+        _apiKeyRevealed = !_apiKeyRevealed;
+
+        // 值只在切换这一刻倒一次手，倒的方向由「刚才是谁在台上」决定
+        if (_apiKeyRevealed) _apiKeyPlain.Text = _apiKeyMasked.Password;
+        else _apiKeyMasked.Password = _apiKeyPlain.Text;
+
+        _apiKeyPlain.Visibility = _apiKeyRevealed ? Visibility.Visible : Visibility.Collapsed;
+        _apiKeyMasked.Visibility = _apiKeyRevealed ? Visibility.Collapsed : Visibility.Visible;
+        RefreshApiKeyReveal();
+
+        // 焦点跟着走，不然点完眼睛想接着改，光标还在那个已经藏起来的框里
+        if (_apiKeyRevealed) _apiKeyPlain.Focus(); else _apiKeyMasked.Focus();
+    }
+
+    private void RefreshApiKeyReveal()
+    {
+        _apiKeyReveal.Content = new Viewbox
+        {
+            Width = 16,
+            Height = 16,
+            Child = new System.Windows.Shapes.Path
+            {
+                // 显示的是「点下去会变成什么」：藏着时给睁眼，露着时给闭眼
+                Data = _apiKeyRevealed ? Icons.EyeOff : Icons.Eye,
+                Stroke = Brush("Text"),
+                StrokeThickness = 2,
+                StrokeStartLineCap = PenLineCap.Round,
+                StrokeEndLineCap = PenLineCap.Round,
+                StrokeLineJoin = PenLineJoin.Round,
+                Width = 24,
+                Height = 24,
+            },
+        };
+        _apiKeyReveal.ToolTip = _apiKeyRevealed ? "隐藏" : "显示";
+    }
+
+    /// <summary>当前 Key，不管此刻是哪个框在台上。</summary>
+    private string CurrentApiKey => _apiKeyRevealed ? _apiKeyPlain.Text : _apiKeyMasked.Password;
 
     /// <summary>地址栏 + 底下那行补全结果。</summary>
     private UIElement ApiBaseRow()
@@ -1223,7 +1303,7 @@ public sealed class SettingsWindow : Window
         _draft.Translation.ApiProtocol = _apiProtocol.SelectedIndex == 1
             ? ApiProtocolSetting.Anthropic : ApiProtocolSetting.OpenAI;
         _draft.Translation.ApiBase = _apiBase.Text.Trim();
-        _draft.Translation.ApiKey = _apiKey.Text.Trim();
+        _draft.Translation.ApiKey = CurrentApiKey.Trim();
         _draft.Translation.Model = _model.Text.Trim();
         _draft.ModelsDirectory = _modelsDir.Text.Trim();
 
