@@ -622,6 +622,20 @@ public sealed class SettingsWindow : Window
 
     private Brush Brush(string key) => (Brush)FindResource(key);
 
+    /// <summary>
+    /// 卡片里的一行普通文字。
+    ///
+    /// 走这个而不是就地 new TextBlock：不给 Foreground 的 TextBlock 是黑字，
+    /// 浅色皮肤下看着一切正常，换成深色皮肤就是一行看不见的字 —— 而写代码的人
+    /// 多半正用着浅色，测不出来。
+    /// </summary>
+    private TextBlock Label(string text) => new()
+    {
+        Text = text,
+        Foreground = Brush("Text"),
+        VerticalAlignment = VerticalAlignment.Center,
+    };
+
     /// <summary>跟在输入框后面的单位。</summary>
     private TextBlock Suffix(string text) => new()
     {
@@ -932,11 +946,7 @@ public sealed class SettingsWindow : Window
         foreach (var pack in installed)
         {
             var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 0) };
-            row.Children.Add(new TextBlock
-            {
-                Text = pack.Name,
-                VerticalAlignment = VerticalAlignment.Center,
-            });
+            row.Children.Add(Label(pack.Name));
 
             var button = Button("删除", () =>
             {
@@ -1000,6 +1010,9 @@ public sealed class SettingsWindow : Window
 
     private UIElement PaddleOcrRow()
     {
+        // 字段初始化那会儿还拿不到窗口资源，颜色只能等到这里再上
+        _paddleStatus.Foreground = Brush("Text");
+
         var stack = new StackPanel();
         stack.Children.Add(_paddlePanel);
         stack.Children.Add(_dlProgress);
@@ -1173,11 +1186,7 @@ public sealed class SettingsWindow : Window
         foreach (var lang in installed)
         {
             var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 0) };
-            row.Children.Add(new TextBlock
-            {
-                Text = lang.ToEnglishOnly ? $"{lang.Name} → 英语" : $"{lang.Name} ↔ 英语",
-                VerticalAlignment = VerticalAlignment.Center,
-            });
+            row.Children.Add(Label(lang.ToEnglishOnly ? $"{lang.Name} → 英语" : $"{lang.Name} ↔ 英语"));
 
             var button = Button("删除", () => DeleteLanguage(bergamotDir, lang));
             // 一根进度条管所有语言，所以下载期间把整组按钮都按住，不让并发下载
