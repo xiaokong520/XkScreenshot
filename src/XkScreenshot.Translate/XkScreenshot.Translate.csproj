@@ -5,8 +5,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.27.0" />
-    <PackageReference Include="Microsoft.ML.Tokenizers" Version="2.0.0" />
+    <!-- Bergamot（Firefox 的离线翻译引擎）的 C# 封装。包里自带各平台编译好的原生库，
+         不用自己 CMake。MPL-2.0，模型的授权另算。 -->
+    <PackageReference Include="BergamotTranslatorSharp" Version="0.5.1" />
   </ItemGroup>
 
   <ItemGroup>

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -18,9 +19,16 @@ namespace XkScreenshot.App;
 /// </summary>
 public sealed class OcrResultWindow : Window
 {
+    /// <summary>目标语种下拉里的一项。</summary>
+    public sealed record TargetOption(string Code, string Name);
+
     private readonly TextBox _textBox;
     private readonly Grid _loadingPanel;
     private readonly TextBlock _loadingLabel;
+
+    private readonly StackPanel _targetPanel;
+    private readonly TextBlock _detectedLabel;
+    private readonly ComboBox _targetBox;
 
     /// <summary>窗口关闭后忽略后续的 ShowResult / ShowLoading 调用。</summary>
     private bool _closed;
@@ -158,6 +166,36 @@ public sealed class OcrResultWindow : Window
         buttonPanel.Children.Add(copyBtn);
         buttonPanel.Children.Add(closeBtn);
 
+        // 底栏左半边：翻译模式下挂「检测到 X → [目标语种]」，纯 OCR 模式整个不显示
+        _detectedLabel = new TextBlock
+        {
+            FontFamily = new FontFamily("Microsoft YaHei UI"),
+            FontSize = 12,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 8, 0),
+            Foreground = dark
+                ? new SolidColorBrush(Color.FromRgb(0xAA, 0xAA, 0xAA))
+                : new SolidColorBrush(Color.FromRgb(0x66, 0x66, 0x66)),
+        };
+
+        _targetBox = new ComboBox
+        {
+            Width = 132,
+            Height = 28,
+            VerticalAlignment = VerticalAlignment.Center,
+            DisplayMemberPath = nameof(TargetOption.Name),
+        };
+
+        _targetPanel = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Margin = new Thickness(12),
+            Visibility = Visibility.Collapsed,
+        };
+        _targetPanel.Children.Add(_detectedLabel);
+        _targetPanel.Children.Add(_targetBox);
+
         // 主布局
         var grid = new Grid();
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star), MinWidth = 200 });
@@ -181,6 +219,11 @@ public sealed class OcrResultWindow : Window
         Grid.SetColumn(buttonPanel, 2);
         Grid.SetRow(buttonPanel, 1);
         grid.Children.Add(buttonPanel);
+
+        // 和按钮同一格：语种在左、按钮在右，各自靠边，中间自然让开
+        Grid.SetColumn(_targetPanel, 2);
+        Grid.SetRow(_targetPanel, 1);
+        grid.Children.Add(_targetPanel);
 
         // 底部分割线
         var bottomBar = new Border
@@ -215,6 +258,40 @@ public sealed class OcrResultWindow : Window
             _loadingLabel.Text = text;
             _loadingPanel.Visibility = Visibility.Visible;
             _textBox.Visibility = Visibility.Collapsed;
+        });
+    }
+
+    /// <summary>
+    /// 翻译模式才调：底栏左边挂出「检测到 X →」和目标语种下拉，换一个就回调重译。
+    ///
+    /// 目标语种在这儿选而不是在设置里定死：一次截图要翻成什么，是看着这张图才知道的事。
+    /// 检测结果也一并显示出来 —— 判错了用户至少看得见是判错了，而不是以为翻译坏掉了。
+    /// </summary>
+    public void SetupTargetLanguage(
+        string detectedName, IReadOnlyList<TargetOption> options, string selected,
+        Func<string, Task> onChanged)
+    {
+        if (_closed || options.Count == 0) return;
+
+        Dispatcher.Invoke(() =>
+        {
+            if (_closed) return;
+
+            _detectedLabel.Text = $"检测到 {detectedName} →";
+            _targetBox.ItemsSource = options;
+            _targetBox.SelectedItem =
+                options.FirstOrDefault(o => o.Code == selected) ?? options[0];
+            _targetPanel.Visibility = Visibility.Visible;
+
+            _targetBox.SelectionChanged += async (_, _) =>
+            {
+                if (_closed || _targetBox.SelectedItem is not TargetOption option) return;
+
+                // 重译期间按住下拉：连点会让几次翻译排着队回来，最后显示的未必是最后选的那个
+                _targetBox.IsEnabled = false;
+                try { await onChanged(option.Code); }
+                finally { if (!_closed) _targetBox.IsEnabled = true; }
+            };
         });
     }
 

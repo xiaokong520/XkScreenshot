@@ -127,9 +127,6 @@ public sealed class AppSettings
             ApiBase = Translation.ApiBase,
             ApiKey = Translation.ApiKey,
             Model = Translation.Model,
-            SourceLanguage = Translation.SourceLanguage,
-            TargetLanguage = Translation.TargetLanguage,
-            OfflinePairs = [..Translation.OfflinePairs],
         };
         return c;
     }
@@ -146,9 +143,13 @@ public sealed class RecognitionSettings
 
 public enum ApiProtocolSetting { OpenAI, Anthropic }
 
-/// <summary>一个离线翻译语言对，如 en→zh。</summary>
-public sealed record LanguagePair(string From, string To);
-
+/// <summary>
+/// 翻译设置。
+///
+/// 这里没有源语言和目标语言：源语言由引擎按文字系统判，目标语言在翻译结果窗口里现选 ——
+/// 一次截图要翻成什么，是看着这张图才知道的事，存成全局设置反而每次都得先去改。
+/// 装了哪些离线语种也不记在这儿，那是扫模型目录得出的，记一份只会跟磁盘漂移。
+/// </summary>
 public sealed class TranslationSettings
 {
     public OcrMode Mode { get; set; } = OcrMode.Offline;
@@ -156,9 +157,6 @@ public sealed class TranslationSettings
     public string ApiBase { get; set; } = string.Empty;
     public string ApiKey { get; set; } = string.Empty;
     public string Model { get; set; } = string.Empty;
-    public string SourceLanguage { get; set; } = "auto";
-    public string TargetLanguage { get; set; } = "zh-CN";
-    public List<LanguagePair> OfflinePairs { get; set; } = [new("en", "zh"), new("zh", "en")];
 }
 
 /// <summary>
