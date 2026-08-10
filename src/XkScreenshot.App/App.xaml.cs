@@ -389,8 +389,7 @@ public partial class App : Application
             var lines = await _ocrEngine.RecognizeAsync(image);
             var text = string.Join(Environment.NewLine, lines.Select(l => l.Text));
 
-            string? rawText = _ocrEngine is LLMOcrEngine llm ? llm.LastRawResponse : null;
-            window.ShowResult(text, rawText);
+            window.ShowResult(text);
         }
         catch (Exception ex)
         {
@@ -422,9 +421,14 @@ public partial class App : Application
             var lines = await _ocrEngine.RecognizeAsync(image);
             var sourceText = string.Join(Environment.NewLine, lines.Select(l => l.Text));
 
-            // 第二阶段：定语种。先判原文是什么，再据此列出翻得到的目标
+            // 第二阶段：定语种。先判原文是什么，再据此列出翻得到的目标。
+            // 在线引擎不报语种 —— 翻译那件事它整个交给了大模型 —— 但判语种本来就不依赖引擎，
+            // 离线引擎多做的只是拿「装了哪些模型」在同种文字的几个候选之间消歧。
+            // 不判就只能在界面上写「检测到 原文」，那句话什么也没告诉用户
             var catalog = _translator as ILanguageCatalog;
-            string source = catalog?.DetectLanguage(sourceText) ?? "auto";
+            string source = catalog?.DetectLanguage(sourceText)
+                ?? ScriptLanguage.Detect(sourceText)
+                ?? "auto";
             var targets = TargetOptionsFor(catalog, source);
 
             // 认得出是什么语言、但没装它的模型。这时候不能挑一个别的语种硬翻 ——
@@ -445,7 +449,9 @@ public partial class App : Application
             window.ShowResult(await TranslateCached(sourceText, source, target));
 
             window.SetupTargetLanguage(
-                catalog?.DisplayName(source) ?? "原文",
+                // 一个字形都没认出来（纯数字、纯符号）时给 null，界面上就只剩「译成」——
+                // 报一个猜的语种出来，用户会以为程序看懂了
+                source == "auto" ? null : BergamotCatalog.DisplayName(source),
                 targets,
                 target,
                 async code =>

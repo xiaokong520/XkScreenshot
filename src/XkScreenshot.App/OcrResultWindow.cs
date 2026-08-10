@@ -268,7 +268,7 @@ public sealed class OcrResultWindow : Window
     /// 检测结果也一并显示出来 —— 判错了用户至少看得见是判错了，而不是以为翻译坏掉了。
     /// </summary>
     public void SetupTargetLanguage(
-        string detectedName, IReadOnlyList<TargetOption> options, string selected,
+        string? detectedName, IReadOnlyList<TargetOption> options, string selected,
         Func<string, Task> onChanged)
     {
         if (_closed || options.Count == 0) return;
@@ -277,7 +277,10 @@ public sealed class OcrResultWindow : Window
         {
             if (_closed) return;
 
-            _detectedLabel.Text = $"检测到 {detectedName} →";
+            // 没判出语种就只说「译成」：写「检测到 原文」等于什么都没说，
+            // 而下拉本身已经把「往哪儿翻」交代清楚了
+            _detectedLabel.Text = string.IsNullOrEmpty(detectedName)
+                ? "译成" : $"检测到 {detectedName} →";
             _targetBox.ItemsSource = options;
             _targetBox.SelectedItem =
                 options.FirstOrDefault(o => o.Code == selected) ?? options[0];
@@ -295,17 +298,14 @@ public sealed class OcrResultWindow : Window
         });
     }
 
-    /// <summary>填入结果文字，隐藏加载动画。可附带原始响应用于调试对比。</summary>
-    public void ShowResult(string text, string? rawText = null)
+    /// <summary>填入结果文字，隐藏加载动画。</summary>
+    public void ShowResult(string text)
     {
         if (_closed) return;
         Dispatcher.Invoke(() =>
         {
             if (_closed) return;
-            if (!string.IsNullOrWhiteSpace(rawText))
-                _textBox.Text = $"──────── 原始响应 ────────\n{rawText}\n──────── 识别结果 ────────\n{text}";
-            else
-                _textBox.Text = text;
+            _textBox.Text = text;
             _loadingPanel.Visibility = Visibility.Collapsed;
             _textBox.Visibility = Visibility.Visible;
         });
