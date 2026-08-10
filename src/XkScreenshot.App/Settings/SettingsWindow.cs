@@ -91,8 +91,15 @@ public sealed class SettingsWindow : Window
     // ---------------- 模型管理 ----------------
 
     private readonly TextBox _modelsDir = new();
-    private readonly TextBlock _paddleStatus = new();
+    private readonly TextBlock _paddleStatus = new() { VerticalAlignment = VerticalAlignment.Center };
+    private readonly StackPanel _paddlePanel = new() { Orientation = Orientation.Horizontal };
     private readonly StackPanel _langPairsPanel = new();
+
+    /// <summary>OCR 模型正在下载。期间按钮换成「下载中…」并禁用。</summary>
+    private bool _paddleBusy;
+
+    /// <summary>正在下载的语言对（如 "en-zh"），没有就是 null。</summary>
+    private string? _busyLangPair;
     private readonly ProgressBar _dlProgress = new()
     {
         Height = 4,
@@ -191,6 +198,13 @@ public sealed class SettingsWindow : Window
         Content = BuildLayout();
         BuildPages();
         LoadFrom(_draft);
+
+        // 换了模型目录，上面的「已安装 / 未下载」得跟着重算，不能等下次开窗口
+        _modelsDir.TextChanged += (_, _) =>
+        {
+            RefreshPaddleStatus();
+            RefreshLangPairs();
+        };
 
         foreach (var box in new[] { _captureHotkey, _pinHotkey })
         {
@@ -723,17 +737,51 @@ public sealed class SettingsWindow : Window
 
     private void RefreshPaddleStatus()
     {
-        string dir = ResolveCurrentModelsDir();
-        bool hasDet = File.Exists(Path.Combine(dir, "paddleocr", "det.onnx"));
-        bool hasRec = File.Exists(Path.Combine(dir, "paddleocr", "rec.onnx"));
-        bool hasCls = File.Exists(Path.Combine(dir, "paddleocr", "cls.onnx"));
-        bool hasDict = File.Exists(Path.Combine(dir, "paddleocr", "dict.txt"));
-        if (hasDet && hasRec && hasCls && hasDict)
-            _paddleStatus.Text = "已安装 ✓";
-        else if (hasDet || hasRec || hasCls || hasDict)
-            _paddleStatus.Text = "不完整，需重新下载";
+        string dir = Path.Combine(ResolveCurrentModelsDir(), "paddleocr");
+        bool hasDet = File.Exists(Path.Combine(dir, "det.onnx"));
+        bool hasRec = File.Exists(Path.Combine(dir, "rec.onnx"));
+        bool hasCls = File.Exists(Path.Combine(dir, "cls.onnx"));
+        bool hasDict = File.Exists(Path.Combine(dir, "dict.txt"));
+        bool installed = hasDet && hasRec && hasCls && hasDict;
+
+        if (!_paddleBusy)
+        {
+            _paddleStatus.Text = installed ? "已安装 ✓"
+                : (hasDet || hasRec || hasCls || hasDict) ? "不完整，需重新下载"
+                : "未下载";
+        }
+
+        _paddlePanel.Children.Clear();
+        _paddlePanel.Children.Add(_paddleStatus);
+        if (_paddleBusy)
+        {
+            var busy = Button("下载中…", () => { });
+            busy.IsEnabled = false;
+            _paddlePanel.Children.Add(busy);
+        }
+        else if (installed)
+        {
+            _paddlePanel.Children.Add(Button("删除", DeletePaddleOcr));
+        }
         else
-            _paddleStatus.Text = "未下载";
+        {
+            _paddlePanel.Children.Add(Button("下载", DownloadPaddleOcr));
+        }
+    }
+
+    private void DeletePaddleOcr()
+    {
+        try { Directory.Delete(Path.Combine(ResolveCurrentModelsDir(), "paddleocr"), recursive: true); }
+        catch { /* ignore */ }
+        RefreshPaddleStatus();
+    }
+
+    /// <summary>下载途中刷新一行文案，顺便把按钮压成禁用的「下载中…」。</summary>
+    private void SetPaddleBusy(string status)
+    {
+        _paddleBusy = true;
+        _paddleStatus.Text = status;
+        RefreshPaddleStatus();
     }
 
     /// <summary>返回模型根目录，与 AppSettings.ResolveModelsDirectory 逻辑一致。</summary>
@@ -763,29 +811,32 @@ public sealed class SettingsWindow : Window
         {
             using var http = new HttpClient();
             // PaddleOCR ONNX 模型来自 HuggingFace SWHL/RapidOCR
-            _paddleStatus.Text = "下载中… det.onnx";
+            SetPaddleBusy("下载中… det.onnx");
             await DownloadFile(http,
                 "https://huggingface.co/SWHL/RapidOCR/resolve/main/PP-OCRv4/ch_PP-OCRv4_det_infer.onnx",
                 Path.Combine(targetDir, "det.onnx"), progress);
-            _paddleStatus.Text = "下载中… rec.onnx";
+            SetPaddleBusy("下载中… rec.onnx");
             await DownloadFile(http,
                 "https://huggingface.co/SWHL/RapidOCR/resolve/main/PP-OCRv4/ch_PP-OCRv4_rec_infer.onnx",
                 Path.Combine(targetDir, "rec.onnx"), progress);
-            _paddleStatus.Text = "下载中… cls.onnx";
+            SetPaddleBusy("下载中… cls.onnx");
             await DownloadFile(http,
                 "https://huggingface.co/SWHL/RapidOCR/resolve/main/PP-OCRv3/ch_ppocr_mobile_v2.0_cls_train.onnx",
                 Path.Combine(targetDir, "cls.onnx"), progress);
-            _paddleStatus.Text = "下载中… dict.txt";
+            SetPaddleBusy("下载中… dict.txt");
             await DownloadFile(http,
                 "https://raw.githubusercontent.com/PaddlePaddle/PaddleOCR/release/2.7/ppocr/utils/ppocr_keys_v1.txt",
                 Path.Combine(targetDir, "dict.txt"), progress);
-            _paddleStatus.Text = "已安装 ✓";
+            _paddleBusy = false;
+            RefreshPaddleStatus();
             _dlProgress.Visibility = Visibility.Collapsed;
             MessageBox.Show(this, "PaddleOCR 模型下载完成。", "XkScreenshot",
                 MessageBoxButton.OK, MessageBoxImage.Information);
         }
         catch (Exception ex)
         {
+            _paddleBusy = false;
+            RefreshPaddleStatus();
             _paddleStatus.Text = "下载失败";
             _dlProgress.Visibility = Visibility.Collapsed;
             MessageBox.Show(this, "下载失败：" + ex.Message, "XkScreenshot",
@@ -796,7 +847,7 @@ public sealed class SettingsWindow : Window
     private UIElement PaddleOcrRow()
     {
         var stack = new StackPanel();
-        stack.Children.Add(Line(_paddleStatus, Button("下载", DownloadPaddleOcr)));
+        stack.Children.Add(_paddlePanel);
         stack.Children.Add(_dlProgress);
         return stack;
     }
@@ -848,9 +899,11 @@ public sealed class SettingsWindow : Window
         var pairs = new[] { ("en", "zh", "英语 → 中文"), ("zh", "en", "中文 → 英语") };
         foreach (var (from, to, label) in pairs)
         {
-            string pairDir = Path.Combine(opusDir, $"{from}-{to}");
+            string key = $"{from}-{to}";
+            string pairDir = Path.Combine(opusDir, key);
             bool installed = File.Exists(Path.Combine(pairDir, "encoder_model.onnx"));
-            string status = installed ? "已安装" : "未下载";
+            bool downloading = _busyLangPair == key;
+            string status = downloading ? "下载中" : installed ? "已安装" : "未下载";
 
             var row = new StackPanel { Orientation = Orientation.Horizontal };
             row.Children.Add(new TextBlock
@@ -859,19 +912,29 @@ public sealed class SettingsWindow : Window
                 VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(0, 0, 8, 0),
             });
-            if (!installed)
+
+            Button button;
+            if (downloading)
             {
-                row.Children.Add(Button("下载", () => _ = DownloadLangPair(from, to)));
+                button = Button("下载中…", () => { });
+            }
+            else if (!installed)
+            {
+                button = Button("下载", () => _ = DownloadLangPair(from, to));
             }
             else
             {
-                row.Children.Add(Button("删除", () =>
+                button = Button("删除", () =>
                 {
                     try { Directory.Delete(pairDir, recursive: true); }
                     catch { /* ignore */ }
                     RefreshLangPairs();
-                }));
+                });
             }
+
+            // 两个语言对共用一根进度条，所以下载期间把整组按钮都按住，不让并发下载
+            if (_busyLangPair is not null) button.IsEnabled = false;
+            row.Children.Add(button);
             _langPairsPanel.Children.Add(row);
         }
     }
@@ -884,6 +947,9 @@ public sealed class SettingsWindow : Window
         _langPairProgress.Visibility = Visibility.Visible;
         _langPairProgress.Value = 0;
         var progress = new Progress<int>(p => _langPairProgress.Value = p);
+
+        _busyLangPair = $"{from}-{to}";
+        RefreshLangPairs();
 
         try
         {
@@ -908,6 +974,7 @@ public sealed class SettingsWindow : Window
                 Path.Combine(pairDir, "target.spm"), progress);
 
             _langPairProgress.Visibility = Visibility.Collapsed;
+            _busyLangPair = null;
             RefreshLangPairs();
             MessageBox.Show(this, $"{from}→{to} 翻译模型下载完成。", "XkScreenshot",
                 MessageBoxButton.OK, MessageBoxImage.Information);
@@ -915,6 +982,8 @@ public sealed class SettingsWindow : Window
         catch (Exception ex)
         {
             _langPairProgress.Visibility = Visibility.Collapsed;
+            _busyLangPair = null;
+            RefreshLangPairs();
             MessageBox.Show(this, "下载失败：" + ex.Message, "XkScreenshot",
                 MessageBoxButton.OK, MessageBoxImage.Warning);
         }
