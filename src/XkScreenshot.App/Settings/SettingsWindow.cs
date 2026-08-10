@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Net.Http;
 using System.Threading.Tasks;
 using System.Windows;
@@ -13,7 +14,9 @@ using Microsoft.Win32;
 using XkScreenshot.App.Overlay;
 using XkScreenshot.App.Ui;
 using XkScreenshot.Core.Hotkeys;
+using XkScreenshot.Ocr;
 using XkScreenshot.Scroll;
+using XkScreenshot.Translate;
 
 namespace XkScreenshot.App.Settings;
 
@@ -98,7 +101,35 @@ public sealed class SettingsWindow : Window
     /// <summary>OCR 模型正在下载。期间按钮换成「下载中…」并禁用。</summary>
     private bool _paddleBusy;
 
-    /// <summary>正在下载的语言对（如 "en-zh"），没有就是 null。</summary>
+    /// <summary>
+    /// 待下载语种的下拉。装过的不出现在里面。
+    ///
+    /// 往 Items 里填的是显示名而不是对象，取回时按下标查 <see cref="_langChoices"/> ——
+    /// 和这一页其他几个下拉一个路子。填对象要靠 DisplayMemberPath，而它只作用于展开后的
+    /// 列表项，收起来那个选中框走的是另一条路，会把对象直接 ToString 出来。
+    /// </summary>
+    private readonly ComboBox _langPicker = new() { Width = 168 };
+    private List<BergamotLanguage> _langChoices = [];
+
+    /// <summary>待下载 OCR 语言包的下拉。同上，填名字、按下标取回。</summary>
+    private readonly ComboBox _ocrPackPicker = new() { Width = 260 };
+    private List<OcrLanguagePack> _ocrPackChoices = [];
+
+    private readonly StackPanel _ocrPacksPanel = new();
+
+    /// <summary>正在下载的 OCR 语言包名，没有就是 null。</summary>
+    private string? _busyOcrPack;
+
+    private readonly ProgressBar _ocrPackProgress = new()
+    {
+        Height = 4,
+        Minimum = 0,
+        Maximum = 100,
+        Value = 0,
+        Visibility = Visibility.Collapsed,
+    };
+
+    /// <summary>正在下载的语种名，没有就是 null。</summary>
     private string? _busyLangPair;
     private readonly ProgressBar _dlProgress = new()
     {
@@ -327,7 +358,7 @@ public sealed class SettingsWindow : Window
             Card(Icons.Crop, "OCR 工作模式",
                 "离线：PaddleOCR ONNX（约 17 MB）；在线：调用大模型识别。", _ocrMode),
             Card(Icons.Languages, "翻译工作模式",
-                "离线：OPUS-MT ONNX（约 50 MB/语言对）；在线：调用大模型翻译。", _translationMode),
+                "离线：Bergamot（每种语言 30~120 MB）；在线：调用大模型翻译。", _translationMode),
             Card(Icons.Command, "在线 · API 协议",
                 "OCR 和翻译共用同一个协议与 Key。", _apiProtocol),
             StackedCard(Icons.Folder, "在线 · API 地址",
@@ -344,10 +375,15 @@ public sealed class SettingsWindow : Window
                 "留空则用软件根目录下的 models/ 文件夹。",
                 Fill(_modelsDir, Button("浏览…", BrowseModelsDir))),
             Card(Icons.Scroll, "PaddleOCR 模型",
-                "检测 + 识别 + 字典，共约 17 MB。",
+                "检测 + 识别 + 字典，共约 21 MB。认汉字（简繁）、日文假名和拉丁字母。",
                 PaddleOcrRow()),
-            Card(Icons.Languages, "离线翻译语言对",
-                "每个语言对约 50 MB。默认内置中↔英互译。已下载的语言对：",
+            StackedCard(Icons.ScanLine, "OCR 语言包",
+                "默认模型已经认得中文（简繁）、日文和英文，下面这些是它认不了的文字系统。"
+                + "装上之后不用手动切：默认模型读得吃力时会自动拿装了的语言包各试一遍。",
+                OcrPackRow()),
+            StackedCard(Icons.Languages, "离线翻译语言",
+                "每种语言两个方向一起下，约 30~120 MB。非英语之间靠英语中转，"
+                + "所以想中↔日就得中文和日语都装上。",
                 LangPairRow()));
 
         AddPage(Icons.Folder, "保存",
@@ -705,6 +741,7 @@ public sealed class SettingsWindow : Window
         _model.Text = s.Translation.Model;
         _modelsDir.Text = s.ModelsDirectory;
         RefreshPaddleStatus();
+        RefreshOcrPacks();
         RefreshLangPairs();
 
         _scrollMode.SelectedIndex = s.ScrollMode == ScrollMode.Auto ? 0 : 1;
@@ -809,26 +846,23 @@ public sealed class SettingsWindow : Window
 
         try
         {
-            using var http = new HttpClient();
-            // PaddleOCR ONNX 模型来自 HuggingFace SWHL/RapidOCR
-            SetPaddleBusy("下载中… det.onnx");
-            await DownloadFile(http,
-                "https://huggingface.co/SWHL/RapidOCR/resolve/main/PP-OCRv4/ch_PP-OCRv4_det_infer.onnx",
+            using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(30) };
+
+            // 检测和识别取自 PaddlePaddle 在 HuggingFace 的官方组织；
+            // 方向分类那份官方没发 ONNX，只好还从 RapidOCR 作者的仓库拿
+            SetPaddleBusy("下载中… 检测模型");
+            await OcrLanguagePacks.DownloadFileAsync(http,
+                $"https://huggingface.co/{OcrLanguagePacks.BaseDetRepo}/resolve/main/inference.onnx",
                 Path.Combine(targetDir, "det.onnx"), progress);
-            SetPaddleBusy("下载中… rec.onnx");
-            await DownloadFile(http,
-                "https://huggingface.co/SWHL/RapidOCR/resolve/main/PP-OCRv4/ch_PP-OCRv4_rec_infer.onnx",
-                Path.Combine(targetDir, "rec.onnx"), progress);
-            SetPaddleBusy("下载中… cls.onnx");
-            await DownloadFile(http,
-                "https://huggingface.co/SWHL/RapidOCR/resolve/main/PP-OCRv3/ch_ppocr_mobile_v2.0_cls_train.onnx",
-                Path.Combine(targetDir, "cls.onnx"), progress);
-            SetPaddleBusy("下载中… dict.txt");
-            await DownloadFile(http,
-                "https://raw.githubusercontent.com/PaddlePaddle/PaddleOCR/release/2.7/ppocr/utils/ppocr_keys_v1.txt",
-                Path.Combine(targetDir, "dict.txt"), progress);
+            SetPaddleBusy("下载中… 识别模型");
+            await OcrLanguagePacks.DownloadBaseRecAsync(http, targetDir, progress);
+            SetPaddleBusy("下载中… 方向模型");
+            await OcrLanguagePacks.DownloadFileAsync(http,
+                OcrLanguagePacks.ClsUrl, Path.Combine(targetDir, "cls.onnx"), progress);
+
             _paddleBusy = false;
             RefreshPaddleStatus();
+            RefreshOcrPacks();
             _dlProgress.Visibility = Visibility.Collapsed;
             MessageBox.Show(this, "PaddleOCR 模型下载完成。", "XkScreenshot",
                 MessageBoxButton.OK, MessageBoxImage.Information);
@@ -839,6 +873,99 @@ public sealed class SettingsWindow : Window
             RefreshPaddleStatus();
             _paddleStatus.Text = "下载失败";
             _dlProgress.Visibility = Visibility.Collapsed;
+            MessageBox.Show(this, "下载失败：" + ex.Message, "XkScreenshot",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    private UIElement OcrPackRow()
+    {
+        var stack = new StackPanel();
+        stack.Children.Add(Line(_ocrPackPicker, Button("下载", () => _ = DownloadOcrPack())));
+        stack.Children.Add(_ocrPacksPanel);
+        stack.Children.Add(_ocrPackProgress);
+        return stack;
+    }
+
+    private void RefreshOcrPacks()
+    {
+        _ocrPacksPanel.Children.Clear();
+        string dir = Path.Combine(ResolveCurrentModelsDir(), "paddleocr");
+        var installed = OcrLanguagePacks.Installed(dir).ToList();
+
+        var installedCodes = installed.Select(p => p.Code).ToHashSet(StringComparer.Ordinal);
+        string? keep = SelectedOcrPack()?.Code;
+        _ocrPackChoices = [.. OcrLanguagePacks.All.Where(p => !installedCodes.Contains(p.Code))];
+        _ocrPackPicker.ItemsSource = _ocrPackChoices.Select(p => p.Name).ToList();
+        _ocrPackPicker.SelectedIndex = _ocrPackChoices.Count == 0
+            ? -1
+            : Math.Max(_ocrPackChoices.FindIndex(p => p.Code == keep), 0);
+        _ocrPackPicker.IsEnabled = _busyOcrPack is null && _ocrPackChoices.Count > 0;
+
+        foreach (var pack in installed)
+        {
+            var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 0) };
+            row.Children.Add(new TextBlock
+            {
+                Text = pack.Name,
+                VerticalAlignment = VerticalAlignment.Center,
+            });
+
+            var button = Button("删除", () =>
+            {
+                try { File.Delete(OcrLanguagePacks.RecPath(dir, pack.Code)); } catch { /* 被占着就算了 */ }
+                try { File.Delete(OcrLanguagePacks.DictPath(dir, pack.Code)); } catch { /* 同上 */ }
+                RefreshOcrPacks();
+            });
+            if (_busyOcrPack is not null) button.IsEnabled = false;
+            row.Children.Add(button);
+            _ocrPacksPanel.Children.Add(row);
+        }
+
+        if (_busyOcrPack is not null)
+        {
+            _ocrPacksPanel.Children.Add(new TextBlock
+            {
+                Text = $"正在下载 {_busyOcrPack}…",
+                Margin = new Thickness(0, 8, 0, 0),
+                Foreground = Brush("TextSecondary"),
+            });
+        }
+    }
+
+    private OcrLanguagePack? SelectedOcrPack()
+        => (uint)_ocrPackPicker.SelectedIndex < (uint)_ocrPackChoices.Count
+            ? _ocrPackChoices[_ocrPackPicker.SelectedIndex]
+            : null;
+
+    private async Task DownloadOcrPack()
+    {
+        if (_busyOcrPack is not null) return;
+        if (SelectedOcrPack() is not { } pack) return;
+
+        string dir = Path.Combine(ResolveCurrentModelsDir(), "paddleocr");
+        _ocrPackProgress.Visibility = Visibility.Visible;
+        _ocrPackProgress.Value = 0;
+        _busyOcrPack = pack.Name;
+        RefreshOcrPacks();
+
+        try
+        {
+            using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(30) };
+            await OcrLanguagePacks.DownloadPackAsync(http, dir, pack,
+                new Progress<int>(p => _ocrPackProgress.Value = p));
+
+            _ocrPackProgress.Visibility = Visibility.Collapsed;
+            _busyOcrPack = null;
+            RefreshOcrPacks();
+            MessageBox.Show(this, $"{pack.Name}识别模型下载完成。", "XkScreenshot",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            _ocrPackProgress.Visibility = Visibility.Collapsed;
+            _busyOcrPack = null;
+            RefreshOcrPacks();
             MessageBox.Show(this, "下载失败：" + ex.Message, "XkScreenshot",
                 MessageBoxButton.OK, MessageBoxImage.Warning);
         }
@@ -855,6 +982,7 @@ public sealed class SettingsWindow : Window
     private UIElement LangPairRow()
     {
         var stack = new StackPanel();
+        stack.Children.Add(Line(_langPicker, Button("下载", () => _ = DownloadLanguage())));
         stack.Children.Add(_langPairsPanel);
         stack.Children.Add(_langPairProgress);
         return stack;
@@ -890,93 +1018,129 @@ public sealed class SettingsWindow : Window
         progress?.Report(100);
     }
 
+    /// <summary>模型目录下装了哪些语种 —— 英语不算，它是靠「某语言 ↔ 英语」隐含存在的。</summary>
+    private static List<BergamotLanguage> InstalledLanguages(string bergamotDir)
+        => [.. BergamotModelDir.EnumerateInstalled(bergamotDir)
+            .SelectMany(d => new[] { d.From, d.To })
+            .Where(c => c != BergamotCatalog.Pivot)
+            .Distinct(StringComparer.Ordinal)
+            .Select(BergamotCatalog.Find)
+            .OfType<BergamotLanguage>()
+            .OrderBy(l => l.Name, StringComparer.CurrentCulture)];
+
     private void RefreshLangPairs()
     {
         _langPairsPanel.Children.Clear();
-        string root = ResolveCurrentModelsDir();
-        string opusDir = Path.Combine(root, "opus-mt");
+        string bergamotDir = Path.Combine(ResolveCurrentModelsDir(), BergamotModelDir.FolderName);
+        var installed = InstalledLanguages(bergamotDir);
 
-        var pairs = new[] { ("en", "zh", "英语 → 中文"), ("zh", "en", "中文 → 英语") };
-        foreach (var (from, to, label) in pairs)
+        // 下拉里只留没装的：装过的那些下面已经各有一行，重复列出来只会让人以为能装两遍
+        var installedCodes = installed.Select(l => l.Code).ToHashSet(StringComparer.Ordinal);
+        string? keep = SelectedLanguage()?.Code;
+        _langChoices = [.. BergamotCatalog.Languages.Where(l => !installedCodes.Contains(l.Code))];
+        _langPicker.ItemsSource = _langChoices.Select(l => l.Name).ToList();
+        _langPicker.SelectedIndex = _langChoices.Count == 0
+            ? -1
+            : Math.Max(_langChoices.FindIndex(l => l.Code == keep), 0);
+        _langPicker.IsEnabled = _busyLangPair is null && _langChoices.Count > 0;
+
+        if (installed.Count == 0 && _busyLangPair is null)
         {
-            string key = $"{from}-{to}";
-            string pairDir = Path.Combine(opusDir, key);
-            bool installed = File.Exists(Path.Combine(pairDir, "encoder_model.onnx"));
-            bool downloading = _busyLangPair == key;
-            string status = downloading ? "下载中" : installed ? "已安装" : "未下载";
+            _langPairsPanel.Children.Add(new TextBlock
+            {
+                Text = "还没装任何语言，离线翻译用不了。",
+                Margin = new Thickness(0, 8, 0, 0),
+                Foreground = Brush("TextSecondary"),
+            });
+            return;
+        }
 
-            var row = new StackPanel { Orientation = Orientation.Horizontal };
+        foreach (var lang in installed)
+        {
+            var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 0) };
             row.Children.Add(new TextBlock
             {
-                Text = $"{label}  {status}",
+                Text = lang.ToEnglishOnly ? $"{lang.Name} → 英语" : $"{lang.Name} ↔ 英语",
                 VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(0, 0, 8, 0),
             });
 
-            Button button;
-            if (downloading)
-            {
-                button = Button("下载中…", () => { });
-            }
-            else if (!installed)
-            {
-                button = Button("下载", () => _ = DownloadLangPair(from, to));
-            }
-            else
-            {
-                button = Button("删除", () =>
-                {
-                    try { Directory.Delete(pairDir, recursive: true); }
-                    catch { /* ignore */ }
-                    RefreshLangPairs();
-                });
-            }
-
-            // 两个语言对共用一根进度条，所以下载期间把整组按钮都按住，不让并发下载
+            var button = Button("删除", () => DeleteLanguage(bergamotDir, lang));
+            // 一根进度条管所有语言，所以下载期间把整组按钮都按住，不让并发下载
             if (_busyLangPair is not null) button.IsEnabled = false;
             row.Children.Add(button);
             _langPairsPanel.Children.Add(row);
         }
+
+        if (_busyLangPair is not null)
+        {
+            _langPairsPanel.Children.Add(new TextBlock
+            {
+                Text = $"正在下载 {_busyLangPair}…",
+                Margin = new Thickness(0, 8, 0, 0),
+                Foreground = Brush("TextSecondary"),
+            });
+        }
     }
 
-    private async Task DownloadLangPair(string from, string to)
+    private void DeleteLanguage(string bergamotDir, BergamotLanguage lang)
     {
-        string pairDir = Path.Combine(ResolveCurrentModelsDir(), "opus-mt", $"{from}-{to}");
-        Directory.CreateDirectory(pairDir);
+        foreach (string direction in BergamotCatalog.DirectionsOf(lang))
+        {
+            try { Directory.Delete(Path.Combine(bergamotDir, direction), recursive: true); }
+            catch { /* 正被引擎占着或者已经没了，两种都不值得打断用户 */ }
+        }
+        RefreshLangPairs();
+    }
+
+    /// <summary>
+    /// 下一个语种，两个方向一起下。
+    ///
+    /// 不给用户拆成两行各下各的：非英语之间的翻译要靠英语中转，缺哪一半都会在
+    /// 某个方向上突然翻不了，而那时候他早就忘了当初只勾了一半。
+    /// </summary>
+    private BergamotLanguage? SelectedLanguage()
+        => (uint)_langPicker.SelectedIndex < (uint)_langChoices.Count
+            ? _langChoices[_langPicker.SelectedIndex]
+            : null;
+
+    private async Task DownloadLanguage()
+    {
+        if (_busyLangPair is not null) return;
+        if (SelectedLanguage() is not { } lang) return;
+
+        string bergamotDir = Path.Combine(ResolveCurrentModelsDir(), BergamotModelDir.FolderName);
+        Directory.CreateDirectory(bergamotDir);
 
         _langPairProgress.Visibility = Visibility.Visible;
         _langPairProgress.Value = 0;
-        var progress = new Progress<int>(p => _langPairProgress.Value = p);
-
-        _busyLangPair = $"{from}-{to}";
+        _busyLangPair = lang.Name;
         RefreshLangPairs();
 
         try
         {
-            using var http = new HttpClient();
-            string modelName = $"opus-mt-{from}-{to}";
-            // en→zh 在 onnx-community，zh→en 在 Xenova
-            string org = (from == "zh") ? "Xenova" : "onnx-community";
-            string baseUrl = $"https://huggingface.co/{org}/{modelName}/resolve/main";
+            using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(30) };
+            var registry = await BergamotCatalog.LoadRegistryAsync(http);
 
-            // ONNX 模型在 onnx/ 子目录，tokenizer 在根目录
-            await DownloadFile(http,
-                $"{baseUrl}/onnx/encoder_model.onnx",
-                Path.Combine(pairDir, "encoder_model.onnx"), progress);
-            await DownloadFile(http,
-                $"{baseUrl}/onnx/decoder_model.onnx",
-                Path.Combine(pairDir, "decoder_model.onnx"), progress);
-            await DownloadFile(http,
-                $"{baseUrl}/source.spm",
-                Path.Combine(pairDir, "source.spm"), progress);
-            await DownloadFile(http,
-                $"{baseUrl}/target.spm",
-                Path.Combine(pairDir, "target.spm"), progress);
+            var directions = BergamotCatalog.DirectionsOf(lang).Where(registry.Has).ToList();
+            if (directions.Count == 0)
+                throw new InvalidOperationException($"模型库里暂时没有 {lang.Name} 的模型。");
+
+            for (int i = 0; i < directions.Count; i++)
+            {
+                int index = i;
+                _busyLangPair = $"{lang.Name}（{index + 1}/{directions.Count}）";
+                RefreshLangPairs();
+
+                // 两个方向共用一根进度条，各占一半
+                var progress = new Progress<int>(p =>
+                    _langPairProgress.Value = (index * 100 + p) / directions.Count);
+                await registry.DownloadAsync(http, bergamotDir, directions[index], progress);
+            }
 
             _langPairProgress.Visibility = Visibility.Collapsed;
             _busyLangPair = null;
             RefreshLangPairs();
-            MessageBox.Show(this, $"{from}→{to} 翻译模型下载完成。", "XkScreenshot",
+            MessageBox.Show(this, $"{lang.Name}翻译模型下载完成。", "XkScreenshot",
                 MessageBoxButton.OK, MessageBoxImage.Information);
         }
         catch (Exception ex)

@@ -315,7 +315,7 @@ public partial class App : Application
     {
         string modelRoot = _settings.ResolveModelsDirectory();
         string paddleOcrDir = System.IO.Path.Combine(modelRoot, "paddleocr");
-        string opusMtDir = System.IO.Path.Combine(modelRoot, "opus-mt");
+        string bergamotDir = System.IO.Path.Combine(modelRoot, BergamotModelDir.FolderName);
 
         // OCR engine
         (_ocrEngine as IDisposable)?.Dispose();
@@ -360,17 +360,15 @@ public partial class App : Application
         }
         else
         {
-            if (System.IO.Directory.Exists(opusMtDir) && _settings.Translation.OfflinePairs.Count > 0)
+            try
             {
-                try
-                {
-                    _translator = new OpusMtTranslator(opusMtDir,
-                        _settings.Translation.OfflinePairs.Select(p => (p.From, p.To)));
-                }
-                catch
-                {
-                    // 模型文件缺失，translator 保持 null
-                }
+                // 能翻哪些语种由目录里装了什么决定，不另外记一份清单 ——
+                // 记了就会跟磁盘上的实际情况漂移，而漂移的那一刻正好是用户要用的时候
+                _translator = new BergamotTranslator(bergamotDir);
+            }
+            catch
+            {
+                // 一个语种都没下，translator 保持 null，真去翻的时候提示用户去下
             }
         }
     }
@@ -424,36 +422,89 @@ public partial class App : Application
             var lines = await _ocrEngine.RecognizeAsync(image);
             var sourceText = string.Join(Environment.NewLine, lines.Select(l => l.Text));
 
-            // 第二阶段：翻译
+            // 第二阶段：定语种。先判原文是什么，再据此列出翻得到的目标
+            var catalog = _translator as ILanguageCatalog;
+            string source = catalog?.DetectLanguage(sourceText) ?? "auto";
+            var targets = TargetOptionsFor(catalog, source);
+
+            // 认得出是什么语言、但没装它的模型。这时候不能挑一个别的语种硬翻 ——
+            // 翻出来的东西没人看得懂，用户还以为是翻译坏了，而真正该做的只是去下个模型
+            if (targets.Count == 0)
+            {
+                window.ShowResult(
+                    $"检测到{catalog!.DisplayName(source)}，但没有装它的离线翻译模型。\n"
+                    + $"到「设置 → 识别 / 翻译 → 离线翻译语言」里下载{catalog.DisplayName(source)}即可。\n\n"
+                    + "───────── 识别到的原文 ─────────\n" + sourceText);
+                return;
+            }
+
+            string target = DefaultTargetFor(source, targets);
+
+            // 第三阶段：翻译
             window.ShowLoading("翻译中...");
+            window.ShowResult(await TranslateCached(sourceText, source, target));
 
-            var cached = _translationCache?.Get(sourceText,
-                _settings.Translation.SourceLanguage, _settings.Translation.TargetLanguage);
-
-            string translated;
-            if (cached is not null)
-            {
-                translated = cached;
-            }
-            else
-            {
-                translated = await _translator.TranslateAsync(
-                    sourceText,
-                    _settings.Translation.SourceLanguage,
-                    _settings.Translation.TargetLanguage);
-
-                _translationCache?.Set(sourceText,
-                    _settings.Translation.SourceLanguage, _settings.Translation.TargetLanguage,
-                    translated);
-            }
-
-            window.ShowResult(translated);
+            window.SetupTargetLanguage(
+                catalog?.DisplayName(source) ?? "原文",
+                targets,
+                target,
+                async code =>
+                {
+                    try
+                    {
+                        window.ShowLoading("翻译中...");
+                        window.ShowResult(await TranslateCached(sourceText, source, code));
+                    }
+                    catch (Exception ex)
+                    {
+                        window.ShowResult("翻译失败：" + ex.Message);
+                    }
+                });
         }
         catch (Exception ex)
         {
             window.Close();
             ShowTrayWarning("翻译失败：" + ex.Message);
         }
+    }
+
+    private async Task<string> TranslateCached(string text, string source, string target)
+    {
+        if (_translationCache?.Get(text, source, target) is { } hit) return hit;
+
+        string translated = await _translator!.TranslateAsync(text, source, target);
+        _translationCache?.Set(text, source, target, translated);
+        return translated;
+    }
+
+    /// <summary>
+    /// 在线引擎答不上「你能翻成什么」，给它一份常用语种垫着；
+    /// 离线引擎则严格按装了什么列，免得下拉里出现一选就报错的项。
+    /// </summary>
+    private static IReadOnlyList<OcrResultWindow.TargetOption> TargetOptionsFor(
+        ILanguageCatalog? catalog, string source)
+    {
+        var codes = catalog?.TargetsFrom(source)
+            ?? (string[])["zh", "en", "ja", "ko", "fr", "de", "es", "ru"];
+
+        return [.. codes
+            .Where(c => c != source)
+            .Select(c => new OcrResultWindow.TargetOption(c, BergamotCatalog.DisplayName(c)))];
+    }
+
+    /// <summary>
+    /// 默认译成中文；原文本来就是中文的话译成英文 —— 把中文翻成中文没有意义，
+    /// 而这时候人多半是想知道「这句英文该怎么说」。
+    /// </summary>
+    private static string DefaultTargetFor(
+        string source, IReadOnlyList<OcrResultWindow.TargetOption> targets)
+    {
+        bool chinese = source is "zh" or "zh_hant";
+        string[] preferred = chinese ? ["en"] : ["zh", "zh_hant"];
+
+        return preferred.FirstOrDefault(p => targets.Any(t => t.Code == p))
+            ?? targets.FirstOrDefault()?.Code
+            ?? "en";
     }
 
     private async void OnCaptured(CaptureResult result)
