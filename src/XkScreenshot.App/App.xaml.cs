@@ -499,14 +499,21 @@ public partial class App : Application
     }
 
     /// <summary>
-    /// 默认译成中文；原文本来就是中文的话译成英文 —— 把中文翻成中文没有意义，
+    /// 默认译成简体中文；原文已经是简体的话译成英文 —— 把简体翻成简体没有意义，
     /// 而这时候人多半是想知道「这句英文该怎么说」。
+    ///
+    /// 繁体走的是「译成简体」这一支而不是「译成英文」：简繁虽然都算中文，
+    /// 但会去截一段繁体来翻的人，要的通常就是把它变成看着顺眼的简体。
     /// </summary>
     private static string DefaultTargetFor(
         string source, IReadOnlyList<OcrResultWindow.TargetOption> targets)
     {
-        bool chinese = source is "zh" or "zh_hant";
-        string[] preferred = chinese ? ["en"] : ["zh", "zh_hant"];
+        string[] preferred = source switch
+        {
+            "zh" => ["en"],
+            "zh_hant" => ["zh", "en"],
+            _ => ["zh", "zh_hant"],
+        };
 
         return preferred.FirstOrDefault(p => targets.Any(t => t.Code == p))
             ?? targets.FirstOrDefault()?.Code
