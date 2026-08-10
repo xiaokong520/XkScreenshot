@@ -24,9 +24,6 @@ public sealed class LLMOcrEngine : IOcrEngine
 只返回识别到的文字，不要任何解释、问候语或前缀后缀。
 """;
 
-    /// <summary>最近一次 API 返回的原始文本，用于调试。</summary>
-    public string? LastRawResponse { get; private set; }
-
     public LLMOcrEngine(LlmApiClient client, LlmApiConfig config)
     {
         _client = client;
@@ -41,7 +38,6 @@ public sealed class LLMOcrEngine : IOcrEngine
         string raw = await _client.ChatWithImageAsync(_config, Prompt, base64, ct)
             .ConfigureAwait(false);
 
-        LastRawResponse = raw;
         return ParseResponse(raw);
     }
 
