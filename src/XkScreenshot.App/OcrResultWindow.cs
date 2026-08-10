@@ -29,6 +29,13 @@ public sealed class OcrResultWindow : Window
     private readonly StackPanel _targetPanel;
     private readonly TextBlock _detectedLabel;
     private readonly ComboBox _targetBox;
+    private readonly Button _copyBtn;
+
+    private const string CopyLabel = "复制";
+
+    /// <summary>「已复制」显示多久变回「复制」。</summary>
+    private static readonly TimeSpan CopyFlash = TimeSpan.FromSeconds(1.5);
+    private DispatcherTimer? _copyFlashTimer;
 
     /// <summary>窗口关闭后忽略后续的 ShowResult / ShowLoading 调用。</summary>
     private bool _closed;
@@ -136,17 +143,30 @@ public sealed class OcrResultWindow : Window
         };
 
         // 底部按钮
-        var copyBtn = new Button
+        _copyBtn = new Button
         {
-            Content = "复制",
+            Content = CopyLabel,
             Width = 80,
             Height = 32,
             Margin = new Thickness(0, 0, 8, 0),
         };
-        copyBtn.Click += (_, _) =>
+        _copyBtn.Click += (_, _) =>
         {
-            try { Clipboard.SetText(_textBox.Text); }
-            catch { /* 剪贴板被占用 */ }
+            if (_textBox.Text.Length == 0) { FlashCopyResult("没有内容"); return; }
+
+            try
+            {
+                Output.ClipboardWriter.SetText(_textBox.Text);
+                _copyBtn.ToolTip = null;
+                FlashCopyResult("已复制");
+            }
+            catch (Exception ex)
+            {
+                // 重试都用完了还写不进去。原因挂在按钮的提示上 ——
+                // 按钮上只写得下「复制失败」，而「为什么」是这时候唯一有用的信息
+                _copyBtn.ToolTip = Output.ClipboardWriter.Describe(ex);
+                FlashCopyResult("复制失败");
+            }
         };
 
         var closeBtn = new Button
@@ -163,7 +183,7 @@ public sealed class OcrResultWindow : Window
             HorizontalAlignment = HorizontalAlignment.Right,
             Margin = new Thickness(12),
         };
-        buttonPanel.Children.Add(copyBtn);
+        buttonPanel.Children.Add(_copyBtn);
         buttonPanel.Children.Add(closeBtn);
 
         // 底栏左半边：翻译模式下挂「检测到 X → [目标语种]」，纯 OCR 模式整个不显示
@@ -245,7 +265,37 @@ public sealed class OcrResultWindow : Window
         {
             if (e.Key == Key.Escape) { _closed = true; Close(); }
         };
-        Closed += (_, _) => _closed = true;
+        // 计时器不停掉的话，窗口关了它还攥着这个窗口，直到那一下 Tick 才撒手
+        Closed += (_, _) => { _closed = true; _copyFlashTimer?.Stop(); };
+    }
+
+    /// <summary>
+    /// 复制完在按钮上给一句回执。
+    ///
+    /// 「复制」这个动作本身在屏幕上什么也不会发生 —— 不吭声的话，人只能靠再点一次
+    /// 来确认它响应了，而再点一次同样什么也看不见。失败也要说：剪贴板被别的程序
+    /// 占着是常有的事，那时候用户手里其实是上一次复制的东西，不说就要粘错。
+    /// </summary>
+    private void FlashCopyResult(string text)
+    {
+        _copyBtn.Content = text;
+
+        _copyFlashTimer ??= NewCopyFlashTimer();
+
+        // Stop + Start 才算重新上弦：连点时该从最后那一次点起算
+        _copyFlashTimer.Stop();
+        _copyFlashTimer.Start();
+    }
+
+    private DispatcherTimer NewCopyFlashTimer()
+    {
+        var timer = new DispatcherTimer(DispatcherPriority.Normal, Dispatcher) { Interval = CopyFlash };
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+            _copyBtn.Content = CopyLabel;
+        };
+        return timer;
     }
 
     /// <summary>更新加载提示文字（如从 "识别中..." 切到 "翻译中..."）。</summary>
