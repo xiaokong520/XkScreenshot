@@ -1,4 +1,6 @@
 using System;
+using System.ComponentModel;
+using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -20,7 +22,20 @@ namespace XkScreenshot.App.Output;
 /// </summary>
 public static class ClipboardWriter
 {
-    private const int RetryCount = 8;
+    /// <summary>
+    /// 重试总共熬这么久，超了就认输。
+    ///
+    /// 按时间算而不是按次数算，是因为一次尝试要多久根本不由我们定：
+    /// WPF 的 Clipboard.SetDataObject 内部自己就会重试十次、每次隔 100 毫秒，
+    /// 也就是说光是「失败一次」就要花掉一秒。原来那版按次数写（重试 8 次），
+    /// 遇上剪贴板被长期占着的机器，界面能整整卡九秒才弹出「复制失败」。
+    ///
+    /// 这个数是这么定的：真正的偶发占用只有几十毫秒，WPF 自带那一秒早就够了；
+    /// 熬到两秒还进不去的，多半是有个程序（远程控制的剪贴板同步、剪贴板管理器、
+    /// 输入法）在持续霸着它，再熬下去也是白熬，不如早点把话说给用户听。
+    /// </summary>
+    private static readonly TimeSpan RetryBudget = TimeSpan.FromSeconds(2);
+
     private const int RetryDelayMs = 60;
 
     public static void SetImage(BitmapSource image)
@@ -42,21 +57,152 @@ public static class ClipboardWriter
         // 而没有透明区域可合成的图，合出来的和原图一模一样
         data.SetImage(IsOpaque(image.Format) ? image : FlattenOntoWhite(image));
 
-        // 剪贴板是全局独占资源，输入法、云剪贴板、密码管理器都可能正好占着它。
-        // 这里必然偶发 CLIPBRD_E_CANT_OPEN，重试几次是标准做法，不是偷懒。
-        for (int attempt = 0; ; attempt++)
+        Put(data);
+    }
+
+    /// <summary>
+    /// 把一段文字写进剪贴板。
+    ///
+    /// 走 Win32 原生的 CF_UNICODETEXT，不走 <see cref="Clipboard.SetText"/> —— 后者内部是
+    /// OLE 剪贴板（OleSetClipboard + OleFlushClipboard），而 OLE 那一层会被剪贴板监听方
+    /// 按住：远程控制软件的剪贴板同步、剪贴板历史服务这类程序，每次剪贴板一变就拿
+    /// OleGetClipboard 去看内容，看完不放手，于是接下来好几秒里谁走 OLE 都写不进去，
+    /// 报 CLIPBRD_E_CANT_OPEN。实测过：同一台机器同一秒内交替写十二次，OLE 六次全失败
+    /// （每次还要先卡满 WPF 内部那一秒重试），原生六次全成功、每次 0~2 毫秒。
+    ///
+    /// 纯文字本来也用不着 OLE 那套：CF_UNICODETEXT 摆上去就完事，CF_TEXT / CF_OEMTEXT
+    /// 由系统自己合成，接收方一样认；HGLOBAL 的所有权交给系统，进程退出后内容照样在。
+    /// </summary>
+    public static void SetText(string text)
+    {
+        var clock = Stopwatch.StartNew();
+
+        while (true)
+        {
+            try
+            {
+                RawSetText(text);
+                return;
+            }
+            // 拒绝访问就是「真的有人正开着剪贴板」，这个才值得等
+            catch (Win32Exception e) when (e.NativeErrorCode == ErrorAccessDenied
+                                          && clock.Elapsed < RetryBudget)
+            {
+                Thread.Sleep(RetryDelayMs);
+            }
+        }
+    }
+
+    private static void RawSetText(string text)
+    {
+        // 传 IntPtr.Zero：剪贴板不归任何窗口，纯文字也没有延迟渲染的余地，
+        // 用不着一个窗口留在那儿接 WM_RENDERFORMAT
+        if (!OpenClipboard(IntPtr.Zero)) throw new Win32Exception(Marshal.GetLastWin32Error());
+
+        IntPtr block = IntPtr.Zero;
+        try
+        {
+            if (!EmptyClipboard()) throw new Win32Exception(Marshal.GetLastWin32Error());
+
+            // CF_UNICODETEXT 要的是 UTF-16 加一个结尾的 0
+            var chars = new char[text.Length + 1];
+            text.CopyTo(0, chars, 0, text.Length);
+
+            block = GlobalAlloc(GmemMoveable, (UIntPtr)(chars.Length * sizeof(char)));
+            if (block == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
+
+            IntPtr address = GlobalLock(block);
+            if (address == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
+            try { Marshal.Copy(chars, 0, address, chars.Length); }
+            finally { GlobalUnlock(block); }
+
+            if (SetClipboardData(CfUnicodeText, block) == IntPtr.Zero)
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+
+            // 成了：这块内存从此归系统，我们不能再碰，更不能释放
+            block = IntPtr.Zero;
+        }
+        finally
+        {
+            if (block != IntPtr.Zero) GlobalFree(block);
+            CloseClipboard();
+        }
+    }
+
+    /// <summary>
+    /// 真正下手那一下。
+    ///
+    /// 剪贴板是全局独占资源，输入法、云剪贴板、密码管理器、远程控制软件的剪贴板同步
+    /// 都可能正好占着它 —— 谁都只占几十毫秒，但那几十毫秒里谁也写不进去。
+    /// 这里必然偶发 CLIPBRD_E_CANT_OPEN，重试是标准做法，不是偷懒。
+    ///
+    /// 熬完 <see cref="RetryBudget"/> 还进不去就把异常抛出去，让调用方去告诉用户。
+    /// 咽下去最坏：用户手里还是上一次复制的东西，粘错了也查不出原因。
+    /// </summary>
+    private static void Put(DataObject data)
+    {
+        var clock = Stopwatch.StartNew();
+
+        while (true)
         {
             try
             {
                 Clipboard.SetDataObject(data, copy: true);
                 return;
             }
-            catch (COMException) when (attempt < RetryCount)
+            catch (COMException) when (clock.Elapsed < RetryBudget)
             {
                 Thread.Sleep(RetryDelayMs);
             }
         }
     }
+
+    /// <summary>
+    /// 把写失败的原因翻成人话，给界面用。
+    ///
+    /// 原样把错误码摆出来（「OpenClipboard 失败 (0x800401D0)」）对用户没有用：
+    /// 它既不说是谁的问题，也不说该怎么办 —— 而这个错几乎总是别的程序造成的，
+    /// 说清楚了用户才知道该去关掉那个程序，而不是以为这个软件坏了。
+    /// </summary>
+    public static string Describe(Exception error)
+        => error is COMException { HResult: ClipboardCantOpen }
+            or Win32Exception { NativeErrorCode: ErrorAccessDenied }
+            ? "剪贴板正被其他程序占用（远程控制、剪贴板管理器、输入法都会抢它），过一会儿再试"
+            : error.Message;
+
+    // ---------------- Win32 ----------------
+
+    private const int ClipboardCantOpen = unchecked((int)0x800401D0);
+
+    /// <summary>OpenClipboard 撞上「已经有别的窗口开着它」时给的就是这个。</summary>
+    private const int ErrorAccessDenied = 5;
+
+    private const uint CfUnicodeText = 13;
+    private const uint GmemMoveable = 0x0002;
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool OpenClipboard(IntPtr owner);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool CloseClipboard();
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool EmptyClipboard();
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern IntPtr SetClipboardData(uint format, IntPtr block);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr GlobalAlloc(uint flags, UIntPtr bytes);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr GlobalLock(IntPtr block);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GlobalUnlock(IntPtr block);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr GlobalFree(IntPtr block);
 
     /// <summary>这个格式压根没有 alpha 通道 —— 抓屏直出的冻结画面就是这一类。</summary>
     private static bool IsOpaque(PixelFormat format)

@@ -910,7 +910,7 @@ public sealed class OverlayWindow : Window
 
         try
         {
-            Clipboard.SetText(_session.FormatCursorColor());
+            Output.ClipboardWriter.SetText(_session.FormatCursorColor());
         }
         catch (Exception)
         {
