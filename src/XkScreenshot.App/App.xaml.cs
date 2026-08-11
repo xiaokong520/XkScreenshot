@@ -488,7 +488,7 @@ public partial class App : Application
             return;
         }
 
-        var window = new OcrResultWindow(image, "文字识别结果");
+        var window = new TextResultWindow(image, "文字识别结果");
         window.Show();
 
         try
@@ -518,7 +518,7 @@ public partial class App : Application
             return;
         }
 
-        var window = new OcrResultWindow(image, "翻译结果");
+        var window = new TextResultWindow(image, "翻译结果");
         window.Show();
 
         try
@@ -594,7 +594,7 @@ public partial class App : Application
     /// 在线引擎答不上「你能翻成什么」，给它一份常用语种垫着；
     /// 离线引擎则严格按装了什么列，免得下拉里出现一选就报错的项。
     /// </summary>
-    private static IReadOnlyList<OcrResultWindow.TargetOption> TargetOptionsFor(
+    private static IReadOnlyList<TextResultWindow.TargetOption> TargetOptionsFor(
         ILanguageCatalog? catalog, string source)
     {
         var codes = catalog?.TargetsFrom(source)
@@ -602,7 +602,7 @@ public partial class App : Application
 
         return [.. codes
             .Where(c => c != source)
-            .Select(c => new OcrResultWindow.TargetOption(c, BergamotCatalog.DisplayName(c)))];
+            .Select(c => new TextResultWindow.TargetOption(c, BergamotCatalog.DisplayName(c)))];
     }
 
     /// <summary>
@@ -613,7 +613,7 @@ public partial class App : Application
     /// 但会去截一段繁体来翻的人，要的通常就是把它变成看着顺眼的简体。
     /// </summary>
     private static string DefaultTargetFor(
-        string source, IReadOnlyList<OcrResultWindow.TargetOption> targets)
+        string source, IReadOnlyList<TextResultWindow.TargetOption> targets)
     {
         string[] preferred = source switch
         {

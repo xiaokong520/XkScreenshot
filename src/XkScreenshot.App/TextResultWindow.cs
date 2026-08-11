@@ -14,10 +14,12 @@ using XkScreenshot.Ocr;
 namespace XkScreenshot.App;
 
 /// <summary>
-/// OCR / 翻译结果展示窗口。左侧显示原图，右侧先显示加载动画，
+/// 文本结果展示窗口，文字识别和翻译共用。左侧显示原图，右侧先显示加载动画，
 /// 等异步处理完后调用 ShowResult() 填入文字。
+///
+/// 翻译比识别多一步选目标语种，那部分挂在 SetupTargetLanguage() 里，不调就不显示。
 /// </summary>
-public sealed class OcrResultWindow : Window
+public sealed class TextResultWindow : Window
 {
     /// <summary>目标语种下拉里的一项。</summary>
     public sealed record TargetOption(string Code, string Name);
@@ -40,7 +42,7 @@ public sealed class OcrResultWindow : Window
     /// <summary>窗口关闭后忽略后续的 ShowResult / ShowLoading 调用。</summary>
     private bool _closed;
 
-    public OcrResultWindow(BitmapSource image, string title = "文字识别结果")
+    public TextResultWindow(BitmapSource image, string title)
     {
         Title = title;
         Width = 1000;
