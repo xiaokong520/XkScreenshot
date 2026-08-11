@@ -50,7 +50,9 @@ public sealed class TextResultWindow : Window
         MinWidth = 600;
         MinHeight = 400;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
-        ShowInTaskbar = false;
+        // 这个窗口能最小化，就必须在任务栏里占个位置：没有任务栏按钮的窗口最小化后
+        // 会退回老式的桌面残条 —— 屏幕角落上一条光秃秃的标题栏，还跟着置顶浮在最前
+        ShowInTaskbar = true;
         Topmost = true;
         ResizeMode = ResizeMode.CanResize;
         SnapsToDevicePixels = true;
