@@ -58,6 +58,14 @@ public sealed class AppSettings
     /// <summary>回溯截屏历史缓存多少条。每条含一张整屏画面，0 = 关掉。</summary>
     public int HistoryCapacity { get; set; } = CaptureHistory.DefaultCapacity;
 
+    /// <summary>
+    /// 截屏历史存到哪儿。留空 = <see cref="HistoryStore.DefaultDirectory"/>。
+    ///
+    /// 值得单独拿出来给用户改：每条历史压着一张整屏 PNG，几十条就是几百兆，
+    /// 而 %APPDATA% 在系统盘上，系统盘紧张的机器上这一项迟早会硌着人。
+    /// </summary>
+    public string HistoryDirectory { get; set; } = string.Empty;
+
     // ---------------- 长截图 ----------------
 
     /// <summary>长截图默认滚动方式：自动（程序发滚轮）或手动（用户自己滚）。</summary>
@@ -91,6 +99,10 @@ public sealed class AppSettings
     /// <summary>实际写文件的目录。设置里留空就用系统「图片」文件夹。</summary>
     public string ResolveSaveDirectory()
         => string.IsNullOrWhiteSpace(SaveDirectory) ? DefaultSaveDirectory : SaveDirectory;
+
+    /// <summary>截屏历史实际落盘的目录。设置里留空就用默认那个。</summary>
+    public string ResolveHistoryDirectory()
+        => string.IsNullOrWhiteSpace(HistoryDirectory) ? HistoryStore.DefaultDirectory : HistoryDirectory;
 
     /// <summary>
     /// 清洗过的文件名前缀。用户在设置里能敲进任何字符，其中 \ / : * ? " &lt; &gt; | 会让

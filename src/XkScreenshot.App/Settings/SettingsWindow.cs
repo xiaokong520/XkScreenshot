@@ -77,6 +77,7 @@ public sealed class SettingsWindow : Window
     private readonly TextBox _directory = new();
     private readonly TextBox _prefix = new() { Width = 200 };
     private readonly TextBox _historyCapacity = new() { Width = 64, MaxLength = 3 };
+    private readonly TextBox _historyDir = new();
     private readonly ComboBox _defaultAction = new() { Width = 168 };
     private readonly ComboBox _scrollMode = new() { Width = 168 };
     private readonly TextBox _scrollMaxHeight = new() { Width = 72, MaxLength = 5 };
@@ -250,6 +251,7 @@ public sealed class SettingsWindow : Window
         // 只说「留空则用系统「图片」文件夹」，用户还得自己去猜那是哪个盘的哪一层
         Placeholder.SetText(_directory, AppSettings.DefaultSaveDirectory);
         Placeholder.SetText(_modelsDir, AppSettings.DefaultModelsDirectory);
+        Placeholder.SetText(_historyDir, HistoryStore.DefaultDirectory);
 
         Background = Brush("PageBg");
         Content = BuildLayout();
@@ -371,6 +373,9 @@ public sealed class SettingsWindow : Window
             Card(Icons.Eye, "显示快捷键提示面板", null, _showHints),
             Card(Icons.Cursor, "默认用控件级检测", null, _elementMode),
             Card(Icons.History, "记住多少条截屏历史", null, Line(_historyCapacity, Suffix("条"))),
+            StackedCard(Icons.Folder, "截屏历史存放目录",
+                "每条历史含一张整屏画面。改路径时已存下的会一起搬过去。",
+                Fill(_historyDir, Button("浏览…", BrowseHistoryDir))),
             Card(Icons.Scroll, "长截图滚动方式", null, _scrollMode),
             Card(Icons.MoveVertical, "长截图最大高度", null,
                 Line(_scrollMaxHeight, Suffix("像素（1000–60000）"))));
@@ -767,6 +772,7 @@ public sealed class SettingsWindow : Window
         _captureHotkey.Value = s.CaptureHotkey;
         _pinHotkey.Value = s.PinHotkey;
         _directory.Text = s.SaveDirectory;
+        _historyDir.Text = s.HistoryDirectory;
         _prefix.Text = s.FileNamePrefix;
         _saveWithoutPrompt.IsChecked = s.SaveWithoutPrompt;
         _showHints.IsChecked = s.ShowHints;
@@ -809,6 +815,17 @@ public sealed class SettingsWindow : Window
         };
 
         if (dialog.ShowDialog(this) == true) _directory.Text = dialog.FolderName;
+    }
+
+    private void BrowseHistoryDir()
+    {
+        var dialog = new OpenFolderDialog
+        {
+            Title = "选择截屏历史存放目录",
+            InitialDirectory = Directory.Exists(_historyDir.Text) ? _historyDir.Text : null,
+        };
+
+        if (dialog.ShowDialog(this) == true) _historyDir.Text = dialog.FolderName;
     }
 
     private void BrowseModelsDir()
@@ -1293,12 +1310,21 @@ public sealed class SettingsWindow : Window
             return;
         }
 
+        string historyDir = _historyDir.Text.Trim();
+        if (historyDir.Length > 0 && !Directory.Exists(historyDir))
+        {
+            MessageBox.Show(this, "截屏历史目录不存在：" + historyDir, "XkScreenshot",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
         if (!CheckHotkeys()) return;
         if (!ConfirmElevationSwitch()) return;
 
         _draft.CaptureHotkey = _captureHotkey.Value;
         _draft.PinHotkey = _pinHotkey.Value;
         _draft.SaveDirectory = directory;
+        _draft.HistoryDirectory = historyDir;
         _draft.FileNamePrefix = _prefix.Text.Trim();
         _draft.SaveWithoutPrompt = _saveWithoutPrompt.IsChecked == true;
         _draft.DefaultAction = Actions[Math.Max(0, _defaultAction.SelectedIndex)].Action;

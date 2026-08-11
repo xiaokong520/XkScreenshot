@@ -94,6 +94,10 @@ public partial class App : Application
 
         if (_startupNotice is not null) ShowTrayWarning(_startupNotice);
 
+        // 起手直接指过去，不走 Relocate：这会儿默认目录里的东西早在上一次切换时就搬走了，
+        // 再搬一次只会把别的什么东西卷进来
+        HistoryStore.Directory = _settings.ResolveHistoryDirectory();
+
         // 装历史必须排在 ApplySettings 后面：容量得先由设置定下来，
         // 反过来的话这里会按默认那 30 条把用户设的更长的历史截掉一段
         _controller.History.Restore(HistoryStore.Load());
@@ -164,6 +168,26 @@ public partial class App : Application
         // 索引里没有的画面就是垃圾：容量调小、条目被挤掉都会留下这种文件，
         // 而用户是按条数设的上限，不会想到磁盘上还压着几十张
         HistoryStore.PruneImages(history.ImageIds());
+    }
+
+    /// <summary>
+    /// 换历史存放目录：文件搬过去，内存里那份也照新目录重装一遍。
+    ///
+    /// 重装是必要的 —— 用户可能把路径指到一个存过历史的目录上，那儿的索引和内存里
+    /// 这一份是两码事。搬失败就停在原地，不动内存，界面上的历史仍旧对得上磁盘。
+    /// </summary>
+    private void MoveHistoryTo(string directory)
+    {
+        if (string.Equals(HistoryStore.Directory, directory, StringComparison.OrdinalIgnoreCase)) return;
+
+        if (HistoryStore.Relocate(directory) is { } error)
+        {
+            ShowTrayWarning(error);
+            return;
+        }
+
+        _controller?.History.Restore(HistoryStore.Load());
+        HistoryStore.PruneImages(_controller?.History.ImageIds() ?? []);
     }
 
     private void OnHotkeyPressed(HotkeyBinding binding)
@@ -404,6 +428,8 @@ public partial class App : Application
 
                 _settings = updated;
                 if (SettingsStore.Save(_settings) is { } saveError) ShowTrayWarning(saveError);
+
+                MoveHistoryTo(_settings.ResolveHistoryDirectory());
 
                 // 权限得先存后换：换权限意味着这个进程马上就没了，没存的东西全跟着一起没
                 if (_settings.RunAsAdmin != Elevation.IsElevated
