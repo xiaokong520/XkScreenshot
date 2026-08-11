@@ -59,6 +59,15 @@ public sealed class TextResultWindow : Window
         SnapsToDevicePixels = true;
         UseLayoutRounding = true;
 
+        // 皮肤要在搭界面之前就位：下面到处都在按资源键取画刷。
+        // 控件模板直接借设置界面那一份，两个窗口的按钮、下拉、滚动条才是同一个样子
+        Theme.Apply(this, dark);
+        Resources.MergedDictionaries.Add(new ResourceDictionary
+        {
+            Source = new Uri("pack://application:,,,/XkScreenshot;component/Settings/SettingsTheme.xaml"),
+        });
+        SetResourceReference(BackgroundProperty, "PageBg");
+
         // 深色窗体配一条亮白标题栏是最扎眼的一种半吊子深色模式，但要等窗口有了句柄才能改
         SourceInitialized += (_, _) => Theme.ApplyTitleBar(this, dark);
 
@@ -72,7 +81,7 @@ public sealed class TextResultWindow : Window
         var imageBorder = new Border
         {
             Child = imageControl,
-            Background = Brushes.Transparent,
+            Padding = new Thickness(12),
         };
 
         // 右边：加载态
@@ -81,12 +90,10 @@ public sealed class TextResultWindow : Window
             Text = "识别中...",
             FontFamily = new FontFamily("Microsoft YaHei UI"),
             FontSize = 16,
-            Foreground = dark
-                ? new SolidColorBrush(Color.FromRgb(0xAA, 0xAA, 0xAA))
-                : new SolidColorBrush(Color.FromRgb(0x66, 0x66, 0x66)),
             HorizontalAlignment = HorizontalAlignment.Center,
             Margin = new Thickness(0, 0, 0, 16),
         };
+        _loadingLabel.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondary");
 
         var progressBar = new ProgressBar
         {
@@ -94,10 +101,8 @@ public sealed class TextResultWindow : Window
             Width = 200,
             Height = 6,
             HorizontalAlignment = HorizontalAlignment.Center,
-            Foreground = dark
-                ? new SolidColorBrush(Color.FromRgb(0x4C, 0x9E, 0xFF))
-                : new SolidColorBrush(Color.FromRgb(0x00, 0x78, 0xD4)),
         };
+        progressBar.SetResourceReference(ForegroundProperty, "Accent");
 
         var loadingStack = new StackPanel
         {
@@ -107,15 +112,13 @@ public sealed class TextResultWindow : Window
         loadingStack.Children.Add(_loadingLabel);
         loadingStack.Children.Add(progressBar);
 
-        _loadingPanel = new Grid
-        {
-            Background = dark
-                ? new SolidColorBrush(Color.FromRgb(0x1E, 0x1E, 0x1E))
-                : new SolidColorBrush(Color.FromRgb(0xFA, 0xFA, 0xFA)),
-        };
+        _loadingPanel = new Grid();
         _loadingPanel.Children.Add(loadingStack);
 
-        // 右边：结果文字
+        // 右边：结果文字。
+        //
+        // 高度和垂直对齐要就地压掉：借来的那份输入框皮是照着设置界面里那种一行高的框
+        // 定的（定高 32、内容垂直居中），套到这个要铺满右半边的多行框上就成了一条缝。
         _textBox = new TextBox
         {
             IsReadOnly = true,
@@ -124,21 +127,25 @@ public sealed class TextResultWindow : Window
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
             FontFamily = new FontFamily("Microsoft YaHei UI"),
             FontSize = 14,
+            Height = double.NaN,
+            VerticalContentAlignment = VerticalAlignment.Stretch,
             Padding = new Thickness(12),
             BorderThickness = new Thickness(0),
-            Background = dark
-                ? new SolidColorBrush(Color.FromRgb(0x1E, 0x1E, 0x1E))
-                : new SolidColorBrush(Color.FromRgb(0xFA, 0xFA, 0xFA)),
-            Foreground = dark
-                ? new SolidColorBrush(Color.FromRgb(0xE4, 0xE8, 0xEE))
-                : new SolidColorBrush(Color.FromRgb(0x1A, 0x1A, 0x1A)),
             Visibility = Visibility.Collapsed,
         };
+        _textBox.SetResourceReference(BackgroundProperty, "CardBg");
+        _textBox.SetResourceReference(ForegroundProperty, "Text");
 
-        // 右侧容器
-        var rightPanel = new Grid();
-        rightPanel.Children.Add(_loadingPanel);
-        rightPanel.Children.Add(_textBox);
+        // 右侧容器。加载动画和结果文字轮流上台，底色画在容器上，
+        // 切换的那一下才不会闪一块窗口底色出来
+        var rightPanel = new Border { BorderThickness = new Thickness(1, 0, 0, 0) };
+        rightPanel.SetResourceReference(Border.BackgroundProperty, "CardBg");
+        rightPanel.SetResourceReference(Border.BorderBrushProperty, "CardBorder");
+
+        var rightStack = new Grid();
+        rightStack.Children.Add(_loadingPanel);
+        rightStack.Children.Add(_textBox);
+        rightPanel.Child = rightStack;
 
         // GridSplitter 分隔左右
         var splitter = new GridSplitter
@@ -152,8 +159,7 @@ public sealed class TextResultWindow : Window
         _copyBtn = new Button
         {
             Content = CopyLabel,
-            Width = 80,
-            Height = 32,
+            MinWidth = 92,
             Margin = new Thickness(0, 0, 8, 0),
         };
         _copyBtn.Click += (_, _) =>
@@ -175,19 +181,14 @@ public sealed class TextResultWindow : Window
             }
         };
 
-        var closeBtn = new Button
-        {
-            Content = "关闭",
-            Width = 80,
-            Height = 32,
-        };
+        var closeBtn = new Button { Content = "关闭", MinWidth = 92 };
         closeBtn.Click += (_, _) => { _closed = true; Close(); };
 
         var buttonPanel = new StackPanel
         {
             Orientation = Orientation.Horizontal,
             HorizontalAlignment = HorizontalAlignment.Right,
-            Margin = new Thickness(12),
+            VerticalAlignment = VerticalAlignment.Center,
         };
         buttonPanel.Children.Add(_copyBtn);
         buttonPanel.Children.Add(closeBtn);
@@ -199,15 +200,12 @@ public sealed class TextResultWindow : Window
             FontSize = 12,
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(0, 0, 8, 0),
-            Foreground = dark
-                ? new SolidColorBrush(Color.FromRgb(0xAA, 0xAA, 0xAA))
-                : new SolidColorBrush(Color.FromRgb(0x66, 0x66, 0x66)),
         };
+        _detectedLabel.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondary");
 
         _targetBox = new ComboBox
         {
             Width = 132,
-            Height = 28,
             VerticalAlignment = VerticalAlignment.Center,
             DisplayMemberPath = nameof(TargetOption.Name),
         };
@@ -216,11 +214,26 @@ public sealed class TextResultWindow : Window
         {
             Orientation = Orientation.Horizontal,
             HorizontalAlignment = HorizontalAlignment.Left,
-            Margin = new Thickness(12),
+            VerticalAlignment = VerticalAlignment.Center,
             Visibility = Visibility.Collapsed,
         };
         _targetPanel.Children.Add(_detectedLabel);
         _targetPanel.Children.Add(_targetBox);
+
+        // 页脚横跨整个窗口，而不是只压在右半边下面：复制和关闭管的是整个窗口，
+        // 而只占右边那一格的话，左边三分之二会空出一条什么都不是的带子 ——
+        // 那条带子既没有底色也没有内容，看着就像窗口下面漏了一块
+        var footerContent = new Grid { Margin = new Thickness(12) };
+        footerContent.Children.Add(_targetPanel);
+        footerContent.Children.Add(buttonPanel);
+
+        var footer = new Border
+        {
+            BorderThickness = new Thickness(0, 1, 0, 0),
+            Child = footerContent,
+        };
+        footer.SetResourceReference(Border.BackgroundProperty, "FooterBg");
+        footer.SetResourceReference(Border.BorderBrushProperty, "CardBorder");
 
         // 主布局
         var grid = new Grid();
@@ -242,27 +255,10 @@ public sealed class TextResultWindow : Window
         Grid.SetRow(rightPanel, 0);
         grid.Children.Add(rightPanel);
 
-        Grid.SetColumn(buttonPanel, 2);
-        Grid.SetRow(buttonPanel, 1);
-        grid.Children.Add(buttonPanel);
-
-        // 和按钮同一格：语种在左、按钮在右，各自靠边，中间自然让开
-        Grid.SetColumn(_targetPanel, 2);
-        Grid.SetRow(_targetPanel, 1);
-        grid.Children.Add(_targetPanel);
-
-        // 底部分割线
-        var bottomBar = new Border
-        {
-            Height = 1,
-            Background = dark
-                ? new SolidColorBrush(Color.FromArgb(0x20, 0xFF, 0xFF, 0xFF))
-                : new SolidColorBrush(Color.FromArgb(0x15, 0x00, 0x00, 0x00)),
-        };
-        Grid.SetColumn(bottomBar, 0);
-        Grid.SetColumnSpan(bottomBar, 3);
-        Grid.SetRow(bottomBar, 1);
-        grid.Children.Add(bottomBar);
+        Grid.SetColumn(footer, 0);
+        Grid.SetColumnSpan(footer, 3);
+        Grid.SetRow(footer, 1);
+        grid.Children.Add(footer);
 
         Content = grid;
 
