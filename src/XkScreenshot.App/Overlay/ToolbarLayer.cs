@@ -51,24 +51,6 @@ public sealed class ToolbarLayer : FrameworkElement
     private const double GapToSelection = 12;
     private const double TipFontSize = 11.5;
 
-    private static readonly Brush HoverBrush = Freeze(new SolidColorBrush(Color.FromArgb(0x26, 0xFF, 0xFF, 0xFF)));
-    private static readonly Brush ActiveBrush = Freeze(new SolidColorBrush(Color.FromArgb(0x44, 0x3B, 0x9E, 0xFF)));
-    private static readonly Pen ActivePen = Freeze(new Pen(new SolidColorBrush(Color.FromArgb(0xB0, 0x3B, 0x9E, 0xFF)), 1));
-    private static readonly Brush IconBrush = Freeze(new SolidColorBrush(Color.FromRgb(0xE4, 0xE8, 0xEE)));
-    private static readonly Brush ActiveIconBrush = Freeze(new SolidColorBrush(Color.FromRgb(0xA8, 0xD4, 0xFF)));
-    /// <summary>
-    /// 禁用态用「同色降透明度」，而不是一个固定的深灰。
-    ///
-    /// 面板是毛玻璃：底下截到什么，它就有多亮。白底下面板会亮到 90 上下，
-    /// 而固定深灰恰好也在那个亮度，撞在一起之后按钮整个消失 —— 用户看到的是
-    /// 分隔线右边空了一截，而不是「这几个按钮现在不可用」。
-    /// 半透明白则永远是在面板自身的亮度上提一档，深底浅底都保得住对比。
-    /// </summary>
-    private static readonly Brush DisabledIconBrush = Freeze(new SolidColorBrush(Color.FromArgb(0x70, 0xE4, 0xE8, 0xEE)));
-    private static readonly Brush DangerIconBrush = Freeze(new SolidColorBrush(Color.FromRgb(0xFF, 0x8A, 0x84)));
-    private static readonly Brush TipBackBrush = Freeze(new SolidColorBrush(Color.FromArgb(0xEE, 0x0E, 0x10, 0x14)));
-    private static readonly Brush TipTextBrush = Freeze(new SolidColorBrush(Color.FromRgb(0xDA, 0xDF, 0xE6)));
-    private static readonly Brush SeparatorBrush = Freeze(new SolidColorBrush(Color.FromArgb(0x28, 0xFF, 0xFF, 0xFF)));
     private static readonly Typeface TipFace = new("Microsoft YaHei UI");
 
     /// <summary>工具与命令分成两组，中间隔一道分隔线，避免手滑点到「取消」。</summary>
@@ -112,6 +94,7 @@ public sealed class ToolbarLayer : FrameworkElement
     public ToolbarLayer() => IsHitTestVisible = false;
 
     public FrostedBackdrop? Backdrop { get; set; }
+    public OverlayPalette Palette { get; set; } = OverlayPalette.Dark;
     public bool Visible { get; set; }
     public ToolKind ActiveTool { get; set; } = ToolKind.None;
     public bool CanUndo { get; set; }
@@ -182,7 +165,7 @@ public sealed class ToolbarLayer : FrameworkElement
         _hitBoxes.Clear();
         if (!Visible || PanelRect.IsEmpty) return;
 
-        PanelChrome.DrawGlassPanel(dc, PanelRect, CornerRadius, Backdrop, new Size(ActualWidth, ActualHeight));
+        PanelChrome.DrawGlassPanel(dc, PanelRect, CornerRadius, Backdrop, new Size(ActualWidth, ActualHeight), Palette);
 
         double x = PanelRect.X + PadX;
         double y = PanelRect.Y + PadY;
@@ -219,7 +202,7 @@ public sealed class ToolbarLayer : FrameworkElement
     }
 
     private void DrawSeparator(DrawingContext dc, double x)
-        => dc.DrawRectangle(SeparatorBrush, null,
+        => dc.DrawRectangle(Palette.Separator, null,
             new Rect(Math.Round(x) + 0.5, PanelRect.Y + PadY + 5, 1, ButtonSize - 10));
 
     private void DrawButton(DrawingContext dc, Rect rect, ToolbarItem item, bool active, bool enabled)
@@ -227,14 +210,14 @@ public sealed class ToolbarLayer : FrameworkElement
         bool hovered = enabled && ReferenceEquals(item, _hovered);
 
         if (active)
-            dc.DrawRoundedRectangle(ActiveBrush, ActivePen, rect, 7, 7);
+            dc.DrawRoundedRectangle(Palette.AccentFill, Palette.AccentBorder, rect, 7, 7);
         else if (hovered)
-            dc.DrawRoundedRectangle(HoverBrush, null, rect, 7, 7);
+            dc.DrawRoundedRectangle(Palette.Hover, null, rect, 7, 7);
 
-        var brush = !enabled ? DisabledIconBrush
-            : active ? ActiveIconBrush
-            : item.Command == ToolbarCommand.Cancel ? DangerIconBrush
-            : IconBrush;
+        var brush = !enabled ? Palette.IconDisabled
+            : active ? Palette.IconActive
+            : item.Command == ToolbarCommand.Cancel ? Palette.IconDanger
+            : Palette.Icon;
 
         Icons.Draw(dc, item.Icon, rect, brush, IconSize);
 
@@ -245,7 +228,7 @@ public sealed class ToolbarLayer : FrameworkElement
     {
         double ppd = VisualTreeHelper.GetDpi(this).PixelsPerDip;
         var text = new FormattedText(item.Tip, CultureInfo.CurrentCulture, FlowDirection.LeftToRight,
-            TipFace, TipFontSize, TipTextBrush, ppd);
+            TipFace, TipFontSize, Palette.TipText, ppd);
 
         double w = text.Width + 16;
         double h = text.Height + 9;
@@ -255,15 +238,10 @@ public sealed class ToolbarLayer : FrameworkElement
         double y = PanelRect.Y - h - 7;
         if (y < 0) y = Math.Min(PanelRect.Bottom + 7, Math.Max(0, ActualHeight - h));
 
+        // 描一圈边：浅色主题下气泡近乎全白，压在同样浅的截图上光靠投影分不出边界
         var bubble = new Rect(x, y, w, h);
-        PanelChrome.DrawShadow(dc, bubble, 6);
-        dc.DrawRoundedRectangle(TipBackBrush, null, bubble, 6, 6);
+        PanelChrome.DrawShadow(dc, bubble, 6, Palette);
+        dc.DrawRoundedRectangle(Palette.TipFill, Palette.PanelBorder, bubble, 6, 6);
         dc.DrawText(text, new Point(x + 8, y + 4.5));
-    }
-
-    private static T Freeze<T>(T freezable) where T : Freezable
-    {
-        freezable.Freeze();
-        return freezable;
     }
 }

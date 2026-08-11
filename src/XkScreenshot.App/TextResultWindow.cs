@@ -42,7 +42,8 @@ public sealed class TextResultWindow : Window
     /// <summary>窗口关闭后忽略后续的 ShowResult / ShowLoading 调用。</summary>
     private bool _closed;
 
-    public TextResultWindow(BitmapSource image, string title)
+    /// <param name="dark">深色还是浅色。由调用方按设置里那一档解析好传进来。</param>
+    public TextResultWindow(BitmapSource image, string title, bool dark)
     {
         Title = title;
         Width = 1000;
@@ -58,7 +59,8 @@ public sealed class TextResultWindow : Window
         SnapsToDevicePixels = true;
         UseLayoutRounding = true;
 
-        bool dark = Theme.IsSystemDark();
+        // 深色窗体配一条亮白标题栏是最扎眼的一种半吊子深色模式，但要等窗口有了句柄才能改
+        SourceInitialized += (_, _) => Theme.ApplyTitleBar(this, dark);
 
         // 左边：图片
         var imageControl = new Image

@@ -54,21 +54,28 @@ public sealed class HintLayer : FrameworkElement
     private const double EdgeInset = 24;
     private const double CornerRadius = 9;
 
-    private static readonly Brush ChipBrush = Freeze(new SolidColorBrush(Color.FromArgb(0x22, 0xFF, 0xFF, 0xFF)));
-    private static readonly Pen ChipBorder = Freeze(new Pen(new SolidColorBrush(Color.FromArgb(0x38, 0xFF, 0xFF, 0xFF)), 1));
-    private static readonly Pen ChipShade = Freeze(new Pen(new SolidColorBrush(Color.FromArgb(0x40, 0x00, 0x00, 0x00)), 1));
-    private static readonly Brush KeyTextBrush = Freeze(new SolidColorBrush(Color.FromRgb(0xEC, 0xEF, 0xF3)));
-    private static readonly Brush ActionTextBrush = Freeze(new SolidColorBrush(Color.FromRgb(0xB4, 0xBA, 0xC4)));
-    private static readonly Brush TitleTextBrush = Freeze(new SolidColorBrush(Color.FromRgb(0x6E, 0x76, 0x82)));
-    private static readonly Brush AccentBrush = Freeze(new SolidColorBrush(Color.FromRgb(0x3B, 0x9E, 0xFF)));
-    private static readonly Pen RulePen = Freeze(new Pen(new SolidColorBrush(Color.FromArgb(0x18, 0xFF, 0xFF, 0xFF)), 1));
-
     private static readonly FontFamily Family = new("Microsoft YaHei UI");
     private static readonly Typeface KeyFace = new(Family, FontStyles.Normal, FontWeights.SemiBold, FontStretches.Normal);
     private static readonly Typeface ActionFace = new(Family, FontStyles.Normal, FontWeights.Normal, FontStretches.Normal);
 
-    /// <summary>排版结果只跟 DPI 有关，内容是固定的，量一次就够。</summary>
+    /// <summary>排版结果只跟 DPI 和配色有关，内容是固定的，量一次就够。</summary>
     private Layout? _layout;
+
+    private OverlayPalette _palette = OverlayPalette.Dark;
+
+    /// <summary>
+    /// 配色。换一套要连排版缓存一起丢掉 —— 画刷是量文字那会儿就烤进 FormattedText 里的，
+    /// 只换字段的话文字会继续用上一套主题的颜色画。
+    /// </summary>
+    public OverlayPalette Palette
+    {
+        get => _palette;
+        set
+        {
+            _palette = value;
+            _layout = null;
+        }
+    }
 
     public bool Visible { get; set; }
 
@@ -105,7 +112,7 @@ public sealed class HintLayer : FrameworkElement
         double ppd = VisualTreeHelper.GetDpi(this).PixelsPerDip;
         return _layout is { } cached && Math.Abs(cached.PixelsPerDip - ppd) < 0.001
             ? cached
-            : _layout = Layout.Measure(ppd);
+            : _layout = Layout.Measure(ppd, _palette);
     }
 
     protected override void OnRender(DrawingContext dc)
@@ -116,15 +123,15 @@ public sealed class HintLayer : FrameworkElement
         if (panel.IsEmpty) return;
         var layout = EnsureLayout();
 
-        PanelChrome.DrawGlassPanel(dc, panel, CornerRadius, Backdrop, new Size(ActualWidth, ActualHeight));
+        PanelChrome.DrawGlassPanel(dc, panel, CornerRadius, Backdrop, new Size(ActualWidth, ActualHeight), _palette);
 
         // 标题：一个强调色小方块 + 淡灰标题 + 一条发丝分隔线，给面板一个视觉锚点
         double titleY = panel.Y + PadY;
-        dc.DrawRectangle(AccentBrush, null, new Rect(panel.X + PadX, titleY + 3.5, 3, layout.Title.Height - 7));
+        dc.DrawRectangle(_palette.Accent, null, new Rect(panel.X + PadX, titleY + 3.5, 3, layout.Title.Height - 7));
         dc.DrawText(layout.Title, new Point(panel.X + PadX + 9, titleY));
 
         double ruleY = Math.Round(titleY + TitleBlock - 6) + 0.5;
-        dc.DrawLine(RulePen, new Point(panel.X + PadX, ruleY), new Point(panel.Right - PadX, ruleY));
+        dc.DrawLine(_palette.Rule, new Point(panel.X + PadX, ruleY), new Point(panel.Right - PadX, ruleY));
 
         for (int i = 0; i < Rows.Length; i++)
         {
@@ -170,13 +177,13 @@ public sealed class HintLayer : FrameworkElement
     /// 大写字母那么高的一块。按行盒居中的话，逗号、句点这种贴着基线的字形会缩到
     /// 键帽左下角，看起来就是个空白键帽（这一层的字才十来像素，差几像素就认不出了）。
     /// </summary>
-    private static void DrawChip(DrawingContext dc, Rect rect, FormattedText label, Rect ink)
+    private void DrawChip(DrawingContext dc, Rect rect, FormattedText label, Rect ink)
     {
-        dc.DrawRoundedRectangle(ChipBrush, ChipBorder, rect, 4, 4);
+        dc.DrawRoundedRectangle(_palette.ChipFill, _palette.ChipBorder, rect, 4, 4);
 
         // 底边加一道暗线，键帽才有厚度感，不然就是个扁平的框
         double bottom = rect.Bottom - 0.5;
-        dc.DrawLine(ChipShade, new Point(rect.Left + 3, bottom), new Point(rect.Right - 3, bottom));
+        dc.DrawLine(_palette.ChipShade, new Point(rect.Left + 3, bottom), new Point(rect.Right - 3, bottom));
 
         dc.DrawText(label, new Point(
             rect.X + (rect.Width - ink.Width) / 2 - ink.X,
@@ -192,14 +199,14 @@ public sealed class HintLayer : FrameworkElement
         public required double Width { get; init; }
         public required double Height { get; init; }
 
-        public static Layout Measure(double ppd)
+        public static Layout Measure(double ppd, OverlayPalette palette)
         {
             FormattedText Make(string s, Typeface face, double size, Brush brush) => new(
                 s, CultureInfo.InvariantCulture, FlowDirection.LeftToRight, face, size, brush, ppd);
 
             var measured = Rows.Select(r =>
             {
-                var keys = r.Keys.Select(k => Make(k, KeyFace, KeyFontSize, KeyTextBrush)).ToArray();
+                var keys = r.Keys.Select(k => Make(k, KeyFace, KeyFontSize, palette.Text)).ToArray();
                 var widths = keys.Select(t => Math.Max(ChipMinWidth, Math.Ceiling(t.Width) + ChipPadX * 2)).ToArray();
                 double total = widths.Sum() + (keys.Length - 1) * (r.Plus ? PlusWidth : ChipGap);
 
@@ -209,14 +216,14 @@ public sealed class HintLayer : FrameworkElement
                     KeyWidths = widths,
                     KeyInk = keys.Select(InkBounds).ToArray(),
                     TotalKeyWidth = total,
-                    Plus = r.Plus ? Make("+", ActionFace, KeyFontSize, TitleTextBrush) : null,
-                    Action = Make(r.Action, ActionFace, ActionFontSize, ActionTextBrush),
+                    Plus = r.Plus ? Make("+", ActionFace, KeyFontSize, palette.TextMuted) : null,
+                    Action = Make(r.Action, ActionFace, ActionFontSize, palette.TextSecondary),
                 };
             }).ToArray();
 
             double keyColumn = measured.Max(m => m.TotalKeyWidth);
             double actionColumn = measured.Max(m => m.Action.Width);
-            var title = Make(PanelTitle, ActionFace, TitleFontSize, TitleTextBrush);
+            var title = Make(PanelTitle, ActionFace, TitleFontSize, palette.TextMuted);
 
             return new Layout
             {
@@ -250,11 +257,5 @@ public sealed class HintLayer : FrameworkElement
         public required double TotalKeyWidth { get; init; }
         public required FormattedText? Plus { get; init; }
         public required FormattedText Action { get; init; }
-    }
-
-    private static T Freeze<T>(T freezable) where T : Freezable
-    {
-        freezable.Freeze();
-        return freezable;
     }
 }

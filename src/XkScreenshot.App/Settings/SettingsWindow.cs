@@ -57,8 +57,17 @@ public sealed class SettingsWindow : Window
         (CaptureAction.Save, "保存为文件"),
     ];
 
+    private static readonly (ThemeMode Mode, string Label)[] Themes =
+    [
+        (ThemeMode.System, "跟随系统"),
+        (ThemeMode.Light, "亮色"),
+        (ThemeMode.Dark, "暗色"),
+    ];
+
     private readonly AppSettings _draft;
-    private readonly bool _dark;
+
+    /// <summary>当前这一套皮是深是浅。改主题时当场重算，不是只读一次。</summary>
+    private bool _dark;
 
     /// <summary>问「这个组合键是不是本程序自己占着的」。见 <see cref="IsTakenByOthers"/>。</summary>
     private readonly Func<HotkeySpec, bool> _heldBySelf;
@@ -87,6 +96,7 @@ public sealed class SettingsWindow : Window
     private readonly ToggleButton _elementMode = new();
     private readonly ToggleButton _runAtStartup = new();
     private readonly ToggleButton _runAsAdmin = new();
+    private readonly ComboBox _theme = new() { Width = 168 };
 
     // ---------------- 文字识别与翻译 ----------------
 
@@ -187,7 +197,7 @@ public sealed class SettingsWindow : Window
     {
         _draft = current.Clone();
         _heldBySelf = heldBySelf;
-        _dark = Theme.IsSystemDark();
+        _dark = Theme.IsDark(_draft.Theme);
 
         Title = "XkScreenshot 设置";
         Width = 880;
@@ -240,6 +250,7 @@ public sealed class SettingsWindow : Window
         };
 
         foreach (var (_, label) in Actions) _defaultAction.Items.Add(label);
+        foreach (var (_, label) in Themes) _theme.Items.Add(label);
         _scrollMode.Items.Add("自动");
         _scrollMode.Items.Add("手动");
         _ocrMode.Items.Add("离线");
@@ -258,10 +269,14 @@ public sealed class SettingsWindow : Window
         Placeholder.SetText(_modelsDir, AppSettings.DefaultModelsDirectory);
         Placeholder.SetText(_historyDir, HistoryStore.DefaultDirectory);
 
-        Background = Brush("PageBg");
+        SetResourceReference(BackgroundProperty, "PageBg");
         Content = BuildLayout();
         BuildPages();
         LoadFrom(_draft);
+
+        // 选完主题当场换皮。等点确定再生效的话，用户在这儿看到的还是老配色，
+        // 而这一项唯一能验收的地方就是眼前这个窗口
+        _theme.SelectionChanged += (_, _) => ApplyTheme();
 
         // 端点是地址和协议一起决定的，两边任一动了都得重算那行提示
         _apiBase.TextChanged += (_, _) => RefreshApiEndpoint();
@@ -307,12 +322,12 @@ public sealed class SettingsWindow : Window
         var nav = new Border
         {
             Width = NavWidth,
-            Background = Brush("NavBg"),
-            BorderBrush = Brush("CardBorder"),
             BorderThickness = new Thickness(0, 0, 1, 0),
             Padding = new Thickness(10, 14, 10, 14),
             Child = _nav,
         };
+        Paint(nav, Border.BackgroundProperty, "NavBg");
+        Paint(nav, Border.BorderBrushProperty, "CardBorder");
 
         var scroll = new ScrollViewer
         {
@@ -340,8 +355,6 @@ public sealed class SettingsWindow : Window
         // 页脚横跨整个窗口而不是只占右半边：确定/取消 管的是整份设置，不是当前这一页
         var footer = new Border
         {
-            Background = Brush("FooterBg"),
-            BorderBrush = Brush("CardBorder"),
             BorderThickness = new Thickness(0, 1, 0, 0),
             Padding = new Thickness(PagePadding, 14, PagePadding, 14),
             Child = new StackPanel
@@ -351,6 +364,8 @@ public sealed class SettingsWindow : Window
                 Children = { ok, cancel },
             },
         };
+        Paint(footer, Border.BackgroundProperty, "FooterBg");
+        Paint(footer, Border.BorderBrushProperty, "CardBorder");
         Grid.SetRow(footer, 1);
 
         var root = new Grid();
@@ -364,6 +379,8 @@ public sealed class SettingsWindow : Window
     private void BuildPages()
     {
         AddPage(Icons.Sliders, "通用",
+            Card(Icons.Palette, "主题颜色",
+                "管设置界面、识别与翻译结果窗口，以及截图时的提示面板和工具栏。", _theme),
             Card(Icons.Power, "开机自动启动", null, _runAtStartup),
             Card(Icons.Shield, "以管理员权限运行", null, _runAsAdmin));
 
@@ -427,14 +444,13 @@ public sealed class SettingsWindow : Window
     private void AddPage(Geometry icon, string title, params UIElement[] cards)
     {
         var page = new StackPanel();
-        page.Children.Add(new TextBlock
+        page.Children.Add(Paint(new TextBlock
         {
             Text = title,
             FontSize = 20,
             FontWeight = FontWeights.SemiBold,
-            Foreground = Brush("Text"),
             Margin = new Thickness(2, 0, 0, 14),
-        });
+        }, TextBlock.ForegroundProperty, "Text"));
         foreach (var card in cards) page.Children.Add(card);
 
         var item = new RadioButton
@@ -454,12 +470,11 @@ public sealed class SettingsWindow : Window
     {
         var panel = new StackPanel { Orientation = Orientation.Horizontal };
         panel.Children.Add(IconBox(icon, 17, gap: 12));
-        panel.Children.Add(new TextBlock
+        panel.Children.Add(Paint(new TextBlock
         {
             Text = title,
             VerticalAlignment = VerticalAlignment.Center,
-            Foreground = Brush("Text"),
-        });
+        }, TextBlock.ForegroundProperty, "Text"));
         return panel;
     }
 
@@ -495,7 +510,7 @@ public sealed class SettingsWindow : Window
     {
         status.FontSize = 12;
         status.TextWrapping = TextWrapping.Wrap;
-        status.Foreground = Brush("Warn");
+        Paint(status, TextBlock.ForegroundProperty, "Warn");
         status.Margin = new Thickness(0, 8, 0, 0);
         status.Visibility = Visibility.Collapsed;
 
@@ -549,30 +564,33 @@ public sealed class SettingsWindow : Window
         return grid;
     }
 
-    private Border Shell(UIElement content) => new()
+    private static Border Shell(UIElement content)
     {
-        Background = Brush("CardBg"),
-        BorderBrush = Brush("CardBorder"),
-        BorderThickness = new Thickness(1),
-        CornerRadius = new CornerRadius(4),
-        MinHeight = CardMinHeight,
-        Padding = new Thickness(CardPadding),
-        Margin = new Thickness(0, 0, 0, CardGap),
-        SnapsToDevicePixels = true,
-        Child = content,
-    };
+        var border = new Border
+        {
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(4),
+            MinHeight = CardMinHeight,
+            Padding = new Thickness(CardPadding),
+            Margin = new Thickness(0, 0, 0, CardGap),
+            SnapsToDevicePixels = true,
+            Child = content,
+        };
+        Paint(border, Border.BackgroundProperty, "CardBg");
+        Paint(border, Border.BorderBrushProperty, "CardBorder");
+        return border;
+    }
 
     /// <summary>
     /// 图标按 24×24 的设计尺寸画，再用 Viewbox 整体缩到目标大小 ——
     /// 线宽跟着一起缩，视觉重量才和覆盖层上那套图标一致。
     /// </summary>
-    private FrameworkElement IconBox(Geometry icon, double size, double gap)
+    private static FrameworkElement IconBox(Geometry icon, double size, double gap)
     {
         // 全名限定：System.IO.Path 也在场，短名是歧义的
         var path = new System.Windows.Shapes.Path
         {
             Data = icon,
-            Stroke = Brush("TextSecondary"),
             StrokeThickness = 2,
             StrokeStartLineCap = PenLineCap.Round,
             StrokeEndLineCap = PenLineCap.Round,
@@ -580,6 +598,7 @@ public sealed class SettingsWindow : Window
             Width = 24,
             Height = 24,
         };
+        Paint(path, System.Windows.Shapes.Shape.StrokeProperty, "TextSecondary");
 
         return new Viewbox
         {
@@ -600,12 +619,11 @@ public sealed class SettingsWindow : Window
     private StackPanel TitleBlock(string title, string? hint)
     {
         var line = new StackPanel { Orientation = Orientation.Horizontal };
-        line.Children.Add(new TextBlock
+        line.Children.Add(Paint(new TextBlock
         {
             Text = title,
-            Foreground = Brush("Text"),
             VerticalAlignment = VerticalAlignment.Center,
-        });
+        }, TextBlock.ForegroundProperty, "Text"));
         if (hint is not null) line.Children.Add(HintMark(hint));
 
         var stack = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
@@ -634,7 +652,20 @@ public sealed class SettingsWindow : Window
 
     // ---------------- 小零件 ----------------
 
-    private Brush Brush(string key) => (Brush)FindResource(key);
+    /// <summary>
+    /// 把某个属性挂到主题画刷上，并把元素原样交回去，好接着往下写。
+    ///
+    /// 一律走这个，不要写 Foreground = (Brush)FindResource(key)：那样拿到的是当时那个
+    /// 画刷对象，而换皮是往资源字典里换一批新画刷，已经赋过值的控件还攥着旧的，
+    /// 一个都不会跟着变 —— 表现是背景换了、字没换，一屏看不见的文字。
+    /// SetResourceReference 走的是 DynamicResource 那条路，字典一改就自己重新解析。
+    /// </summary>
+    private static T Paint<T>(T element, DependencyProperty property, string key)
+        where T : FrameworkElement
+    {
+        element.SetResourceReference(property, key);
+        return element;
+    }
 
     /// <summary>
     /// 卡片里的一行普通文字。
@@ -643,21 +674,19 @@ public sealed class SettingsWindow : Window
     /// 浅色皮肤下看着一切正常，换成深色皮肤就是一行看不见的字 —— 而写代码的人
     /// 多半正用着浅色，测不出来。
     /// </summary>
-    private TextBlock Label(string text) => new()
+    private static TextBlock Label(string text) => Paint(new TextBlock
     {
         Text = text,
-        Foreground = Brush("Text"),
         VerticalAlignment = VerticalAlignment.Center,
-    };
+    }, TextBlock.ForegroundProperty, "Text");
 
     /// <summary>跟在输入框后面的单位。</summary>
-    private TextBlock Suffix(string text) => new()
+    private static TextBlock Suffix(string text) => Paint(new TextBlock
     {
         Text = text,
-        Foreground = Brush("TextSecondary"),
         VerticalAlignment = VerticalAlignment.Center,
         Margin = new Thickness(8, 0, 0, 0),
-    };
+    }, TextBlock.ForegroundProperty, "TextSecondary");
 
     /// <summary>一排控件靠左排开。</summary>
     private static UIElement Line(params UIElement[] children)
@@ -784,6 +813,9 @@ public sealed class SettingsWindow : Window
         _elementMode.IsChecked = s.ElementMode;
         _runAtStartup.IsChecked = s.RunAtStartup;
         _runAsAdmin.IsChecked = s.RunAsAdmin;
+
+        int theme = Array.FindIndex(Themes, t => t.Mode == s.Theme);
+        _theme.SelectedIndex = theme < 0 ? 0 : theme;
         _historyCapacity.Text = s.HistoryCapacity.ToString(CultureInfo.InvariantCulture);
 
         _ocrMode.SelectedIndex = s.Recognition.Mode == OcrMode.Online ? 1 : 0;
@@ -809,6 +841,23 @@ public sealed class SettingsWindow : Window
 
         int index = Array.FindIndex(Actions, a => a.Action == s.DefaultAction);
         _defaultAction.SelectedIndex = index < 0 ? 0 : index;
+    }
+
+    /// <summary>
+    /// 按下拉框里选的那一档换皮，当场生效。
+    ///
+    /// 一句 <see cref="Theme.Apply"/> 就够了，不用重搭界面：那些画刷是就地改颜色的，
+    /// 而界面上每个控件攥着的正是同一批画刷对象。标题栏得另外招呼一声，
+    /// 它归系统画，不看资源字典。
+    /// </summary>
+    private void ApplyTheme()
+    {
+        bool dark = Theme.IsDark(Themes[Math.Max(0, _theme.SelectedIndex)].Mode);
+        if (dark == _dark) return;
+
+        _dark = dark;
+        Theme.Apply(this, dark);
+        Theme.ApplyTitleBar(this, dark);
     }
 
     private void BrowseDirectory()
@@ -986,12 +1035,11 @@ public sealed class SettingsWindow : Window
 
         if (_busyOcrPack is not null)
         {
-            _ocrPacksPanel.Children.Add(new TextBlock
+            _ocrPacksPanel.Children.Add(Paint(new TextBlock
             {
                 Text = $"正在下载 {_busyOcrPack}…",
                 Margin = new Thickness(0, 8, 0, 0),
-                Foreground = Brush("TextSecondary"),
-            });
+            }, TextBlock.ForegroundProperty, "TextSecondary"));
         }
     }
 
@@ -1035,8 +1083,7 @@ public sealed class SettingsWindow : Window
 
     private UIElement PaddleOcrRow()
     {
-        // 字段初始化那会儿还拿不到窗口资源，颜色只能等到这里再上
-        _paddleStatus.Foreground = Brush("Text");
+        Paint(_paddleStatus, TextBlock.ForegroundProperty, "Text");
 
         var stack = new StackPanel();
         stack.Children.Add(_paddlePanel);
@@ -1084,23 +1131,20 @@ public sealed class SettingsWindow : Window
 
     private void RefreshApiKeyReveal()
     {
-        _apiKeyReveal.Content = new Viewbox
+        var eye = new System.Windows.Shapes.Path
         {
-            Width = 16,
-            Height = 16,
-            Child = new System.Windows.Shapes.Path
-            {
-                // 显示的是「点下去会变成什么」：藏着时给睁眼，露着时给闭眼
-                Data = _apiKeyRevealed ? Icons.EyeOff : Icons.Eye,
-                Stroke = Brush("Text"),
-                StrokeThickness = 2,
-                StrokeStartLineCap = PenLineCap.Round,
-                StrokeEndLineCap = PenLineCap.Round,
-                StrokeLineJoin = PenLineJoin.Round,
-                Width = 24,
-                Height = 24,
-            },
+            // 显示的是「点下去会变成什么」：藏着时给睁眼，露着时给闭眼
+            Data = _apiKeyRevealed ? Icons.EyeOff : Icons.Eye,
+            StrokeThickness = 2,
+            StrokeStartLineCap = PenLineCap.Round,
+            StrokeEndLineCap = PenLineCap.Round,
+            StrokeLineJoin = PenLineJoin.Round,
+            Width = 24,
+            Height = 24,
         };
+        Paint(eye, System.Windows.Shapes.Shape.StrokeProperty, "Text");
+
+        _apiKeyReveal.Content = new Viewbox { Width = 16, Height = 16, Child = eye };
         _apiKeyReveal.ToolTip = _apiKeyRevealed ? "隐藏" : "显示";
     }
 
@@ -1111,7 +1155,7 @@ public sealed class SettingsWindow : Window
     private UIElement ApiBaseRow()
     {
         _apiEndpoint.FontSize = 12;
-        _apiEndpoint.Foreground = Brush("TextSecondary");
+        Paint(_apiEndpoint, TextBlock.ForegroundProperty, "TextSecondary");
         _apiEndpoint.TextWrapping = TextWrapping.Wrap;
         _apiEndpoint.Margin = new Thickness(0, 6, 0, 0);
 
@@ -1199,12 +1243,11 @@ public sealed class SettingsWindow : Window
 
         if (installed.Count == 0 && _busyLangPair is null)
         {
-            _langPairsPanel.Children.Add(new TextBlock
+            _langPairsPanel.Children.Add(Paint(new TextBlock
             {
                 Text = "还没装任何语言，离线翻译用不了。",
                 Margin = new Thickness(0, 8, 0, 0),
-                Foreground = Brush("TextSecondary"),
-            });
+            }, TextBlock.ForegroundProperty, "TextSecondary"));
             return;
         }
 
@@ -1222,12 +1265,11 @@ public sealed class SettingsWindow : Window
 
         if (_busyLangPair is not null)
         {
-            _langPairsPanel.Children.Add(new TextBlock
+            _langPairsPanel.Children.Add(Paint(new TextBlock
             {
                 Text = $"正在下载 {_busyLangPair}…",
                 Margin = new Thickness(0, 8, 0, 0),
-                Foreground = Brush("TextSecondary"),
-            });
+            }, TextBlock.ForegroundProperty, "TextSecondary"));
         }
     }
 
@@ -1335,6 +1377,7 @@ public sealed class SettingsWindow : Window
         _draft.ElementMode = _elementMode.IsChecked == true;
         _draft.RunAtStartup = _runAtStartup.IsChecked == true;
         _draft.RunAsAdmin = _runAsAdmin.IsChecked == true;
+        _draft.Theme = Themes[Math.Max(0, _theme.SelectedIndex)].Mode;
 
         // 解析不出来（粘进去一段乱七八糟的）就退回默认值，而不是当成 0 把功能关掉 ——
         // 用户来这儿是想调条数，不是想关掉它

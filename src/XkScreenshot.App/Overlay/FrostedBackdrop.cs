@@ -23,17 +23,21 @@ public sealed class FrostedBackdrop
     /// <summary>三次盒式模糊足以逼近高斯，再多肉眼看不出差别。</summary>
     private const int BlurPasses = 3;
 
-    /// <summary>
-    /// 预先压暗一档。面板上的文字必须在任何背景下都可读，而单靠加重底调会把模糊内容
-    /// 整个盖死、玻璃感荡然无存。先把背景本身压暗，底调就可以做得很淡，
-    /// 两个目标同时满足：白底也降到 180 左右，而明暗层次仍然完整保留。
-    /// </summary>
-    private const double LuminosityScale = 0.72;
-
     private readonly CapturedFrame _frame;
+    private readonly OverlayPalette _palette;
     private BitmapSource? _blurred;
 
-    public FrostedBackdrop(CapturedFrame frame) => _frame = frame;
+    /// <summary>
+    /// 背景要先按主题重映射一次亮度。面板上的文字必须在任何背景下都可读，而单靠加重
+    /// 底调会把模糊内容整个盖死、玻璃感荡然无存。先把背景本身收进一个窄一些的亮度区间，
+    /// 底调就可以做得很淡，两个目标同时满足，而明暗层次仍然完整保留。
+    /// 具体压多少抬多少见 <see cref="OverlayPalette.BackdropScale"/>。
+    /// </summary>
+    public FrostedBackdrop(CapturedFrame frame, OverlayPalette palette)
+    {
+        _frame = frame;
+        _palette = palette;
+    }
 
     /// <summary>构建耗时，返回毫秒数供性能验证用；已构建则返回 0。</summary>
     public double EnsureBuilt()
@@ -59,7 +63,8 @@ public sealed class FrostedBackdrop
 
     private BitmapSource Build()
     {
-        var small = Downscale(_frame, DownscaleFactor, out int sw, out int sh);
+        var small = Downscale(_frame, DownscaleFactor,
+            _palette.BackdropScale, _palette.BackdropLift, out int sw, out int sh);
         BoxBlur(small, sw, sh, BlurRadius, BlurPasses);
 
         // 保持降采样后的小尺寸，绘制时交给 WPF 放大 —— GPU 的双线性插值本身就是
@@ -78,7 +83,8 @@ public sealed class FrostedBackdrop
     /// 块平均降采样。一次只把 factor 行原始像素读进来（一块 2K 屏是 60 KB），
     /// 而不是先要一份整帧的拷贝 —— 那是十几兆的一片，用完就扔，纯粹是给大对象堆添堵。
     /// </summary>
-    private static byte[] Downscale(CapturedFrame frame, int factor, out int dstW, out int dstH)
+    private static byte[] Downscale(CapturedFrame frame, int factor,
+        double scale, double lift, out int dstW, out int dstH)
     {
         int srcW = frame.Bounds.Width;
         int srcH = frame.Bounds.Height;
@@ -115,15 +121,19 @@ public sealed class FrostedBackdrop
                 }
 
                 int o = (y * dstW + x) * 4;
-                dst[o] = (byte)(sumB / count * LuminosityScale);
-                dst[o + 1] = (byte)(sumG / count * LuminosityScale);
-                dst[o + 2] = (byte)(sumR / count * LuminosityScale);
+                dst[o] = Remap(sumB / count, scale, lift);
+                dst[o + 1] = Remap(sumG / count, scale, lift);
+                dst[o + 2] = Remap(sumR / count, scale, lift);
                 dst[o + 3] = 0xFF;
             }
         }
 
         return dst;
     }
+
+    /// <summary>把一个通道压进主题要的亮度区间。夹一下上限：浅色主题抬完是会溢出的。</summary>
+    private static byte Remap(int value, double scale, double lift)
+        => (byte)Math.Clamp(value * scale + lift, 0, 255);
 
     private static void BoxBlur(byte[] buffer, int w, int h, int radius, int passes)
     {

@@ -79,6 +79,14 @@ public sealed class AppSettings
     /// <summary>以管理员权限运行。切换它要重启整个进程 —— 令牌在进程启动时就定死了。</summary>
     public bool RunAsAdmin { get; set; }
 
+    /// <summary>
+    /// 亮色 / 暗色 / 跟随系统。管设置界面、识别与翻译结果窗口，以及截图时那几块浮动面板。
+    ///
+    /// 默认跟随系统，而且存的是「跟随」这个意思本身而不是当时算出来的那个值 ——
+    /// 存死了的话，用户哪天在系统里切了深色，这边纹丝不动，而他明明什么都没改过。
+    /// </summary>
+    public ThemeMode Theme { get; set; } = ThemeMode.System;
+
     // ---------------- 文字识别与翻译 ----------------
 
     /// <summary>离线模型存放目录。留空 = 软件根目录下的 models/。</summary>
@@ -118,8 +126,14 @@ public sealed class AppSettings
         return prefix.Trim();
     }
 
-    /// <summary>会话起手用的那三项。</summary>
-    public CaptureDefaults ToCaptureDefaults() => new(DefaultAction, ShowHints, ElementMode);
+    /// <summary>此刻该用深色还是浅色。跟随系统时现读一次注册表。</summary>
+    public bool ResolveDark() => Ui.Theme.IsDark(Theme);
+
+    /// <summary>
+    /// 会话起手用的那几项。主题传的是模式而不是算好的深浅：覆盖层是每次截图现搭的，
+    /// 到那会儿再解析，用户中途在系统里切了主题也能跟上，不用重开设置。
+    /// </summary>
+    public CaptureDefaults ToCaptureDefaults() => new(DefaultAction, ShowHints, ElementMode, Theme);
 
     /// <summary>长截图起手用的参数。Sanitized 会把越界的值拉回来。</summary>
     public ScrollOptions ToScrollOptions() => new(ScrollMode, 1, ScrollMaxHeight);
@@ -160,6 +174,9 @@ public sealed class AppSettings
         return c;
     }
 }
+
+/// <summary>界面配色。System = 跟着系统的浅色/深色走。</summary>
+public enum ThemeMode { System, Light, Dark }
 
 // ---------------- 文字识别与翻译设置类型 ----------------
 

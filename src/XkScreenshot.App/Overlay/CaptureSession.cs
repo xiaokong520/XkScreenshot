@@ -6,6 +6,7 @@ using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using XkScreenshot.Annotate;
+using XkScreenshot.App.Settings;
 using XkScreenshot.App.Ui;
 using XkScreenshot.Capture;
 using XkScreenshot.Core.Geometry;
@@ -37,12 +38,14 @@ public sealed record CaptureResult(BitmapSource Image, PixelRect Bounds, Capture
 
 /// <summary>
 /// 会话起手时的状态，全部来自设置界面。
-/// 单独一个记录而不是把 AppSettings 整个塞进来：会话只关心这三样，
+/// 单独一个记录而不是把 AppSettings 整个塞进来：会话只关心这几样，
 /// 多传的每一项都会变成以后「设置一改，截图行为莫名其妙跟着变」的伏笔。
 /// </summary>
-public sealed record CaptureDefaults(CaptureAction Action, bool ShowHints, bool ElementMode)
+public sealed record CaptureDefaults(
+    CaptureAction Action, bool ShowHints, bool ElementMode, ThemeMode Theme)
 {
-    public static readonly CaptureDefaults Standard = new(CaptureAction.Copy, true, false);
+    public static readonly CaptureDefaults Standard =
+        new(CaptureAction.Copy, true, false, ThemeMode.System);
 }
 
 /// <summary>
@@ -148,9 +151,15 @@ public sealed class CaptureSession : IDisposable
         DefaultAction = d.Action;
         ShowHints = d.ShowHints;
         ElementMode = d.ElementMode;
+        // 现在解析而不是在设置里存死：覆盖层是每次截图现搭的，用户中途在系统里
+        // 切了深浅，下一次按热键就跟上了
+        Palette = OverlayPalette.For(Theme.IsDark(d.Theme));
 
         _probe.Updated += OnProbeUpdated;
     }
+
+    /// <summary>浮动面板这一次用哪一套配色。会话开始时定下，中途不变。</summary>
+    public OverlayPalette Palette { get; }
 
     /// <summary>
     /// 覆盖层此刻在看的画面。回溯到历史时会换成存档的那一张 ——

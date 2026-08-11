@@ -68,17 +68,8 @@ public sealed class ToolOptionsLayer : FrameworkElement
     private const double PickerGap = 9;
     private const double PreviewSize = 26;
 
-    private static readonly Brush ActiveBrush = Freeze(new SolidColorBrush(Color.FromArgb(0x44, 0x3B, 0x9E, 0xFF)));
-    private static readonly Pen ActivePen = Freeze(new Pen(new SolidColorBrush(Color.FromArgb(0xB0, 0x3B, 0x9E, 0xFF)), 1));
-    private static readonly Brush InkBrush = Freeze(new SolidColorBrush(Color.FromRgb(0xE4, 0xE8, 0xEE)));
-    private static readonly Brush TrackBrush = Freeze(new SolidColorBrush(Color.FromArgb(0x3A, 0xFF, 0xFF, 0xFF)));
-    private static readonly Brush FillBrush = Freeze(new SolidColorBrush(Color.FromRgb(0x3B, 0x9E, 0xFF)));
-    private static readonly Pen KnobPen = Freeze(new Pen(new SolidColorBrush(Color.FromArgb(0x70, 0x00, 0x00, 0x00)), 1));
-    private static readonly Brush ActiveInkBrush = Freeze(new SolidColorBrush(Color.FromRgb(0xA8, 0xD4, 0xFF)));
-    private static readonly Brush LabelBrush = Freeze(new SolidColorBrush(Color.FromRgb(0x7C, 0x84, 0x91)));
-    private static readonly Brush SeparatorBrush = Freeze(new SolidColorBrush(Color.FromArgb(0x28, 0xFF, 0xFF, 0xFF)));
-    private static readonly Pen SwatchPen = Freeze(new Pen(new SolidColorBrush(Color.FromArgb(0x66, 0xFF, 0xFF, 0xFF)), 1));
-    private static readonly Pen SwatchActivePen = Freeze(new Pen(Brushes.White, 2));
+    // 色盘方块上的那两个游标画在饱和度/色相渐变上，底下是什么颜色都有可能，
+    // 跟主题无关：一律白圈 + 一圈半透明黑垫底，两套配色下都是这一份
     private static readonly Pen MarkerPen = Freeze(new Pen(Brushes.White, 2));
     private static readonly Pen MarkerShadePen = Freeze(new Pen(new SolidColorBrush(Color.FromArgb(0x80, 0, 0, 0)), 3.5));
     private static readonly Typeface Face = new("Microsoft YaHei UI");
@@ -111,6 +102,20 @@ public sealed class ToolOptionsLayer : FrameworkElement
     public ToolOptionsLayer() => IsHitTestVisible = false;
 
     public FrostedBackdrop? Backdrop { get; set; }
+
+    /// <summary>配色。换一套要连标签缓存一起丢掉，画刷是量文字那会儿就烤进去的。</summary>
+    public OverlayPalette Palette
+    {
+        get => _palette;
+        set
+        {
+            _palette = value;
+            _labels.Clear();
+        }
+    }
+
+    private OverlayPalette _palette = OverlayPalette.Dark;
+
     public bool Visible { get; set; }
 
     /// <summary>子工具栏在为谁服务：选中的标注，或者当前工具。</summary>
@@ -292,7 +297,7 @@ public sealed class ToolOptionsLayer : FrameworkElement
         if (_labels.TryGetValue(text, out var cached)) return cached;
 
         var made = new FormattedText(text, CultureInfo.CurrentCulture, FlowDirection.LeftToRight,
-            Face, LabelFontSize, LabelBrush, ppd);
+            Face, LabelFontSize, _palette.TextMuted, ppd);
         _labels[text] = made;
         return made;
     }
@@ -303,7 +308,7 @@ public sealed class ToolOptionsLayer : FrameworkElement
         _trackRect = Rect.Empty;
         if (!Visible || PanelRect.IsEmpty) return;
 
-        PanelChrome.DrawGlassPanel(dc, PanelRect, CornerRadius, Backdrop, new Size(ActualWidth, ActualHeight));
+        PanelChrome.DrawGlassPanel(dc, PanelRect, CornerRadius, Backdrop, new Size(ActualWidth, ActualHeight), _palette);
 
         double x = PanelRect.X + PadX;
         double y = PanelRect.Y + PadY;
@@ -353,19 +358,19 @@ public sealed class ToolOptionsLayer : FrameworkElement
         _trackRect = new Rect(x, cy - TrackHeight / 2, TrackWidth, TrackHeight);
 
         double r = TrackHeight / 2;
-        dc.DrawRoundedRectangle(TrackBrush, null, _trackRect, r, r);
+        dc.DrawRoundedRectangle(_palette.SliderTrack, null, _trackRect, r, r);
 
         double knobX = _trackRect.X + SizeRange.Fraction(SizeValue) * TrackWidth;
         if (knobX > _trackRect.X)
-            dc.DrawRoundedRectangle(FillBrush, null,
+            dc.DrawRoundedRectangle(_palette.Accent, null,
                 new Rect(_trackRect.X, _trackRect.Y, knobX - _trackRect.X, TrackHeight), r, r);
 
-        dc.DrawEllipse(Brushes.White, KnobPen, new Point(knobX, cy), KnobRadius, KnobRadius);
+        dc.DrawEllipse(Brushes.White, _palette.SliderKnobBorder, new Point(knobX, cy), KnobRadius, KnobRadius);
 
         var readout = new FormattedText(
             SizeValue.ToString("0", CultureInfo.InvariantCulture),
             CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
-            Face, ReadoutFontSize, InkBrush, VisualTreeHelper.GetDpi(this).PixelsPerDip);
+            Face, ReadoutFontSize, _palette.Icon, VisualTreeHelper.GetDpi(this).PixelsPerDip);
 
         // 右对齐：数字从一位变两位时，左对齐会让整块读数跟着抖
         dc.DrawText(readout, new Point(
@@ -374,7 +379,7 @@ public sealed class ToolOptionsLayer : FrameworkElement
     }
 
     private void DrawSeparator(DrawingContext dc, double x)
-        => dc.DrawRectangle(SeparatorBrush, null,
+        => dc.DrawRectangle(_palette.Separator, null,
             new Rect(Math.Round(x) + 0.5, PanelRect.Y + PadY + 4, 1, ChipSize - 8));
 
     private void DrawChip(DrawingContext dc, Rect rect, ToolOptionKind kind, int index)
@@ -386,9 +391,9 @@ public sealed class ToolOptionsLayer : FrameworkElement
 
         bool active = IsActive(kind, index, isPicker);
         if (active && !isPicker && kind != ToolOptionKind.Color)
-            dc.DrawRoundedRectangle(ActiveBrush, ActivePen, rect, 7, 7);
+            dc.DrawRoundedRectangle(_palette.AccentFill, _palette.AccentBorder, rect, 7, 7);
 
-        var ink = active ? ActiveInkBrush : InkBrush;
+        var ink = active ? _palette.IconActive : _palette.Icon;
 
         switch (kind)
         {
@@ -417,13 +422,13 @@ public sealed class ToolOptionsLayer : FrameworkElement
         _ => false,
     };
 
-    private static void DrawSwatch(DrawingContext dc, Rect rect, Color color, bool active)
+    private void DrawSwatch(DrawingContext dc, Rect rect, Color color, bool active)
     {
         var brush = new SolidColorBrush(color);
         brush.Freeze();
 
         double inset = (rect.Width - SwatchSize) / 2;
-        dc.DrawRoundedRectangle(brush, active ? SwatchActivePen : SwatchPen,
+        dc.DrawRoundedRectangle(brush, active ? _palette.SwatchActiveBorder : _palette.SwatchBorder,
             new Rect(rect.X + inset, rect.Y + inset, SwatchSize, SwatchSize), 4, 4);
     }
 
@@ -433,19 +438,19 @@ public sealed class ToolOptionsLayer : FrameworkElement
         double inset = (rect.Width - SwatchSize) / 2;
         var box = new Rect(rect.X + inset, rect.Y + inset, SwatchSize, SwatchSize);
 
-        dc.DrawRoundedRectangle(HueBrush, active ? SwatchActivePen : SwatchPen, box, 4, 4);
+        dc.DrawRoundedRectangle(HueBrush, active ? _palette.SwatchActiveBorder : _palette.SwatchBorder, box, 4, 4);
 
         // 中间嵌一小格当前色：既是入口也是「现在是什么颜色」的读数
         var current = new SolidColorBrush(Color);
         current.Freeze();
         double d = SwatchSize / 2.4;
-        dc.DrawEllipse(current, SwatchPen,
+        dc.DrawEllipse(current, _palette.SwatchBorder,
             new Point(box.X + box.Width / 2, box.Y + box.Height / 2), d / 2, d / 2);
     }
 
     private void DrawPicker(DrawingContext dc)
     {
-        PanelChrome.DrawGlassPanel(dc, PickerRect, CornerRadius, Backdrop, new Size(ActualWidth, ActualHeight));
+        PanelChrome.DrawGlassPanel(dc, PickerRect, CornerRadius, Backdrop, new Size(ActualWidth, ActualHeight), _palette);
 
         // 饱和度/明度方块：纯色相打底，横向叠白、纵向叠黑
         var hue = new SolidColorBrush(new Hsv(Hsv.H, 1, 1).ToColor());
@@ -453,7 +458,7 @@ public sealed class ToolOptionsLayer : FrameworkElement
         dc.DrawRectangle(hue, null, _squareRect);
         dc.DrawRectangle(WhiteFade, null, _squareRect);
         dc.DrawRectangle(BlackFade, null, _squareRect);
-        dc.DrawRectangle(null, SwatchPen, _squareRect);
+        dc.DrawRectangle(null, _palette.SwatchBorder, _squareRect);
 
         var marker = new Point(
             _squareRect.X + Math.Clamp(Hsv.S, 0, 1) * _squareRect.Width,
@@ -463,7 +468,7 @@ public sealed class ToolOptionsLayer : FrameworkElement
         dc.DrawEllipse(null, MarkerPen, marker, 6, 6);
 
         dc.DrawRectangle(HueBrush, null, _hueRect);
-        dc.DrawRectangle(null, SwatchPen, _hueRect);
+        dc.DrawRectangle(null, _palette.SwatchBorder, _hueRect);
 
         double hx = _hueRect.X + Math.Clamp(Hsv.H, 0, 360) / 360 * _hueRect.Width;
         var slider = new Rect(hx - 3, _hueRect.Y - 2, 6, _hueRect.Height + 4);
@@ -479,11 +484,11 @@ public sealed class ToolOptionsLayer : FrameworkElement
         var swatch = new Rect(_hueRect.X, _hueRect.Bottom + PickerGap, PreviewSize, PreviewSize);
         var brush = new SolidColorBrush(Color);
         brush.Freeze();
-        dc.DrawRoundedRectangle(brush, SwatchPen, swatch, 5, 5);
+        dc.DrawRoundedRectangle(brush, _palette.SwatchBorder, swatch, 5, 5);
 
         string hex = string.Format(CultureInfo.InvariantCulture, "#{0:X2}{1:X2}{2:X2}", Color.R, Color.G, Color.B);
         var text = new FormattedText(hex, CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
-            Face, 12.5, InkBrush, VisualTreeHelper.GetDpi(this).PixelsPerDip);
+            Face, 12.5, _palette.Icon, VisualTreeHelper.GetDpi(this).PixelsPerDip);
 
         dc.DrawText(text, new Point(swatch.Right + 9, swatch.Y + (swatch.Height - text.Height) / 2));
     }

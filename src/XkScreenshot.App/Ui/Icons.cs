@@ -135,6 +135,17 @@ public static class Icons
         ellipses: [(7, 7, 3, 3), (17, 17, 3, 3)],
         paths: ["M20 7h-9", "M14 17H5"]);
 
+    /// <summary>
+    /// 主题颜色 —— 一块调色板配四个颜料点。
+    ///
+    /// 那四个点在原图里是实心圆，这里画成半径 0.5 的描边圆：线宽 2 一描，
+    /// 外径正好三个单位，和实心点看起来是一回事，还省得给 Build 加一条填充路径。
+    /// </summary>
+    public static readonly Geometry Palette = Build(
+        ellipses: [(13.5, 6.5, 0.5, 0.5), (17.5, 10.5, 0.5, 0.5),
+                   (8.5, 7.5, 0.5, 0.5), (6.5, 12.5, 0.5, 0.5)],
+        paths: ["M12 22a1 1 0 0 1 0-20 10 9 0 0 1 10 9 5 5 0 0 1-5 5h-2.25a1.75 1.75 0 0 0-1.4 2.8l.3.4a1.75 1.75 0 0 1-1.4 2.8z"]);
+
     /// <summary>「截图」分类。</summary>
     public static readonly Geometry Crop = Build(
         paths: ["M6 2v14a2 2 0 0 0 2 2h14", "M18 22V8a2 2 0 0 0-2-2H2"]);
