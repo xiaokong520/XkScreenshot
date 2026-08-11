@@ -80,7 +80,8 @@ public sealed class SettingsWindow : Window
     private readonly TextBox _historyDir = new();
     private readonly ComboBox _defaultAction = new() { Width = 168 };
     private readonly ComboBox _scrollMode = new() { Width = 168 };
-    private readonly TextBox _scrollMaxHeight = new() { Width = 72, MaxLength = 5 };
+    // 宽度按能完整显示五位数留：左右各 10 的内边距先吃掉 20，剩下的要装满格的 60000
+    private readonly TextBox _scrollMaxHeight = new() { Width = 96, MaxLength = 5 };
     private readonly ToggleButton _saveWithoutPrompt = new();
     private readonly ToggleButton _showHints = new();
     private readonly ToggleButton _elementMode = new();
@@ -189,7 +190,7 @@ public sealed class SettingsWindow : Window
         _dark = Theme.IsSystemDark();
 
         Title = "XkScreenshot 设置";
-        Width = 720;
+        Width = 880;
         // 开窗高度按「最长的那一页正好不用滚」来定，屏幕矮就退到工作区高度。
         // 不用 SizeToContent：那样切换分类时窗口会跟着一页一页地变高变矮，比滚动条晃眼得多。
         Height = Math.Min(680, Math.Max(360, SystemParameters.WorkArea.Height - 80));
