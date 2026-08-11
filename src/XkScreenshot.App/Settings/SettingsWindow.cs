@@ -807,35 +807,33 @@ public sealed class SettingsWindow : Window
     }
 
     private void BrowseDirectory()
-    {
-        var dialog = new OpenFolderDialog
-        {
-            Title = "选择默认保存目录",
-            InitialDirectory = Directory.Exists(_directory.Text) ? _directory.Text : null,
-        };
-
-        if (dialog.ShowDialog(this) == true) _directory.Text = dialog.FolderName;
-    }
+        => BrowseInto(_directory, "选择默认保存目录", AppSettings.DefaultSaveDirectory);
 
     private void BrowseHistoryDir()
-    {
-        var dialog = new OpenFolderDialog
-        {
-            Title = "选择截屏历史存放目录",
-            InitialDirectory = Directory.Exists(_historyDir.Text) ? _historyDir.Text : null,
-        };
-
-        if (dialog.ShowDialog(this) == true) _historyDir.Text = dialog.FolderName;
-    }
+        => BrowseInto(_historyDir, "选择截屏历史存放目录", HistoryStore.DefaultDirectory);
 
     private void BrowseModelsDir()
+        => BrowseInto(_modelsDir, "选择离线模型存放目录", AppSettings.DefaultModelsDirectory);
+
+    /// <summary>
+    /// 选目录，从这个框当前指着的地方开始。
+    ///
+    /// 框里空着的时候要拿 fallback 顶上 —— 空着不代表没有目录，代表在用默认那个，
+    /// 而那正是用户此刻看着的路径（占位文字里写着）。不顶的话对话框会从系统随便挑的
+    /// 某个位置开，用户得自己一层层找回来。
+    /// </summary>
+    private void BrowseInto(TextBox box, string title, string fallback)
     {
+        string current = box.Text.Trim();
+        if (current.Length == 0) current = fallback;
+
         var dialog = new OpenFolderDialog
         {
-            Title = "选择离线模型存放目录",
-            InitialDirectory = Directory.Exists(_modelsDir.Text) ? _modelsDir.Text : null,
+            Title = title,
+            InitialDirectory = Directory.Exists(current) ? current : null,
         };
-        if (dialog.ShowDialog(this) == true) _modelsDir.Text = dialog.FolderName;
+
+        if (dialog.ShowDialog(this) == true) box.Text = dialog.FolderName;
     }
 
     private void RefreshPaddleStatus()
