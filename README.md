@@ -123,7 +123,7 @@ ISCC.exe installer\XkScreenshot.iss
 ```
 
 产物在 `installer\out\`。Inno Setup 自带的语言文件里没有中文，脚本引用的
-`ChineseSimplified.isl` 需要从 [issrc 仓库的 Unofficial 目录](https://github.com/jrsoftware/issrc/tree/main/Files/Languages/Unofficial)
+`ChineseSimplified.isl` 需要从 [issrc 仓库的 Languages 目录](https://github.com/jrsoftware/issrc/blob/main/Files/Languages/ChineseSimplified.isl)
 下载后放进 Inno Setup 的 `Languages\` 目录。
 
 仓库里的 `NuGet.config` 不能删，它在仓库内声明了 nuget.org 源，机器上全局 NuGet 配置为空时
