@@ -32,11 +32,63 @@ public static class HistoryStore
     /// <summary>落盘形态。分开写而不是直接序列化 <see cref="HistoryEntry"/>，是为了不把内部类型的形状焊到文件格式上。</summary>
     private sealed record Row(int X, int Y, int W, int H, int DX, int DY, int DW, int DH, string? Image);
 
-    public static string Directory => Path.Combine(
+    /// <summary>没在设置里指定路径时用的目录。</summary>
+    public static string DefaultDirectory => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "XkScreenshot", "history");
 
+    private static string _directory = DefaultDirectory;
+
+    /// <summary>
+    /// 当前落盘目录。改它之前先调 <see cref="Relocate"/> 把已经存下的东西搬过去 ——
+    /// 光换指向的话，索引里那些 id 会在新目录里一个都找不到。
+    /// </summary>
+    public static string Directory
+    {
+        get => _directory;
+        set => _directory = string.IsNullOrWhiteSpace(value) ? DefaultDirectory : value;
+    }
+
     public static string IndexPath => Path.Combine(Directory, "index.json");
+
+    private const string IndexName = "index.json";
+
+    /// <summary>
+    /// 把已经存下的历史搬到新目录，搬完再切过去。返回错误信息，null = 没出问题。
+    ///
+    /// 目标目录里已经有索引时一个文件都不搬，直接认那一份 —— 那说明用户指回了一个
+    /// 存过历史的地方，硬搬过去就是两份索引撞在一起，留谁都得丢掉另一半。
+    ///
+    /// 画面先搬、索引最后搬：中途失败的话，老索引还在老目录里指着，
+    /// 找不到的那几张画面按「只剩选区」处理，比一份指向半空目录的新索引好收拾。
+    /// </summary>
+    public static string? Relocate(string target)
+    {
+        string from = Directory;
+        string to = string.IsNullOrWhiteSpace(target) ? DefaultDirectory : target;
+        if (string.Equals(from, to, StringComparison.OrdinalIgnoreCase)) return null;
+
+        try
+        {
+            System.IO.Directory.CreateDirectory(to);
+
+            if (!File.Exists(Path.Combine(to, IndexName)) && System.IO.Directory.Exists(from))
+            {
+                foreach (string file in System.IO.Directory.EnumerateFiles(from, "*.png"))
+                    File.Move(file, Path.Combine(to, Path.GetFileName(file)), overwrite: true);
+
+                string index = Path.Combine(from, IndexName);
+                if (File.Exists(index)) File.Move(index, Path.Combine(to, IndexName), overwrite: true);
+            }
+
+            Directory = to;
+            return null;
+        }
+        catch (Exception ex)
+        {
+            return "截图历史目录切换失败：" + ex.Message;
+        }
+    }
 
     /// <summary>
     /// 读回历史。索引里指着一个已经不在的 PNG 时，条目本身留着、画面置空 ——
@@ -82,7 +134,8 @@ public static class HistoryStore
     /// </summary>
     private static IReadOnlyList<HistoryEntry> LoadLegacy()
     {
-        string legacy = Path.Combine(Path.GetDirectoryName(Directory)!, "history.json");
+        // 认死默认位置：旧版本没有「换个地方存」这回事，那个文件只可能在这儿
+        string legacy = Path.Combine(Path.GetDirectoryName(DefaultDirectory)!, "history.json");
 
         try
         {
