@@ -68,6 +68,9 @@ public sealed class AppSettings
 
     public bool RunAtStartup { get; set; }
 
+    /// <summary>以管理员权限运行。切换它要重启整个进程 —— 令牌在进程启动时就定死了。</summary>
+    public bool RunAsAdmin { get; set; }
+
     // ---------------- 文字识别与翻译 ----------------
 
     /// <summary>离线模型存放目录。留空 = 软件根目录下的 models/。</summary>

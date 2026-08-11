@@ -30,6 +30,9 @@ public partial class App : Application
     private const string CaptureHotkeyName = "Capture";
     private const string PinHotkeyName = "Pin";
 
+    /// <summary>提权重启时，新实例最多等老实例腾出单实例名额多久。</summary>
+    private static readonly TimeSpan RestartHandoverTimeout = TimeSpan.FromSeconds(10);
+
     private readonly PinManager _pins = new();
 
     private Mutex? _instanceMutex;
@@ -40,6 +43,9 @@ public partial class App : Application
     private SettingsWindow? _settingsWindow;
     private AppSettings _settings = new();
     private BitmapSource? _lastCapture;
+
+    /// <summary>启动早期出的岔子。那会儿托盘图标还没建起来，只能先记着，等有地方说了再说。</summary>
+    private string? _startupNotice;
     private IOcrEngine? _ocrEngine;
     private ITranslator? _translator;
     private TranslationCache? _translationCache;
@@ -52,8 +58,7 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
-        _instanceMutex = new Mutex(initiallyOwned: true, SingleInstanceMutexName, out bool isFirst);
-        if (!isFirst)
+        if (!AcquireSingleInstance(e.Args))
         {
             MessageBox.Show("XkScreenshot 已经在运行了。", "XkScreenshot",
                 MessageBoxButton.OK, MessageBoxImage.Information);
@@ -65,6 +70,10 @@ public partial class App : Application
         // 自启动的真相在注册表里，不在配置文件里：用户可能在任务管理器的启动项里关掉过它。
         // 以注册表为准，设置界面上那个勾才不会撒谎。
         _settings.RunAtStartup = StartupRegistration.IsEnabled();
+
+        // 权限同样以现实为准：右键「以管理员身份运行」进来的，配置文件里存着什么已经不算数了
+        if (Elevation.IsElevated) _settings.RunAsAdmin = true;
+        else if (_settings.RunAsAdmin && ElevateAtStartup(e.Args)) return;
 
         _controller = new CaptureController(new GdiScreenCapture());
         _controller.Captured += OnCaptured;
@@ -83,6 +92,8 @@ public partial class App : Application
         SetupTrayIcon();
         ApplySettings();
 
+        if (_startupNotice is not null) ShowTrayWarning(_startupNotice);
+
         // 装历史必须排在 ApplySettings 后面：容量得先由设置定下来，
         // 反过来的话这里会按默认那 30 条把用户设的更长的历史截掉一段
         _controller.History.Restore(HistoryStore.Load());
@@ -90,6 +101,55 @@ public partial class App : Application
         // 上次跑的时候可能在「写完 PNG、还没来得及写索引」之间被结束掉，
         // 那种文件谁也认领不了，只会一直占着磁盘
         HistoryStore.PruneImages(_controller.History.ImageIds());
+    }
+
+    /// <summary>
+    /// 抢下「本机只跑一个」的名额。
+    ///
+    /// 提权重启这条路上，新实例是在老实例还活着的时候被拉起来的（中间隔着一次 UAC），
+    /// 所以带着重启标记进来的实例得给老实例留一点退出的时间。不等的话用户看到的会是
+    /// 「点了重启、UAC 也过了，程序却弹一句『已经在运行了』然后没了」。
+    /// </summary>
+    private bool AcquireSingleInstance(string[] args)
+    {
+        _instanceMutex = new Mutex(initiallyOwned: true, SingleInstanceMutexName, out bool isFirst);
+        if (isFirst) return true;
+        if (!args.Contains(Elevation.RestartArgument, StringComparer.OrdinalIgnoreCase)) return false;
+
+        try
+        {
+            return _instanceMutex.WaitOne(RestartHandoverTimeout);
+        }
+        catch (AbandonedMutexException)
+        {
+            // 老实例是直接 Dispose 掉互斥体的，没有 ReleaseMutex，所以正常路径下等到的
+            // 就是「已废弃」这一支 —— 它同样意味着名额已经归我们了
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// 设了「以管理员权限运行」却没提权，就在这儿掉头重来。返回 true 表示正在退出。
+    ///
+    /// 摆在启动最前面：托盘图标、热键、OCR 引擎都还没建起来，此刻退出的代价最小，
+    /// 用户看到的也只是一次 UAC，而不是图标闪一下又没了。
+    /// </summary>
+    private bool ElevateAtStartup(string[] args)
+    {
+        // 带着标记回来却还是没提权，说明这台机器上就是提不上去（UAC 关着、账户不是管理员）。
+        // 再拉一次就是没完没了的自我重启，所以到此为止，本次先以普通权限跑着。
+        if (args.Contains(Elevation.RestartArgument, StringComparer.OrdinalIgnoreCase)) return false;
+
+        // 用户在 UAC 上点了取消也走这一支：不改设置，下次启动还会再问一次 ——
+        // 他要是不想再被问，把通用设置里那个开关关掉就是了
+        if (!Elevation.Restart(out string? error))
+        {
+            _startupNotice = error;
+            return false;
+        }
+
+        Shutdown();
+        return true;
     }
 
     /// <summary>
@@ -261,6 +321,48 @@ public partial class App : Application
     }
 
     /// <summary>
+    /// 切到另一个权限高度。令牌是进程启动时定死的，改不了，只能整个重来一次。
+    /// 返回 true 表示新实例已经在路上、这个进程正在退出，调用方别再做别的事。
+    /// </summary>
+    private bool SwitchElevation(bool toAdmin)
+    {
+        string? error;
+        if (toAdmin)
+        {
+            if (Elevation.Restart(out error)) { Shutdown(); return true; }
+        }
+        else
+        {
+            // explorer 代拉的那个实例没法带上握手参数，只能这边先腾位置，
+            // 它进门时才不会把自己判成重复运行
+            ReleaseSingleInstance();
+            if (Elevation.RestartUnelevated(out error)) { Shutdown(); return true; }
+
+            // 没走成就把名额收回来，否则这个进程会一直空着位置，谁都能再开一个
+            _instanceMutex = new Mutex(initiallyOwned: true, SingleInstanceMutexName, out _);
+        }
+
+        // error 为 null = 用户在 UAC 上点了取消。是他自己撤销的动作，不用再提示一次，
+        // 但设置里那个开关得跟着退回来 —— 留着它，界面上就写着一个并没有生效的状态
+        if (error is not null) ShowTrayWarning(error);
+        _settings.RunAsAdmin = Elevation.IsElevated;
+        SettingsStore.Save(_settings);
+        return false;
+    }
+
+    /// <summary>交出单实例名额。只有降权重启会用到，见 <see cref="SwitchElevation"/>。</summary>
+    private void ReleaseSingleInstance()
+    {
+        if (_instanceMutex is null) return;
+
+        try { _instanceMutex.ReleaseMutex(); }
+        catch (ApplicationException) { /* 本来就没握着，那正是想要的结果 */ }
+
+        _instanceMutex.Dispose();
+        _instanceMutex = null;
+    }
+
+    /// <summary>
     /// 设置窗口只开一个。开着的时候再点托盘就把它拉到前面来 ——
     /// 两个窗口各改各的，后关的那个会把先关的改动整个盖掉。
     /// </summary>
@@ -302,6 +404,11 @@ public partial class App : Application
 
                 _settings = updated;
                 if (SettingsStore.Save(_settings) is { } saveError) ShowTrayWarning(saveError);
+
+                // 权限得先存后换：换权限意味着这个进程马上就没了，没存的东西全跟着一起没
+                if (_settings.RunAsAdmin != Elevation.IsElevated
+                    && SwitchElevation(_settings.RunAsAdmin))
+                    return;
             }
 
             // 取消也要走一遍：关窗时热键框可能正握着焦点、热键正让出去着，不装回来就再也回不来了
