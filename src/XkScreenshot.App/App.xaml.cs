@@ -537,7 +537,7 @@ public partial class App : Application
             return;
         }
 
-        var window = new TextResultWindow(image, "文字识别结果");
+        var window = new TextResultWindow(image, "文字识别结果", _settings.ResolveDark());
         window.Show();
 
         try
@@ -567,7 +567,7 @@ public partial class App : Application
             return;
         }
 
-        var window = new TextResultWindow(image, "翻译结果");
+        var window = new TextResultWindow(image, "翻译结果", _settings.ResolveDark());
         window.Show();
 
         try

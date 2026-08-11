@@ -3,16 +3,20 @@ using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Media;
 using Microsoft.Win32;
+using XkScreenshot.App.Settings;
 using XkScreenshot.Core.Native;
 
 namespace XkScreenshot.App.Ui;
 
 /// <summary>
-/// 常规窗口（目前只有设置界面）的配色。
+/// 常规窗口（设置界面、识别与翻译结果窗口）的配色。
 ///
-/// 跟随系统的浅色/深色，而不是钉死一套：设置界面是唯一一个「像普通程序」的窗口，
-/// 它跟系统对不上的时候，突兀感比配色好看与否明显得多。覆盖层不用这套 ——
-/// 它盖在冻结画面上，永远是深色才看得清底下的内容。
+/// 默认跟随系统的浅色/深色而不是钉死一套：这几个是仅有的「像普通程序」的窗口，
+/// 跟系统对不上的时候，突兀感比配色好看与否明显得多。用户也可以在设置里锁死一档，
+/// 见 <see cref="ThemeMode"/>。
+///
+/// 覆盖层上那几块浮动面板不用这一套：它们压在毛玻璃背景上，深浅是连背景亮度一起
+/// 重映射出来的，另有一份 OverlayPalette。这里只管深浅怎么定，那边只管定了之后画成什么样。
 ///
 /// 颜色以资源字典的形式挂到窗口上，控件模板一律 DynamicResource 引用，
 /// 这样一份模板同时管两套皮。
@@ -24,6 +28,14 @@ public static class Theme
 
     /// <summary>浅色底上强调色要压深一档，不然填充按钮上的白字看不清。</summary>
     private static readonly Color BrandAccentDeep = Color.FromRgb(0x1B, 0x74, 0xD4);
+
+    /// <summary>按设置里选的那一档给出深浅。跟随系统时现读一次注册表。</summary>
+    public static bool IsDark(ThemeMode mode) => mode switch
+    {
+        ThemeMode.Light => false,
+        ThemeMode.Dark => true,
+        _ => IsSystemDark(),
+    };
 
     public static bool IsSystemDark()
     {
@@ -40,7 +52,10 @@ public static class Theme
         }
     }
 
-    /// <summary>把一整套颜色画刷灌进窗口资源。</summary>
+    /// <summary>
+    /// 把一整套颜色画刷灌进窗口资源。同一个元素可以反复调，用来当场换皮：
+    /// 见 <see cref="Put(ResourceDictionary, string, Color)"/>。
+    /// </summary>
     public static void Apply(FrameworkElement target, bool dark)
     {
         var r = target.Resources;
@@ -113,6 +128,28 @@ public static class Theme
         // 老版本 Windows 不认这个属性，返回非 0 即可，没有副作用
         NativeMethods.DwmSetWindowAttribute(
             hwnd, NativeMethods.DWMWA_USE_IMMERSIVE_DARK_MODE, ref value, sizeof(int));
+
+        // 属性只是给 DWM 设了个标记，标题栏什么时候按新值重画由它自己定。开窗时那次
+        // 重画紧接着就来，所以起手调一次就够；运行中途换主题却要等到窗口下次被激活
+        // 之类的事情，用户看到的是「切了没反应，过一会儿自己变了」。
+        //
+        // 逼它当场重画：把窗口拉高一像素再放回来。DWM 是按窗框的尺寸出图的，
+        // 尺寸一变就必须重出一张，那会儿它才会去读上面那个标记。
+        //
+        // 试过两条更省事的路，都不行：单给 SWP_FRAMECHANGED 只标脏非客户区，
+        // 而标题栏压根不是窗口自己画的，DWM 不认；藏一下再显示确实立竿见影，
+        // 但窗口一藏，任务栏按钮就被销毁，再显示时重建一个 —— 用户看到的是
+        // 任务栏上的图标闪没了又冒出来一个新的，比慢半拍还醒目。
+        //
+        // 窗口还没显示出来的时候不动它：那会儿正走在开窗路上，尺寸归开窗流程管。
+        if (!window.IsVisible) return;
+        if (!NativeMethods.GetWindowRect(hwnd, out var rect)) return;
+
+        const uint keep = NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOZORDER
+            | NativeMethods.SWP_NOACTIVATE;
+
+        NativeMethods.SetWindowPos(hwnd, IntPtr.Zero, 0, 0, rect.Width, rect.Height + 1, keep);
+        NativeMethods.SetWindowPos(hwnd, IntPtr.Zero, 0, 0, rect.Width, rect.Height, keep);
     }
 
     private static void Put(ResourceDictionary r, string key, byte red, byte green, byte blue)
@@ -121,6 +158,12 @@ public static class Theme
     private static void Put(ResourceDictionary r, string key, byte a, byte red, byte green, byte blue)
         => Put(r, key, Color.FromArgb(a, red, green, blue));
 
+    /// <summary>
+    /// 换皮就是把这些键上的画刷整批换掉，字典一改，DynamicResource 那条路自己会重新解析。
+    ///
+    /// 所以界面上每一处颜色都必须走 DynamicResource（代码里是 SetResourceReference）。
+    /// 谁要是把 FindResource 拿到的画刷直接赋给属性，换皮时它还攥着旧那个，一动不动。
+    /// </summary>
     private static void Put(ResourceDictionary r, string key, Color color)
     {
         var brush = new SolidColorBrush(color);

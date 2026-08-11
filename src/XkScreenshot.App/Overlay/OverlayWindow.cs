@@ -74,6 +74,13 @@ public sealed class OverlayWindow : Window
         RenderOptions.SetBitmapScalingMode(_image, BitmapScalingMode.NearestNeighbor);
         var image = _image;
 
+        // 配色要赶在 AttachFrame 之前定下：毛玻璃背景的亮度是按主题重映射的，
+        // 那一步就在里面
+        _magnifierLayer.Palette = session.Palette;
+        _hintLayer.Palette = session.Palette;
+        _toolbarLayer.Palette = session.Palette;
+        _toolOptionsLayer.Palette = session.Palette;
+
         AttachFrame(frame.Frame);
 
         _annotations = new AnnotationController { Document = session.Annotations };
@@ -116,7 +123,7 @@ public sealed class OverlayWindow : Window
         _image.Source = frame.Image;
 
         // 毛玻璃背景四层共用一份：模糊一次全屏画面就够了，没必要各算各的
-        var backdrop = new FrostedBackdrop(frame);
+        var backdrop = new FrostedBackdrop(frame, _session.Palette);
         _magnifierLayer.Frame = frame;
         _magnifierLayer.Backdrop = backdrop;
         _hintLayer.Backdrop = backdrop;

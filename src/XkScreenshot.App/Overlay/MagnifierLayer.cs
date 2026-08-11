@@ -29,15 +29,14 @@ public sealed class MagnifierLayer : FrameworkElement
     private const double LineHeight = 19;
     private const double SwatchSize = 12;
 
-    private static readonly Brush TextBrush = Freeze(new SolidColorBrush(Color.FromRgb(0xEC, 0xEF, 0xF3)));
-    private static readonly Brush DimTextBrush = Freeze(new SolidColorBrush(Color.FromRgb(0x88, 0x90, 0x9C)));
-    private static readonly Pen ViewBorder = Freeze(new Pen(new SolidColorBrush(Color.FromArgb(0x30, 0xFF, 0xFF, 0xFF)), 1));
-    // 宽度必须是整数 1：本层开了 EdgeMode.Aliased，0.5px 的笔会被整像素对齐直接吃掉，
+    // 网格、准星、中心框这三样画在放大后的画面上，而不是画在面板底色上 ——
+    // 底下是用户屏幕上的任意像素，跟主题没关系，两套配色下都是这一份。
+    //
+    // 网格线宽度必须是整数 1：本层开了 EdgeMode.Aliased，0.5px 的笔会被整像素对齐直接吃掉，
     // 结果就是网格线在纯色区域完全不可见 —— 而那恰恰是最需要网格来数像素的场景。
     private static readonly Pen GridPen = Freeze(new Pen(new SolidColorBrush(Color.FromArgb(0x26, 0xFF, 0xFF, 0xFF)), 1));
     private static readonly Pen CrossPen = Freeze(new Pen(new SolidColorBrush(Color.FromArgb(0xE0, 0x3B, 0x9E, 0xFF)), 1));
     private static readonly Pen CenterPen = Freeze(new Pen(Brushes.White, 1));
-    private static readonly Pen SwatchPen = Freeze(new Pen(new SolidColorBrush(Color.FromArgb(0x80, 0xFF, 0xFF, 0xFF)), 1));
     private static readonly Typeface Mono = new("Consolas");
     private static readonly Color OutOfBoundsFill = Color.FromRgb(0x20, 0x20, 0x20);
 
@@ -55,6 +54,8 @@ public sealed class MagnifierLayer : FrameworkElement
 
     /// <summary>毛玻璃背景。为 null 时面板退回不透明底色。</summary>
     public FrostedBackdrop? Backdrop { get; set; }
+
+    public OverlayPalette Palette { get; set; } = OverlayPalette.Dark;
 
     /// <summary>光标位置（虚拟屏幕物理像素）。null 表示光标不在本屏，本层什么都不画。</summary>
     public PixelPoint? CursorPixel { get; set; }
@@ -87,13 +88,13 @@ public sealed class MagnifierLayer : FrameworkElement
         double panelH = viewH + PanelPadding * 2 + LineHeight * 3 + 4;
         var panel = PlacePanel(panelW, panelH);
 
-        PanelChrome.DrawGlassPanel(dc, panel, CornerRadius, Backdrop, new Size(ActualWidth, ActualHeight));
+        PanelChrome.DrawGlassPanel(dc, panel, CornerRadius, Backdrop, new Size(ActualWidth, ActualHeight), Palette);
 
         var view = new Rect(panel.X + PanelPadding, panel.Y + PanelPadding, viewW, viewH);
         DrawPixels(dc, cursor, view, blockW, blockH, dpi);
         DrawGrid(dc, view, cellW, cellH);
         DrawCrosshair(dc, view, cellW, cellH);
-        dc.DrawRectangle(null, ViewBorder, new Rect(view.X - 0.5, view.Y - 0.5, view.Width + 1, view.Height + 1));
+        dc.DrawRectangle(null, Palette.ViewBorder, new Rect(view.X - 0.5, view.Y - 0.5, view.Width + 1, view.Height + 1));
         DrawReadout(dc, cursor, new Point(panel.X + PanelPadding, view.Bottom + 6));
     }
 
@@ -184,19 +185,19 @@ public sealed class MagnifierLayer : FrameworkElement
         FormattedText Text(string s, Brush brush) => new(
             s, CultureInfo.InvariantCulture, FlowDirection.LeftToRight, Mono, FontSize, brush, ppd);
 
-        dc.DrawText(Text($"({cursor.X}, {cursor.Y})", TextBrush), origin);
+        dc.DrawText(Text($"({cursor.X}, {cursor.Y})", Palette.Text), origin);
 
         var swatchRect = new Rect(origin.X + 0.5, origin.Y + LineHeight + 3.5, SwatchSize, SwatchSize);
         var swatchBrush = new SolidColorBrush(Color);
         swatchBrush.Freeze();
-        dc.DrawRoundedRectangle(swatchBrush, SwatchPen, swatchRect, 2, 2);
+        dc.DrawRoundedRectangle(swatchBrush, Palette.SwatchBorder, swatchRect, 2, 2);
 
         string value = Format == ColorFormat.Hex
             ? string.Format(CultureInfo.InvariantCulture, "#{0:X2}{1:X2}{2:X2}", Color.R, Color.G, Color.B)
             : string.Format(CultureInfo.InvariantCulture, "{0}, {1}, {2}", Color.R, Color.G, Color.B);
-        dc.DrawText(Text(value, TextBrush), new Point(swatchRect.Right + 8, origin.Y + LineHeight));
+        dc.DrawText(Text(value, Palette.Text), new Point(swatchRect.Right + 8, origin.Y + LineHeight));
 
-        dc.DrawText(Text("C 复制   Shift 切换", DimTextBrush), new Point(origin.X, origin.Y + LineHeight * 2 + 3));
+        dc.DrawText(Text("C 复制   Shift 切换", Palette.TextMuted), new Point(origin.X, origin.Y + LineHeight * 2 + 3));
     }
 
     private static T Freeze<T>(T freezable) where T : Freezable
