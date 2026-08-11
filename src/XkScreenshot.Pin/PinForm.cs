@@ -394,6 +394,7 @@ public sealed class PinForm : Form
         switch (e.KeyCode)
         {
             case Keys.Escape:
+            case Keys.Delete:
                 Close();
                 e.Handled = true;
                 break;
@@ -461,7 +462,7 @@ public sealed class PinForm : Form
         menu.Items.Add(topmostItem);
 
         menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add("关闭 (Esc)", null, (_, _) => Close());
+        menu.Items.Add("关闭 (Esc / Del)", null, (_, _) => Close());
 
         return menu;
     }
