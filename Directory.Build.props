@@ -1,9 +1,16 @@
 <Project>
 
   <PropertyGroup>
-    <!-- 19041 是为了后面能直接用 Windows.Media.Ocr 与 Windows.Graphics.Capture 的 WinRT 投影 -->
-    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
-    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
+    <!--
+      不带 10.0.x 版本号。带上就会引入 Windows SDK 的 WinRT 投影，发布产物里
+      白多出 Microsoft.Windows.SDK.NET.dll 与 WinRT.Runtime.dll 几十兆，而本项目
+      一个 WinRT API 都没有：截屏走 GDI，OCR 走 RapidOcrNet，翻译走 Bergamot。
+
+      系统下限不靠这里声明。真正把关的是 app.manifest 里的 supportedOS，以及各处
+      P/Invoke 自己的兜底 —— 那些只在新系统上才有的调用（如
+      WDA_EXCLUDEFROMCAPTURE）在老系统上是失败返回，不是崩溃。
+    -->
+    <TargetFramework>net8.0-windows</TargetFramework>
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <PlatformTarget>x64</PlatformTarget>
