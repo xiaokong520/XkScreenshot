@@ -190,11 +190,15 @@ public sealed class SettingsWindow : Window
 
         Title = "XkScreenshot 设置";
         Width = 720;
-        // 定高而不是随内容伸缩：切换分类时窗口跟着一页一页地变高变矮，比任何滚动条都晃眼。
-        // 这个高度要能装下最长的那一页（此刻是「截图」的四张卡）—— 定高的意义在于不用滚，
-        // 装不下就退化成「既不能自适应、又还是要滚」，两头都不讨好。加分类时记得重新对一下。
+        // 开窗高度按「最长的那一页正好不用滚」来定，屏幕矮就退到工作区高度。
+        // 不用 SizeToContent：那样切换分类时窗口会跟着一页一页地变高变矮，比滚动条晃眼得多。
         Height = Math.Min(680, Math.Max(360, SystemParameters.WorkArea.Height - 80));
-        ResizeMode = ResizeMode.NoResize;
+
+        // 能拉能最大化：内容区本来就是一个铺满的 ScrollViewer 加一条贴底的页脚，
+        // 横竖都跟着窗口走。下限是拿卡片最挤的那一张量的 —— 再往下标题就要和输入框叠上了。
+        ResizeMode = ResizeMode.CanResize;
+        MinWidth = 640;
+        MinHeight = 420;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         // 托盘程序没有主窗口，设置窗被别的窗口盖住之后，任务栏是唯一能把它找回来的地方
         ShowInTaskbar = true;
