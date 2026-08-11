@@ -336,12 +336,35 @@ public partial class App : Application
 
         _trayIcon = new WinForms.NotifyIcon
         {
-            // M1 换成自己的 .ico；现在先借系统图标，省掉一个二进制资源
-            Icon = SystemIcons.Application,
+            Icon = LoadTrayIcon(),
             Visible = true,
             ContextMenuStrip = menu,
         };
         _trayIcon.DoubleClick += (_, _) => _controller?.Start();
+    }
+
+    /// <summary>
+    /// 托盘图标：按系统当前的小图标尺寸从 .ico 里现挑一档。
+    ///
+    /// 不写死 16×16 —— 那是 100% 缩放下的尺寸，125% 要 20、150% 要 24、200% 要 32。
+    /// 挑错档的后果不是小一点，是被拉着放大，一个十几像素的图标糊起来格外明显。
+    /// 读不出来就退回系统图标：托盘里没有图标等于程序在用户眼里消失了，
+    /// 而这条路上没有任何值得为此不启动的理由。
+    /// </summary>
+    private static Icon LoadTrayIcon()
+    {
+        try
+        {
+            var resource = GetResourceStream(new Uri("pack://application:,,,/Assets/XkScreenshot.ico"));
+            if (resource is null) return SystemIcons.Application;
+
+            using var stream = resource.Stream;
+            return new Icon(stream, WinForms.SystemInformation.SmallIconSize);
+        }
+        catch (Exception)
+        {
+            return SystemIcons.Application;
+        }
     }
 
     /// <summary>

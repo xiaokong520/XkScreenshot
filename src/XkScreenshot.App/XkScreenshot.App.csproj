@@ -11,6 +11,8 @@
          Point/Size/Rectangle 大面积撞名，这里关掉，全部显式 using -->
     <ImplicitUsings>disable</ImplicitUsings>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- exe 的图标。WPF 窗口没设 Icon 时也取它，所以标题栏和 Alt+Tab 一并有了 -->
+    <ApplicationIcon>Assets\XkScreenshot.ico</ApplicationIcon>
     <!-- WFAC010 让我们改用 Application.SetHighDpiMode 配置 DPI，那是 WinForms 的建议。
          本项目是 WPF：WPF 在启动早期就读走了进程的 DPI 感知模式，运行期再设已经晚了，
          必须留在清单里。这里只是因为引了 WinForms（托盘图标）才触发了这条分析器。 -->
@@ -29,6 +31,12 @@
          还给系统。整屏位图全都落在大对象堆上，反复截几次就会留下一堆填不满的空洞，
          不压缩的话提交内存只涨不降。对一个偶尔干一下活的托盘程序，这笔 CPU 花得值。 -->
     <RuntimeHostConfigurationOption Include="System.GC.ConserveMemory" Value="5" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 同一个文件再嵌一份进程序集：ApplicationIcon 只进 exe 的 Win32 资源，
+         而托盘要按当前 DPI 现挑一档，得能把整个 .ico 读出来 -->
+    <Resource Include="Assets\XkScreenshot.ico" />
   </ItemGroup>
 
   <ItemGroup>
