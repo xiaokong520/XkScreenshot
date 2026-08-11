@@ -79,18 +79,42 @@ public sealed class HintLayer : FrameworkElement
 
     public void Refresh() => InvalidateVisual();
 
+    /// <summary>
+    /// 面板占住的那一块（本层局部 DIP）。
+    ///
+    /// 故意不依赖「这一帧画没画」—— 恰恰是拿它来决定要不要画的。还没布局（宽高为 0）
+    /// 时给空矩形：那会儿什么都还没摆好，谁也谈不上挡着谁。
+    /// </summary>
+    public Rect PanelRect
+    {
+        get
+        {
+            if (ActualWidth <= 0 || ActualHeight <= 0) return Rect.Empty;
+
+            var layout = EnsureLayout();
+            return new Rect(
+                EdgeInset,
+                Math.Max(EdgeInset, ActualHeight - layout.Height - EdgeInset),
+                layout.Width,
+                layout.Height);
+        }
+    }
+
+    private Layout EnsureLayout()
+    {
+        double ppd = VisualTreeHelper.GetDpi(this).PixelsPerDip;
+        return _layout is { } cached && Math.Abs(cached.PixelsPerDip - ppd) < 0.001
+            ? cached
+            : _layout = Layout.Measure(ppd);
+    }
+
     protected override void OnRender(DrawingContext dc)
     {
         if (!Visible) return;
 
-        double ppd = VisualTreeHelper.GetDpi(this).PixelsPerDip;
-        var layout = _layout is { } cached && Math.Abs(cached.PixelsPerDip - ppd) < 0.001
-            ? cached
-            : _layout = Layout.Measure(ppd);
-
-        double x = EdgeInset;
-        double y = Math.Max(EdgeInset, ActualHeight - layout.Height - EdgeInset);
-        var panel = new Rect(x, y, layout.Width, layout.Height);
+        var panel = PanelRect;
+        if (panel.IsEmpty) return;
+        var layout = EnsureLayout();
 
         PanelChrome.DrawGlassPanel(dc, panel, CornerRadius, Backdrop, new Size(ActualWidth, ActualHeight));
 

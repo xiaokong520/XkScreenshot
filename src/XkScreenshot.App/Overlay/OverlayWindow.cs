@@ -339,11 +339,32 @@ public sealed class OverlayWindow : Window
         // 提示面板只在光标所在那块屏显示。选区确定后照样留着 ——
         // Enter / Esc / 方向键这些恰恰是那之后才会用到的。
         bool visible = _session.ShowHints
-                       && _frame.Monitor.Bounds.Contains(_session.Cursor);
+                       && _frame.Monitor.Bounds.Contains(_session.Cursor)
+                       && !HintInTheWay();
 
         if (visible == _hintLayer.Visible) return;
         _hintLayer.Visible = visible;
         _hintLayer.Refresh();
+    }
+
+    /// <summary>
+    /// 提示面板此刻是不是挡了事：光标压上来了，或者选区框到了它身上。
+    ///
+    /// 这两个动作说的是同一件事 —— 用户要的东西在面板底下。面板是画在画面上的，
+    /// 不让开就等于让人对着一块自己盖住的地方去框选。
+    ///
+    /// 只认真正的选区，不认「悬停整窗」那个预备选区：那玩意儿动辄就是一个最大化的窗口，
+    /// 认了的话面板刚冒头就没了，等于这个功能白做。
+    /// </summary>
+    private bool HintInTheWay()
+    {
+        var panel = _hintLayer.PanelRect;
+        if (panel.IsEmpty) return false;
+
+        if (panel.Contains(ToLocalDipPoint(_session.Cursor))) return true;
+
+        var selection = _session.Selection;
+        return !selection.IsEmpty && panel.IntersectsWith(ToLocalDip(selection));
     }
 
     /// <summary>虚拟屏幕物理像素 → 本窗口局部 DIP。整个项目里唯一做 DPI 换算的地方。</summary>
