@@ -43,6 +43,9 @@ public sealed class SettingsWindow : Window
     private const double CardGap = 4;
     private const double IconSize = 20;
     private const double IconGap = 20;
+
+    /// <summary>标题后面那个感叹号。比正文小一圈，是个记号而不是又一个图标。</summary>
+    private const double HintMarkSize = 14;
     private const double ContentGap = 24;
     private const double PagePadding = 24;
     private const double NavWidth = 176;
@@ -81,6 +84,7 @@ public sealed class SettingsWindow : Window
     private readonly ToggleButton _showHints = new();
     private readonly ToggleButton _elementMode = new();
     private readonly ToggleButton _runAtStartup = new();
+    private readonly ToggleButton _runAsAdmin = new();
 
     // ---------------- 文字识别与翻译 ----------------
 
@@ -238,7 +242,8 @@ public sealed class SettingsWindow : Window
         _translationMode.Items.Add("在线");
         _apiProtocol.Items.Add("OpenAI");
         _apiProtocol.Items.Add("Anthropic");
-        foreach (var toggle in new[] { _saveWithoutPrompt, _showHints, _elementMode, _runAtStartup })
+        foreach (var toggle in new[]
+                 { _saveWithoutPrompt, _showHints, _elementMode, _runAtStartup, _runAsAdmin })
             toggle.Style = (Style)FindResource("ToggleSwitch");
 
         // 「留空则用默认」的框，把那个默认值当占位文字摆出来 ——
@@ -352,31 +357,22 @@ public sealed class SettingsWindow : Window
     private void BuildPages()
     {
         AddPage(Icons.Sliders, "通用",
-            Card(Icons.Power, "开机自动启动",
-                "登录 Windows 后自动常驻托盘。", _runAtStartup));
+            Card(Icons.Power, "开机自动启动", null, _runAtStartup),
+            Card(Icons.Shield, "以管理员权限运行", null, _runAsAdmin));
 
         AddPage(Icons.Command, "热键",
             HotkeyCard(Icons.Camera, "开始截图",
-                "点进输入框后按下组合键，Delete 清除。",
                 _captureHotkey, _captureStatus, HotkeySpec.CaptureDefault),
             HotkeyCard(Icons.Pin, "贴图",
-                "把剪贴板里的图钉到屏幕上；剪贴板里没有图就钉上一次截的那张。",
                 _pinHotkey, _pinStatus, HotkeySpec.PinDefault));
 
         AddPage(Icons.Crop, "截图",
-            Card(Icons.CornerDownLeft, "确认截图后",
-                "指按 Enter 或双击选区，工具条上的按钮不受影响。", _defaultAction),
-            Card(Icons.Eye, "显示快捷键提示面板",
-                "截图中按 H 也能开关。", _showHints),
-            Card(Icons.Cursor, "默认用控件级检测",
-                "截图中按 Tab 在整窗与控件级之间切换。", _elementMode),
-            Card(Icons.History, "记住多少条截屏历史",
-                "截图中按「,」「.」回溯当时的整屏画面与选区，每条约 1 MB。0 = 关闭。",
-                Line(_historyCapacity, Suffix("条"))),
-            Card(Icons.Scroll, "长截图滚动方式",
-                "自动：程序帮你滚，光标别动就好；手动：你自己滚，滚到哪儿拼到哪儿。", _scrollMode),
-            Card(Icons.MoveVertical, "长截图最大高度",
-                "拼到这么高就停，免得内存爆掉。超长网页提高它之前先想想是不是真要那么长。",
+            Card(Icons.CornerDownLeft, "确认截图后", null, _defaultAction),
+            Card(Icons.Eye, "显示快捷键提示面板", null, _showHints),
+            Card(Icons.Cursor, "默认用控件级检测", null, _elementMode),
+            Card(Icons.History, "记住多少条截屏历史", null, Line(_historyCapacity, Suffix("条"))),
+            Card(Icons.Scroll, "长截图滚动方式", null, _scrollMode),
+            Card(Icons.MoveVertical, "长截图最大高度", null,
                 Line(_scrollMaxHeight, Suffix("像素（1000–60000）"))));
 
         AddPage(Icons.ScanLine, "识别 / 翻译",
@@ -396,12 +392,8 @@ public sealed class SettingsWindow : Window
             StackedCard(Icons.Folder, "离线模型目录",
                 "留空则用软件根目录下的 models/ 文件夹。",
                 Fill(_modelsDir, Button("浏览…", BrowseModelsDir))),
-            Card(Icons.Package, "PaddleOCR 模型",
-                "约 21 MB，认中文、日文和拉丁字母。",
-                PaddleOcrRow()),
-            StackedCard(Icons.SpellCheck, "OCR 语言包",
-                "装上就认得更多文字系统，识别时自动试。",
-                OcrPackRow()),
+            Card(Icons.Package, "PaddleOCR 模型", null, PaddleOcrRow()),
+            StackedCard(Icons.SpellCheck, "OCR 语言包", null, OcrPackRow()),
             StackedCard(Icons.ArrowRightLeft, "离线翻译语言",
                 "每种 30~120 MB。非英语互译靠英语中转，两边都要装。",
                 LangPairRow()));
@@ -481,14 +473,14 @@ public sealed class SettingsWindow : Window
     }
 
     /// <summary>
-    /// 热键卡：说明和输入框上下排，冲突提示紧跟在输入框下面。
+    /// 热键卡：标题和输入框上下排，冲突提示紧跟在输入框下面。
     ///
-    /// 不跟别的卡一样把控件贴到右边：热键框加一个「恢复默认」已经占掉大半宽度，
-    /// 说明会被挤成三行。而提示必须就在那个框旁边 —— 攒到点确定时才一次性弹出来，
+    /// 不跟别的卡一样把控件贴到右边：热键框加一个「恢复默认」已经占掉大半宽度。
+    /// 而提示必须就在那个框旁边 —— 攒到点确定时才一次性弹出来，
     /// 用户得回头猜是哪一项、当初按的又是什么组合，可这两件事他刚才明明都知道。
     /// </summary>
     private Border HotkeyCard(
-        Geometry icon, string title, string description,
+        Geometry icon, string title,
         HotkeyBox box, TextBlock status, HotkeySpec fallback)
     {
         status.FontSize = 12;
@@ -501,7 +493,7 @@ public sealed class SettingsWindow : Window
         ((FrameworkElement)row).Margin = new Thickness(0, 12, 0, 0);
         ((FrameworkElement)row).HorizontalAlignment = HorizontalAlignment.Left;
 
-        var text = TitleBlock(title, description);
+        var text = TitleBlock(title, null);
         text.VerticalAlignment = VerticalAlignment.Top;
         text.Children.Add(row);
         text.Children.Add(status);
@@ -589,31 +581,46 @@ public sealed class SettingsWindow : Window
         };
     }
 
-    private StackPanel TitleBlock(string title, string? description)
+    /// <summary>
+    /// 卡片左边那块：标题，需要解释的项在标题后面跟一个感叹号，说明挂在它的悬停提示上。
+    ///
+    /// 说明不再直接铺在标题下面：那样每张卡都多出一两行小字，一页翻下来满屏都是字，
+    /// 真正要动的那个控件反而不显眼。说明只在第一次看的时候有用，之后就是噪音。
+    /// </summary>
+    private StackPanel TitleBlock(string title, string? hint)
     {
-        var stack = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
-        stack.Children.Add(new TextBlock
+        var line = new StackPanel { Orientation = Orientation.Horizontal };
+        line.Children.Add(new TextBlock
         {
             Text = title,
             Foreground = Brush("Text"),
-            TextWrapping = TextWrapping.Wrap,
+            VerticalAlignment = VerticalAlignment.Center,
         });
+        if (hint is not null) line.Children.Add(HintMark(hint));
 
-        if (description is not null)
-        {
-            stack.Children.Add(new TextBlock
-            {
-                Text = description,
-                FontSize = 12,
-                Foreground = Brush("TextSecondary"),
-                TextWrapping = TextWrapping.Wrap,
-                Margin = new Thickness(0, 3, 0, 0),
-            });
-        }
+        var stack = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+        stack.Children.Add(line);
 
         Grid.SetColumn(stack, 1);
         return stack;
     }
+
+    /// <summary>
+    /// 标题后面那个感叹号。
+    ///
+    /// 图标只有描边，鼠标从圈里穿过是碰不到它的 —— 命中测试只认画出来的那几个像素，
+    /// 所以垫一层透明底把整块方形都变成可悬停的区域。说明文字给个最大宽度让它换行，
+    /// 不然一句话会拉成横贯屏幕的一条。
+    /// </summary>
+    private FrameworkElement HintMark(string hint) => new Border
+    {
+        Background = Brushes.Transparent,
+        Child = IconBox(Icons.Alert, HintMarkSize, 0),
+        Margin = new Thickness(6, 0, 0, 0),
+        VerticalAlignment = VerticalAlignment.Center,
+        Cursor = Cursors.Help,
+        ToolTip = new TextBlock { Text = hint, MaxWidth = 280, TextWrapping = TextWrapping.Wrap },
+    };
 
     // ---------------- 小零件 ----------------
 
@@ -765,6 +772,7 @@ public sealed class SettingsWindow : Window
         _showHints.IsChecked = s.ShowHints;
         _elementMode.IsChecked = s.ElementMode;
         _runAtStartup.IsChecked = s.RunAtStartup;
+        _runAsAdmin.IsChecked = s.RunAsAdmin;
         _historyCapacity.Text = s.HistoryCapacity.ToString(CultureInfo.InvariantCulture);
 
         _ocrMode.SelectedIndex = s.Recognition.Mode == OcrMode.Online ? 1 : 0;
@@ -1286,6 +1294,7 @@ public sealed class SettingsWindow : Window
         }
 
         if (!CheckHotkeys()) return;
+        if (!ConfirmElevationSwitch()) return;
 
         _draft.CaptureHotkey = _captureHotkey.Value;
         _draft.PinHotkey = _pinHotkey.Value;
@@ -1296,6 +1305,7 @@ public sealed class SettingsWindow : Window
         _draft.ShowHints = _showHints.IsChecked == true;
         _draft.ElementMode = _elementMode.IsChecked == true;
         _draft.RunAtStartup = _runAtStartup.IsChecked == true;
+        _draft.RunAsAdmin = _runAsAdmin.IsChecked == true;
 
         // 解析不出来（粘进去一段乱七八糟的）就退回默认值，而不是当成 0 把功能关掉 ——
         // 用户来这儿是想调条数，不是想关掉它
@@ -1320,6 +1330,25 @@ public sealed class SettingsWindow : Window
 
         Result = _draft;
         Close();
+    }
+
+    /// <summary>
+    /// 动了「以管理员权限运行」就得先打个招呼。权限是进程启动时定死的，改不了，
+    /// 只能整个重来一次 —— 点确定之后程序自己关掉又开起来，事先不说会像是崩了。
+    ///
+    /// 拿当前进程的实际权限比，而不是比设置里存的那个值：用户完全可能是右键
+    /// 「以管理员身份运行」进来的，那时候存的值是什么已经不重要了。
+    /// </summary>
+    private bool ConfirmElevationSwitch()
+    {
+        bool wanted = _runAsAdmin.IsChecked == true;
+        if (wanted == Elevation.IsElevated) return true;
+
+        return MessageBox.Show(this,
+            wanted
+                ? "保存后程序会退出并以管理员权限重新启动，中间会弹一次 UAC。继续吗？"
+                : "保存后程序会退出并以普通权限重新启动。继续吗？",
+            "XkScreenshot", MessageBoxButton.OKCancel, MessageBoxImage.Question) == MessageBoxResult.OK;
     }
 
     /// <summary>
