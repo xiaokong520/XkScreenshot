@@ -4,10 +4,12 @@ using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Windows.Shapes;
 using System.Windows.Threading;
 using XkScreenshot.App.Ui;
 using XkScreenshot.Ocr;
@@ -33,6 +35,8 @@ public sealed class TextResultWindow : Window
     private readonly TextBlock _detectedLabel;
     private readonly ComboBox _targetBox;
     private readonly Button _copyBtn;
+    private readonly ToggleButton _pinBtn;
+    private readonly Path _pinIcon;
 
     private const string CopyLabel = "复制";
 
@@ -137,14 +141,59 @@ public sealed class TextResultWindow : Window
         _textBox.SetResourceReference(BackgroundProperty, "CardBg");
         _textBox.SetResourceReference(ForegroundProperty, "Text");
 
+        // 右上角：置顶开关。
+        //
+        // 这个窗口默认置顶 —— 多数时候是照着它敲字，被别的窗口盖住就等于没开。
+        // 但要对着原文核对、或者结果本身要贴到别处去的时候，压在最前反倒碍事，
+        // 所以给一个开关，而不是替所有人定死一种。
+        //
+        // 摆在内容里而不是标题栏上：原生标题栏塞不进自己的按钮，非要塞就得把客户区
+        // 顶上去自己画一整条 —— 那条带子只有透明像素才透得出系统那三颗按钮，
+        // 而透明在这个系统上就是黑的，浅色主题下是白窗口顶着一条黑带子。
+        _pinIcon = new Path
+        {
+            Data = Icons.Pin,
+            StrokeThickness = 2,
+            StrokeStartLineCap = PenLineCap.Round,
+            StrokeEndLineCap = PenLineCap.Round,
+            StrokeLineJoin = PenLineJoin.Round,
+            Width = 24,
+            Height = 24,
+        };
+
+        _pinBtn = new ToggleButton
+        {
+            // 初始态照着上面的 Topmost 来，两处不一致的话，第一下点击是「反着的」
+            IsChecked = Topmost,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Margin = new Thickness(0, 6, 6, 0),
+            // 图标按 24×24 画好再整体缩放，线宽跟着一起细下来，和设置界面那套图标一个分量
+            Content = new Viewbox { Child = _pinIcon, Width = 17, Height = 17 },
+        };
+        _pinBtn.SetResourceReference(StyleProperty, "IconToggle");
+        _pinBtn.Checked += (_, _) => ApplyPinState();
+        _pinBtn.Unchecked += (_, _) => ApplyPinState();
+        ApplyPinState();
+
         // 右侧容器。加载动画和结果文字轮流上台，底色画在容器上，
         // 切换的那一下才不会闪一块窗口底色出来
         var rightPanel = new Border { BorderThickness = new Thickness(1, 0, 0, 0) };
         rightPanel.SetResourceReference(Border.BackgroundProperty, "CardBg");
         rightPanel.SetResourceReference(Border.BorderBrushProperty, "CardBorder");
 
+        // 置顶开关单占一行，不浮在文字上面：浮着的话右上角那几个字会被它盖掉，
+        // 而那正好是结果的开头
         var rightStack = new Grid();
+        rightStack.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        rightStack.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+
+        Grid.SetRow(_pinBtn, 0);
+        rightStack.Children.Add(_pinBtn);
+
+        Grid.SetRow(_loadingPanel, 1);
         rightStack.Children.Add(_loadingPanel);
+
+        Grid.SetRow(_textBox, 1);
         rightStack.Children.Add(_textBox);
         rightPanel.Child = rightStack;
 
@@ -277,6 +326,22 @@ public sealed class TextResultWindow : Window
         };
         // 计时器不停掉的话，窗口关了它还攥着这个窗口，直到那一下 Tick 才撒手
         Closed += (_, _) => { _closed = true; _copyFlashTimer?.Stop(); };
+    }
+
+    /// <summary>
+    /// 把置顶开关的状态落到窗口上，顺带换掉图标和提示。
+    ///
+    /// 图标画的是「现在是什么状态」而不是「点下去会怎样」：这颗按钮自己有按下/弹起的
+    /// 底色，两套语义反着来会互相打架 —— 底色说「开着」而图标画着划掉的钉子。
+    /// </summary>
+    private void ApplyPinState()
+    {
+        bool pinned = _pinBtn.IsChecked == true;
+
+        Topmost = pinned;
+        _pinIcon.Data = pinned ? Icons.Pin : Icons.PinOff;
+        _pinIcon.SetResourceReference(Shape.StrokeProperty, pinned ? "Accent" : "TextSecondary");
+        _pinBtn.ToolTip = pinned ? "已置顶，点击取消" : "点击让窗口保持在最前";
     }
 
     /// <summary>
