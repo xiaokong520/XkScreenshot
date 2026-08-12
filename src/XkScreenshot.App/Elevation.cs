@@ -39,6 +39,28 @@ public static class Elevation
     public static bool IsElevated { get; } = CheckElevated();
 
     /// <summary>
+    /// 系统是否开着 UAC。EnableLUA 为 0 就是关了 —— 关掉之后用户账户不再拿过滤令牌，
+    /// 管理员永远以完整权限运行，连 explorer 都是管理员，「降权」这条路从根上断了。
+    /// 查不到或读失败一律按开着处理：多试一次降权的代价只是白点一下。
+    /// </summary>
+    public static bool IsUacEnabled
+    {
+        get
+        {
+            try
+            {
+                using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(
+                    @"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System");
+                return key?.GetValue("EnableLUA") is not int v || v != 0;
+            }
+            catch
+            {
+                return true;
+            }
+        }
+    }
+
+    /// <summary>
     /// 以管理员身份把自己重新拉起来。返回 true 表示新实例已经启动，调用方应当立刻退出，
     /// 把单实例名额让出去。
     ///
@@ -92,6 +114,14 @@ public static class Elevation
     /// </summary>
     public static bool RestartUnelevated(out string? error)
     {
+        // UAC 一关，连 explorer 都是管理员，根本没有「普通权限」可降，这一步在开头就挡回去。
+        // 不然 explorer 会老老实实再拉起来一个提权实例，设置里那个开关就永远关不掉。
+        if (!IsUacEnabled)
+        {
+            error = "系统已关闭用户账户控制（UAC），所有程序都以管理员权限运行，无法降权。";
+            return false;
+        }
+
         string? path = Environment.ProcessPath;
         if (path is null)
         {
