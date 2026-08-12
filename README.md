@@ -154,7 +154,7 @@ ISCC.exe installer\XkScreenshot.iss
 
 ```
 %APPDATA%\XkScreenshot\settings.json     设置
-%APPDATA%\XkScreenshot\history\          截屏历史（index.json + 整屏 PNG，目录可改）
+<程序目录>\history\                       截屏历史（index.json + 整屏 PNG，目录可改）
 <程序目录>\models\                        离线模型（目录可改）
     paddleocr\                           识别模型与语言包
     bergamot\{源}-{目标}\                 翻译模型

@@ -22,7 +22,8 @@ VersionInfoVersion={#AppVersion}
 ;
 ; 两个原因，缺一不可：一是不弹 UAC；二是装完的目录用户自己能写 —— OCR 和翻译的
 ; 模型是运行期现下到程序目录下 models\ 里的（见 AppSettings.DefaultModelsDirectory），
-; 而本程序以 asInvoker 运行，装进 Program Files 的话那些下载会因为没权限全部失败。
+; 截屏历史默认也写在程序目录下的 history\，而本程序以 asInvoker 运行，
+; 装进 Program Files 的话这两样都会因为没权限全部失败。
 PrivilegesRequired=lowest
 DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
@@ -63,6 +64,10 @@ Filename: "{app}\{#AppExeName}"; Description: "{cm:LaunchProgram,{#AppName}}"; F
 ; 用户后来下载的模型不在安装清单里，卸载时不会自己走。留着就是几百兆的孤儿目录，
 ; 而且它们随时能重新下回来。
 Type: filesandordirs; Name: "{app}\models"
+
+; 截屏历史同理。这里存的是最近几十次截图的整屏画面，是为了「再截一次同一块地方」
+; 攒的，不是用户存下来的图 —— 那些在他自己选的保存目录里，不在这儿。
+Type: filesandordirs; Name: "{app}\history"
 
 [Code]
 

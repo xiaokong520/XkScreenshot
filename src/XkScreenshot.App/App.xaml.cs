@@ -94,6 +94,12 @@ public partial class App : Application
 
         if (_startupNotice is not null) ShowTrayWarning(_startupNotice);
 
+        // 默认位置从 %APPDATA% 挪到了程序目录，老版本攒下的那份得接过来。
+        // 用户自己指过目录的不碰：那份历史在他指的地方，早就跟 %APPDATA% 没关系了
+        if (string.IsNullOrWhiteSpace(_settings.HistoryDirectory)
+            && HistoryStore.AdoptAppDataHistory() is { } adoptError)
+            ShowTrayWarning(adoptError);
+
         // 起手直接指过去，不走 Relocate：这会儿默认目录里的东西早在上一次切换时就搬走了，
         // 再搬一次只会把别的什么东西卷进来
         HistoryStore.Directory = _settings.ResolveHistoryDirectory();
