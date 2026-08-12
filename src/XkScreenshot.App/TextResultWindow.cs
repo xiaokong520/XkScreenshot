@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -203,11 +204,18 @@ public sealed class TextResultWindow : Window
         };
         _detectedLabel.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondary");
 
+        // 用 ItemTemplate 而不是 DisplayMemberPath：后者只管展开后的列表项，
+        // 收起来那个选中框另走一条路，没模板就把整个对象 ToString 出来 ——
+        // record 的 ToString 是「TargetOption { Code = ..., Name = ... }」，正好显示在下拉上
+        var nameCell = new FrameworkElementFactory(typeof(TextBlock));
+        nameCell.SetBinding(TextBlock.TextProperty, new Binding(nameof(TargetOption.Name)));
+        nameCell.SetValue(TextBlock.TextTrimmingProperty, TextTrimming.CharacterEllipsis);
+
         _targetBox = new ComboBox
         {
             Width = 132,
             VerticalAlignment = VerticalAlignment.Center,
-            DisplayMemberPath = nameof(TargetOption.Name),
+            ItemTemplate = new DataTemplate(typeof(TargetOption)) { VisualTree = nameCell },
         };
 
         _targetPanel = new StackPanel
