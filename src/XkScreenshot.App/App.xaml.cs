@@ -417,6 +417,11 @@ public partial class App : Application
     {
         if (_settingsWindow is not null)
         {
+            // 最小化的窗口 Activate 不回来 —— 它只抢焦点，不改窗口状态，
+            // 于是任务栏图标闪一下，窗口还缩着，看着就跟点了没反应一样
+            if (_settingsWindow.WindowState == WindowState.Minimized)
+                _settingsWindow.WindowState = WindowState.Normal;
+
             _settingsWindow.Activate();
             return;
         }
