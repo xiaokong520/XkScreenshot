@@ -139,10 +139,12 @@ public sealed class AppSettings
     public ScrollOptions ToScrollOptions() => new(ScrollMode, 1, ScrollMaxHeight);
 
     /// <summary>
-    /// <see cref="ModelsDirectory"/> 留空时找模型的目录：程序目录下的 models/。
-    /// 开发阶段先往上走到 sln 根目录 —— 不然每次重新生成，模型都得跟着 bin 目录再下一遍。
+    /// 程序根目录。跟着程序走、又不该塞进 %APPDATA% 的东西都放它下面：
+    /// 模型（models/）和截屏历史（history/）。
+    ///
+    /// 开发阶段先往上走到 sln 根目录 —— 不然每次重新生成，这些东西都得跟着 bin 目录再来一遍。
     /// </summary>
-    public static string DefaultModelsDirectory
+    public static string AppRootDirectory
     {
         get
         {
@@ -150,9 +152,13 @@ public sealed class AppSettings
             var dir = new System.IO.DirectoryInfo(baseDir);
             while (dir is not null && !System.IO.File.Exists(System.IO.Path.Combine(dir.FullName, "XkScreenshot.sln")))
                 dir = dir.Parent;
-            return System.IO.Path.Combine(dir?.FullName ?? baseDir, "models");
+            return dir?.FullName ?? baseDir;
         }
     }
+
+    /// <summary><see cref="ModelsDirectory"/> 留空时找模型的目录：程序目录下的 models/。</summary>
+    public static string DefaultModelsDirectory
+        => System.IO.Path.Combine(AppRootDirectory, "models");
 
     /// <summary>找模型文件的实际目录。</summary>
     public string ResolveModelsDirectory()

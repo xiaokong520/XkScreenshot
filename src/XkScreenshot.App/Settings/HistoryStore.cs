@@ -14,7 +14,7 @@ namespace XkScreenshot.App.Settings;
 ///
 /// 目录结构：
 /// <code>
-///   %APPDATA%\XkScreenshot\history\
+///   &lt;程序目录&gt;\history\
 ///       index.json          顺序、选区、画面归属
 ///       0001.png            那一次截图时整个虚拟桌面的冻结画面
 ///       0002.png
@@ -32,8 +32,14 @@ public static class HistoryStore
     /// <summary>落盘形态。分开写而不是直接序列化 <see cref="HistoryEntry"/>，是为了不把内部类型的形状焊到文件格式上。</summary>
     private sealed record Row(int X, int Y, int W, int H, int DX, int DY, int DW, int DH, string? Image);
 
-    /// <summary>没在设置里指定路径时用的目录。</summary>
-    public static string DefaultDirectory => Path.Combine(
+    /// <summary>没在设置里指定路径时用的目录：程序目录下的 history\。</summary>
+    public static string DefaultDirectory => Path.Combine(AppSettings.AppRootDirectory, "history");
+
+    /// <summary>
+    /// 默认位置从前是这儿。升级上来的人历史还压在这个目录里，
+    /// 见 <see cref="AdoptAppDataHistory"/>；更老的那份 history.json 也认这个位置。
+    /// </summary>
+    private static string AppDataDirectory => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "XkScreenshot", "history");
 
@@ -91,6 +97,28 @@ public static class HistoryStore
     }
 
     /// <summary>
+    /// 把 %APPDATA% 里那份历史接过来，只在用户没自己指过目录时调。
+    /// 返回错误信息，null = 没出问题（包括「没什么可搬的」）。
+    ///
+    /// 默认位置从 %APPDATA% 挪到程序目录之后，升级上来的人一开机会发现历史一条不剩 ——
+    /// 而他什么都没改过。东西其实还在老地方，但没人会去那儿找。
+    ///
+    /// 搬完老目录就空着不管了：里面可能还有别的版本留下的东西，
+    /// 这里只认得 index.json 和那些 PNG，不该替用户删自己不认识的文件。
+    /// </summary>
+    public static string? AdoptAppDataHistory()
+    {
+        string from = AppDataDirectory;
+        if (string.Equals(from, DefaultDirectory, StringComparison.OrdinalIgnoreCase)) return null;
+        if (!File.Exists(Path.Combine(from, IndexName))) return null;
+
+        // 借 Relocate 来搬：它那条「目标已经有索引就一个文件都不动」的规矩这里同样要 ——
+        // 搬过一次之后老目录多半还在，不认这条的话每次开机都要来一遍
+        Directory = from;
+        return Relocate(DefaultDirectory);
+    }
+
+    /// <summary>
     /// 读回历史。索引里指着一个已经不在的 PNG 时，条目本身留着、画面置空 ——
     /// 选区还是有用的，没必要因为图丢了就把这一条一起丢掉。
     /// </summary>
@@ -134,8 +162,8 @@ public static class HistoryStore
     /// </summary>
     private static IReadOnlyList<HistoryEntry> LoadLegacy()
     {
-        // 认死默认位置：旧版本没有「换个地方存」这回事，那个文件只可能在这儿
-        string legacy = Path.Combine(Path.GetDirectoryName(DefaultDirectory)!, "history.json");
+        // 认死 %APPDATA%：旧版本没有「换个地方存」这回事，那个文件只可能在这儿
+        string legacy = Path.Combine(Path.GetDirectoryName(AppDataDirectory)!, "history.json");
 
         try
         {
