@@ -263,6 +263,10 @@ public sealed class SettingsWindow : Window
                  { _saveWithoutPrompt, _showHints, _elementMode, _runAtStartup, _runAsAdmin })
             toggle.Style = (Style)FindResource("ToggleSwitch");
 
+        // UAC 关着的时候所有进程都提权运行，这个开关无从关起，直接灰掉并挂一句说明
+        if (!Elevation.IsUacEnabled)
+            _runAsAdmin.IsEnabled = false;
+
         // 「留空则用默认」的框，把那个默认值当占位文字摆出来 ——
         // 只说「留空则用系统「图片」文件夹」，用户还得自己去猜那是哪个盘的哪一层
         Placeholder.SetText(_directory, AppSettings.DefaultSaveDirectory);
@@ -382,7 +386,11 @@ public sealed class SettingsWindow : Window
             Card(Icons.Palette, "主题颜色",
                 "管设置界面、识别与翻译结果窗口，以及截图时的提示面板和工具栏。", _theme),
             Card(Icons.Power, "开机自动启动", null, _runAtStartup),
-            Card(Icons.Shield, "以管理员权限运行", null, _runAsAdmin));
+            Card(Icons.Shield, "以管理员权限运行",
+                Elevation.IsUacEnabled
+                    ? null
+                    : "系统已关闭用户账户控制（UAC），程序始终以管理员权限运行，此项无法更改。",
+                _runAsAdmin));
 
         AddPage(Icons.Command, "热键",
             HotkeyCard(Icons.Camera, "开始截图",
