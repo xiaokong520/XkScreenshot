@@ -252,6 +252,38 @@
     </Setter>
   </Style>
 
+  <!--
+    只有一枚图标的方形开关。滑轨那种开关要配一行说明文字才知道它管什么，
+    而这个是贴在内容角上的，边上没地方写字 —— 图标本身就是说明，
+    开着的时候图标换强调色，底也压深一格。
+  -->
+  <Style x:Key="IconToggle" TargetType="{x:Type ToggleButton}">
+    <Setter Property="Width" Value="30" />
+    <Setter Property="Height" Value="30" />
+    <Setter Property="Cursor" Value="Hand" />
+    <Setter Property="SnapsToDevicePixels" Value="True" />
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="{x:Type ToggleButton}">
+          <Border x:Name="Bd" Background="Transparent" CornerRadius="4">
+            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsChecked" Value="True">
+              <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ControlBgPressed}" />
+            </Trigger>
+            <Trigger Property="IsMouseOver" Value="True">
+              <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ControlBgHover}" />
+            </Trigger>
+            <Trigger Property="IsKeyboardFocused" Value="True">
+              <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ControlBgHover}" />
+            </Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
   <!-- ================= 左侧导航项 ================= -->
   <!--
     用 RadioButton 而不是 Button：同组互斥是它自带的，不必自己维护「谁是当前项」，
