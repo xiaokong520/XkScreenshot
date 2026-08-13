@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -8,8 +9,10 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using Microsoft.Win32;
 using XkScreenshot.App.Overlay;
@@ -50,6 +53,9 @@ public sealed class SettingsWindow : Window
     private const double ContentGap = 24;
     private const double PagePadding = 24;
     private const double NavWidth = 176;
+
+    /// <summary>项目主页。「关于」页那条链接开的就是它。</summary>
+    private const string RepoUrl = "https://github.com/xiaokong520/XkScreenshot";
 
     private static readonly (CaptureAction Action, string Label)[] Actions =
     [
@@ -478,6 +484,12 @@ public sealed class SettingsWindow : Window
                 "形如 前缀_20260807_142530.png。", _prefix),
             Card(Icons.Save, "保存时不弹对话框",
                 "直接存进上面的目录，重名自动加序号。", _saveWithoutPrompt));
+
+        AddPage(Icons.Info, "关于",
+            AboutCard(),
+            StackedCard(Icons.Github, "开源仓库",
+                "源代码、问题反馈和新版本都在这里。",
+                Link(RepoUrl)));
     }
 
     /// <summary>
@@ -706,6 +718,119 @@ public sealed class SettingsWindow : Window
         ToolTipService.SetInitialShowDelay(mark, 250);
 
         return mark;
+    }
+
+    // ---------------- 关于 ----------------
+
+    /// <summary>
+    /// 「关于」页开头那张卡：应用图标、名字、版本、一句话介绍。
+    ///
+    /// 不套 <see cref="Card"/> 那个「标题 + 右侧控件」的模子：这张卡上没有可操作的东西，
+    /// 就是一块名片，图标也比设置项那些大一圈。
+    /// </summary>
+    private Border AboutCard()
+    {
+        var title = new StackPanel { Orientation = Orientation.Horizontal };
+        title.Children.Add(Paint(new TextBlock
+        {
+            Text = "XkScreenshot",
+            FontSize = 16,
+            FontWeight = FontWeights.SemiBold,
+        }, TextBlock.ForegroundProperty, "Text"));
+        title.Children.Add(Paint(new TextBlock
+        {
+            Text = "版本 " + AppVersion(),
+            FontSize = 12,
+            Margin = new Thickness(10, 0, 0, 1),
+            VerticalAlignment = VerticalAlignment.Bottom,
+        }, TextBlock.ForegroundProperty, "TextSecondary"));
+
+        var text = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+        text.Children.Add(title);
+        text.Children.Add(Paint(new TextBlock
+        {
+            Text = "Windows 截图工具：框选与标注、贴图、长截图、文字识别、翻译，"
+                 + "识别和翻译都能完全离线运行。",
+            FontSize = 12,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 6, 0, 0),
+        }, TextBlock.ForegroundProperty, "TextSecondary"));
+        Grid.SetColumn(text, 1);
+
+        var grid = NewCardGrid();
+        grid.Children.Add(AppBadge());
+        grid.Children.Add(text);
+        return Shell(grid);
+    }
+
+    /// <summary>
+    /// 名片上那枚 48 的应用图标。从 .ico 里取最大那帧高质量缩下来 ——
+    /// 取 48 那帧的话，125%、200% 缩放下反而要被拉大，糊。
+    /// 读不出来就画一台线稿相机顶上，名片不能缺头像。
+    /// </summary>
+    private static FrameworkElement AppBadge()
+    {
+        const double size = 48;
+        try
+        {
+            var resource = Application.GetResourceStream(
+                new Uri("pack://application:,,,/XkScreenshot;component/Assets/XkScreenshot.ico"));
+            if (resource is not null)
+            {
+                using var stream = resource.Stream;
+                var decoder = new IconBitmapDecoder(
+                    stream, BitmapCreateOptions.None, BitmapCacheOption.OnLoad);
+
+                var image = new Image
+                {
+                    Source = decoder.Frames.OrderByDescending(f => f.PixelWidth).First(),
+                    Width = size,
+                    Height = size,
+                    Margin = new Thickness(2, 0, IconGap, 0),
+                    VerticalAlignment = VerticalAlignment.Center,
+                };
+                RenderOptions.SetBitmapScalingMode(image, BitmapScalingMode.HighQuality);
+                return image;
+            }
+        }
+        catch (Exception) { /* 图标资源坏了不至于连关于页都不给开 */ }
+
+        return IconBox(Icons.Camera, size, IconGap);
+    }
+
+    /// <summary>程序集版本，砍掉第四段 —— 给人看的是「1.0.0」这种三段式。</summary>
+    private static string AppVersion()
+    {
+        var v = typeof(SettingsWindow).Assembly.GetName().Version;
+        return v is null ? "?" : $"{v.Major}.{v.Minor}.{v.Build}";
+    }
+
+    /// <summary>
+    /// 一条可以点的链接，点了交给默认浏览器。
+    ///
+    /// 用 Hyperlink 而不是给 TextBlock 挂鼠标事件：下划线、手型光标、Tab 聚焦和回车触发
+    /// 都是它自带的。默认那套蓝字、悬停变红的配色不跟主题走，前景色这里按住 ——
+    /// 本地值压得过它默认样式里的触发器。
+    /// </summary>
+    private static FrameworkElement Link(string url)
+    {
+        var link = new Hyperlink(new Run(url));
+        link.SetResourceReference(TextElement.ForegroundProperty, "Accent");
+        link.Click += (_, _) => OpenInBrowser(url);
+
+        var block = new TextBlock { VerticalAlignment = VerticalAlignment.Center };
+        block.Inlines.Add(link);
+        return block;
+    }
+
+    /// <summary>
+    /// 交给系统默认浏览器。必须走 ShellExecute：URL 不是可执行文件，
+    /// CreateProcess 那条路认不得它。
+    /// </summary>
+    private static void OpenInBrowser(string url)
+    {
+        try { Process.Start(new ProcessStartInfo(url) { UseShellExecute = true }); }
+        catch (Exception) { /* 没有能开 http 的默认程序，犯不上为一条链接弹错 */ }
     }
 
     // ---------------- 小零件 ----------------
