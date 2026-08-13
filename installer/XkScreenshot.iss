@@ -5,6 +5,7 @@
 ; 产物：installer\out\XkScreenshot-1.0.0-setup.exe
 
 #define AppName      "XkScreenshot"
+; 和根目录 Directory.Build.props 里的 <Version> 保持一致：程序「关于」页显示的是那一份
 #define AppVersion   "1.0.0"
 #define AppPublisher "小空"
 #define AppExeName   "XkScreenshot.exe"
