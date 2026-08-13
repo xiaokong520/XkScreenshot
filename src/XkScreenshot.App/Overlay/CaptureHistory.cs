@@ -27,6 +27,9 @@ public sealed class CaptureHistory
 {
     public const int DefaultCapacity = 30;
 
+    /// <summary>至少留一条。回溯这个功能是一直开着的，没有「一条都不记」这一档。</summary>
+    public const int MinCapacity = 1;
+
     /// <summary>上限只是防呆。回溯是一格一格按过去的，几百条根本翻不到底。</summary>
     public const int MaxCapacity = 200;
 
@@ -36,13 +39,13 @@ public sealed class CaptureHistory
     /// <summary>内容变了。落盘的时机就看它。</summary>
     public event Action? Changed;
 
-    /// <summary>缓存多少条。0 = 关掉这个功能。</summary>
+    /// <summary>缓存多少条。</summary>
     public int Capacity
     {
         get => _capacity;
         set
         {
-            _capacity = Math.Clamp(value, 0, MaxCapacity);
+            _capacity = Math.Clamp(value, MinCapacity, MaxCapacity);
             if (Trim()) Changed?.Invoke();
         }
     }
@@ -58,7 +61,7 @@ public sealed class CaptureHistory
     }
 
     /// <summary>
-    /// 记一次截图，返回刚记下的那一条（容量为 0 或选区为空时返回 null）。
+    /// 记一次截图，返回刚记下的那一条（选区为空时返回 null）。
     ///
     /// 不按选区去重：每一次截图都是一个独立的时刻。「同一块地方内容变了、再截一次」
     /// 正是这个功能存在的理由，把位置相同的旧条目顶掉，顶掉的恰恰是用户最想翻回去的那一张。
@@ -67,15 +70,14 @@ public sealed class CaptureHistory
     /// </summary>
     public HistoryEntry? Record(PixelRect bounds, PixelRect desktop, string? image)
     {
-        if (_capacity == 0 || bounds.IsEmpty) return null;
+        if (bounds.IsEmpty) return null;
 
         var entry = new HistoryEntry(bounds, desktop, image);
         _items.Insert(0, entry);
+        // 裁掉的是末尾那几条，刚插进来的这一条排在最前，容量再小也轮不到它
         Trim();
         Changed?.Invoke();
-
-        // 容量为 1 时上面那次 Trim 可能已经把它自己裁掉了
-        return _items.Contains(entry) ? entry : null;
+        return entry;
     }
 
     /// <summary>
@@ -115,6 +117,19 @@ public sealed class CaptureHistory
         _items[i] = entry with { Image = image };
         Changed?.Invoke();
         return true;
+    }
+
+    /// <summary>
+    /// 画面文件改了名，把条目上的指向跟着换过来（换成 null = 那张图没了，条目退回「只有框」）。
+    ///
+    /// 不触发 <see cref="Changed"/>：调用它的人正走在落盘的路上，指向马上就会被写进索引，
+    /// 再报一次变化只会让落盘自己套自己。
+    /// </summary>
+    public void Rename(IReadOnlyDictionary<string, string?> renamed)
+    {
+        for (int i = 0; i < _items.Count; i++)
+            if (_items[i].Image is { } id && renamed.TryGetValue(id, out string? id2))
+                _items[i] = _items[i] with { Image = id2 };
     }
 
     private bool Trim()

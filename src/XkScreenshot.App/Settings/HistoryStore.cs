@@ -218,14 +218,18 @@ public static class HistoryStore
     /// <summary>
     /// 把整屏画面写成 PNG，返回它的 id；失败返回 null（调用方照样能只记选区）。
     /// 图必须已经 Freeze —— 这个方法是给后台线程调的。
+    ///
+    /// 拿到 id 的一方认领完之后要调 <see cref="ReleaseId"/>：在那之前这个号一直占着，
+    /// <see cref="Renumber"/> 不会碰它，也不会有第二张图领到同一个号。
     /// </summary>
     public static string? SaveImage(BitmapSource image)
     {
+        string? pending = null;
         try
         {
             System.IO.Directory.CreateDirectory(Directory);
 
-            string id = NextId();
+            string id = pending = NextId();
             var encoder = new PngBitmapEncoder();
             encoder.Frames.Add(BitmapFrame.Create(image));
 
@@ -238,6 +242,8 @@ public static class HistoryStore
         }
         catch (Exception)
         {
+            // 没写成，这个号也就没人会来认领了，当场还回去
+            if (pending is not null) ReleaseId(pending);
             return null;
         }
     }
@@ -289,24 +295,124 @@ public static class HistoryStore
     }
 
     /// <summary>
-    /// 递增序号，取目录里现有的最大值加一。
+    /// 把画面文件按条目顺序重排成 0001 起的一段连号，返回「旧 id → 新 id」（新 id 为 null =
+    /// 那张图没能挪过去，按丢了算）。返回空表示这一轮什么都不用动。
+    ///
+    /// 为什么要重排：容量裁剪只删最旧的那一条，号却是一路往上发的，攒一阵子目录里就成了
+    /// 0178~0210 这样一段浮在半空的号。重排之后目录里永远是 0001 开头、按时间从旧到新的连号。
+    ///
+    /// 代价是稳态下每截一张都要把整批文件改一遍名（默认 30 个，上限 200 个）。
+    /// 改名只动目录项、不搬数据，这个量级压在落盘那一步上是划算的。
+    /// </summary>
+    public static IReadOnlyDictionary<string, string?> Renumber(IReadOnlyList<HistoryEntry> items)
+    {
+        var map = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+
+        lock (IdLock)
+        {
+            // 有图正在后台编码就这一轮不动手：那个号已经发出去、文件还没落盘，
+            // 此刻重排有可能正好把另一张图挪到它头上，等它写完就是两条指着同一张。
+            // 不会一直拖着 —— 它落盘时会认领条目，那一下又会走到这儿来。
+            if (Pending.Count > 0) return map;
+        }
+
+        // 下标越大越早，所以倒着数：最旧的拿 0001，最新的拿最大号。
+        // 没有画面的条目不占号，免得目录里空出一个谁也用不上的号
+        var moves = new List<(string Old, string New)>();
+        int n = 0;
+        for (int i = items.Count - 1; i >= 0; i--)
+        {
+            if (items[i].Image is not { } old) continue;
+
+            string id = (++n).ToString("D4", CultureInfo.InvariantCulture);
+            if (!id.Equals(old, StringComparison.OrdinalIgnoreCase)) moves.Add((old, id));
+        }
+        if (moves.Count == 0) return map;
+
+        // 分两趟：先全挪到临时名，再从临时名落到目标名。一趟直接改是不行的 ——
+        // 0002→0001 这种目标位置上正压着另一张同样要挪的图，一趟走就把它盖没了。
+        // 临时名挂 .tmp 后缀，中途崩了留下的残骸下次由 PruneImages 顺手收走。
+        var staged = new List<(string Temp, string New, string Old)>(moves.Count);
+        foreach (var (old, id) in moves)
+        {
+            string temp = Path.Combine(Directory, old + ".ren.tmp");
+            try
+            {
+                File.Move(ImagePath(old), temp, overwrite: true);
+                staged.Add((temp, id, old));
+            }
+            catch (Exception)
+            {
+                // 文件没了，或者正被看图软件占着。这一张按丢了算，条目退回「只有框」——
+                // 硬留着旧名字的话，它占的号正是别人的目标，下一趟就会被盖掉
+                map[old] = null;
+            }
+        }
+
+        foreach (var (temp, id, old) in staged)
+        {
+            try
+            {
+                // overwrite：目标位置上可能压着一张刚被裁掉、还没轮到 PruneImages 收的孤儿
+                File.Move(temp, ImagePath(id), overwrite: true);
+                map[old] = id;
+            }
+            catch (Exception)
+            {
+                map[old] = null;
+            }
+        }
+
+        return map;
+    }
+
+    private static readonly object IdLock = new();
+
+    /// <summary>号已经发出去、图还在后台编码路上的那些。</summary>
+    private static readonly HashSet<string> Pending = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// 领一个新序号，取目录里现有的最大值加一。
     /// 不用时间戳：同一秒内连截两张就会撞名，而这里恰恰是连着截图的场景。
+    ///
+    /// 整段锁住、并且把发出去的号记进 <see cref="Pending"/> 直到落盘：编码是甩给后台线程做的，
+    /// 连着截两张就有两个线程同时走到这儿，光看磁盘的话它们会拿到同一个号 ——
+    /// 一个抢不到临时文件退化成「只有框」，或者后写的把先写的盖掉，历史里两条指着同一张图。
     /// </summary>
     private static string NextId()
     {
-        int max = 0;
-        try
+        lock (IdLock)
         {
-            foreach (string file in System.IO.Directory.EnumerateFiles(Directory, "*.png"))
+            int n = 0;
+            try
             {
-                if (int.TryParse(Path.GetFileNameWithoutExtension(file),
-                        NumberStyles.None, CultureInfo.InvariantCulture, out int n) && n > max)
-                    max = n;
+                foreach (string file in System.IO.Directory.EnumerateFiles(Directory, "*.png"))
+                {
+                    if (int.TryParse(Path.GetFileNameWithoutExtension(file),
+                            NumberStyles.None, CultureInfo.InvariantCulture, out int max) && max > n)
+                        n = max;
+                }
             }
+            catch (Exception)
+            {
+            }
+
+            string id;
+            do { id = (++n).ToString("D4", CultureInfo.InvariantCulture); }
+            while (!Pending.Add(id));
+            return id;
         }
-        catch (Exception)
-        {
-        }
-        return (max + 1).ToString("D4", CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>
+    /// 交还 <see cref="SaveImage"/> 领走的号。
+    ///
+    /// 必须紧挨着认领那一步调、中间不能让出线程：还回去之后这个号就任由
+    /// <see cref="Renumber"/> 处置了，隔着一次调度的话，图有可能在认领之前
+    /// 就被别的条目盖掉，最后两条指着同一张。
+    /// </summary>
+    public static void ReleaseId(string id)
+    {
+        lock (IdLock) Pending.Remove(id);
     }
 }

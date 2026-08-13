@@ -108,9 +108,10 @@ public partial class App : Application
         // 反过来的话这里会按默认那 30 条把用户设的更长的历史截掉一段
         _controller.History.Restore(HistoryStore.Load());
 
-        // 上次跑的时候可能在「写完 PNG、还没来得及写索引」之间被结束掉，
+        // 起手就落一次盘：序号在这儿重排一遍，用不着等到用户截下一张才把目录理顺。
+        // 顺带收掉上次跑的时候卡在「写完 PNG、还没来得及写索引」之间留下的文件 ——
         // 那种文件谁也认领不了，只会一直占着磁盘
-        HistoryStore.PruneImages(_controller.History.ImageIds());
+        SaveHistory();
     }
 
     /// <summary>
@@ -170,6 +171,11 @@ public partial class App : Application
     private void SaveHistory()
     {
         var history = _controller!.History;
+
+        // 序号跟着条目重排成 0001 起的连号。裁掉的永远是最旧那条，号却是一路往上发的，
+        // 不重排的话攒一阵子目录里就成了 0178~0210 这样一段浮在半空的号
+        if (HistoryStore.Renumber(history.Items) is { Count: > 0 } renamed) history.Rename(renamed);
+
         HistoryStore.SaveIndex(history.Items);
         // 索引里没有的画面就是垃圾：容量调小、条目被挤掉都会留下这种文件，
         // 而用户是按条数设的上限，不会想到磁盘上还压着几十张

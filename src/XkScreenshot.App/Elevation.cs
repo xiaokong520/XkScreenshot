@@ -43,22 +43,19 @@ public static class Elevation
     /// 管理员永远以完整权限运行，连 explorer 都是管理员，「降权」这条路从根上断了。
     /// 查不到或读失败一律按开着处理：多试一次降权的代价只是白点一下。
     /// </summary>
-    public static bool IsUacEnabled
-    {
-        get
-        {
-            try
-            {
-                using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(
-                    @"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System");
-                return key?.GetValue("EnableLUA") is not int v || v != 0;
-            }
-            catch
-            {
-                return true;
-            }
-        }
-    }
+    public static bool IsUacEnabled { get; } = CheckUacEnabled();
+
+    /// <summary>
+    /// 权限已经被系统钉死、这辈子降不下来了。
+    ///
+    /// 光看 UAC 关没关不够：标准用户账户即使关了 UAC 也只拿到普通权限，此时 runas
+    /// 照样弹凭据框，提权那条路是通的，不该跟着一起封掉。真正没救的只有
+    /// 「UAC 关着 + 当前已经是管理员」这一种组合。
+    ///
+    /// 好在这种组合下 UIPI 也一并停摆了 —— 完整性等级的消息过滤跟 EnableLUA 是同一个开关，
+    /// 所以热键不会被高权限窗口吞掉，贴图窗口也照样能接拖进来的文件。降不了权，也不影响什么。
+    /// </summary>
+    public static bool IsElevationLocked => !IsUacEnabled && IsElevated;
 
     /// <summary>
     /// 以管理员身份把自己重新拉起来。返回 true 表示新实例已经启动，调用方应当立刻退出，
@@ -116,9 +113,9 @@ public static class Elevation
     {
         // UAC 一关，连 explorer 都是管理员，根本没有「普通权限」可降，这一步在开头就挡回去。
         // 不然 explorer 会老老实实再拉起来一个提权实例，设置里那个开关就永远关不掉。
-        if (!IsUacEnabled)
+        if (IsElevationLocked)
         {
-            error = "系统已关闭用户账户控制（UAC），所有程序都以管理员权限运行，无法降权。";
+            error = "系统已关闭用户账户控制（UAC），当前账户始终以管理员权限运行，无法降权。";
             return false;
         }
 
@@ -139,6 +136,20 @@ public static class Elevation
         {
             error = "以普通权限重启失败：" + ex.Message;
             return false;
+        }
+    }
+
+    private static bool CheckUacEnabled()
+    {
+        try
+        {
+            using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(
+                @"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System");
+            return key?.GetValue("EnableLUA") is not int v || v != 0;
+        }
+        catch
+        {
+            return true;
         }
     }
 

@@ -85,7 +85,8 @@ public sealed class SettingsWindow : Window
 
     private readonly TextBox _directory = new();
     private readonly TextBox _prefix = new() { Width = 200 };
-    private readonly TextBox _historyCapacity = new() { Width = 64, MaxLength = 3 };
+    // 跟下面那个「最大高度」一样宽：两个数字框一上一下摆着，不齐会很显眼
+    private readonly TextBox _historyCapacity = new() { Width = 96, MaxLength = 3 };
     private readonly TextBox _historyDir = new();
     private readonly ComboBox _defaultAction = new() { Width = 168 };
     private readonly ComboBox _scrollMode = new() { Width = 168 };
@@ -263,8 +264,8 @@ public sealed class SettingsWindow : Window
                  { _saveWithoutPrompt, _showHints, _elementMode, _runAtStartup, _runAsAdmin })
             toggle.Style = (Style)FindResource("ToggleSwitch");
 
-        // UAC 关着的时候所有进程都提权运行，这个开关无从关起，直接灰掉并挂一句说明
-        if (!Elevation.IsUacEnabled)
+        // 权限被系统钉死的时候这个开关无从拨起，直接灰掉并挂一句说明
+        if (Elevation.IsElevationLocked)
             _runAsAdmin.IsEnabled = false;
 
         // 「留空则用默认」的框，把那个默认值当占位文字摆出来 ——
@@ -387,9 +388,10 @@ public sealed class SettingsWindow : Window
                 "管设置界面、识别与翻译结果窗口，以及截图时的提示面板和工具栏。", _theme),
             Card(Icons.Power, "开机自动启动", null, _runAtStartup),
             Card(Icons.Shield, "以管理员权限运行",
-                Elevation.IsUacEnabled
-                    ? null
-                    : "系统已关闭用户账户控制（UAC），程序始终以管理员权限运行，此项无法更改。",
+                Elevation.IsElevationLocked
+                    ? "系统已关闭用户账户控制（UAC），当前账户始终以管理员权限运行；"
+                      + "此状态下热键不受权限限制，本项无需更改。"
+                    : null,
                 _runAsAdmin));
 
         AddPage(Icons.Command, "热键",
@@ -402,7 +404,9 @@ public sealed class SettingsWindow : Window
             Card(Icons.CornerDownLeft, "确认截图后", null, _defaultAction),
             Card(Icons.Eye, "显示快捷键提示面板", null, _showHints),
             Card(Icons.Cursor, "默认用控件级检测", null, _elementMode),
-            Card(Icons.History, "记住多少条截屏历史", null, Line(_historyCapacity, Suffix("条"))),
+            Card(Icons.History, "记住多少条截屏历史",
+                $"最多 {CaptureHistory.MaxCapacity} 条。",
+                Line(_historyCapacity, Suffix("条"))),
             StackedCard(Icons.Folder, "截屏历史存放目录",
                 "每条历史含一张整屏画面。改路径时已存下的会一起搬过去。",
                 Fill(_historyDir, Button("浏览…", BrowseHistoryDir))),
@@ -1387,11 +1391,11 @@ public sealed class SettingsWindow : Window
         _draft.RunAsAdmin = _runAsAdmin.IsChecked == true;
         _draft.Theme = Themes[Math.Max(0, _theme.SelectedIndex)].Mode;
 
-        // 解析不出来（粘进去一段乱七八糟的）就退回默认值，而不是当成 0 把功能关掉 ——
-        // 用户来这儿是想调条数，不是想关掉它
+        // 解析不出来（粘进去一段乱七八糟的）就退回默认值 —— 用户来这儿是想调条数，
+        // 不是想把历史清成一条不剩
         _draft.HistoryCapacity = int.TryParse(
             _historyCapacity.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out int capacity)
-            ? Math.Clamp(capacity, 0, CaptureHistory.MaxCapacity)
+            ? Math.Clamp(capacity, CaptureHistory.MinCapacity, CaptureHistory.MaxCapacity)
             : CaptureHistory.DefaultCapacity;
 
         _draft.Recognition.Mode = _ocrMode.SelectedIndex == 1 ? OcrMode.Online : OcrMode.Offline;

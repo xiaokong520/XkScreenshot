@@ -126,7 +126,7 @@ public sealed class CaptureController
     /// </summary>
     private void RecordHistory(PixelRect bounds)
     {
-        if (_session is null || History.Capacity == 0) return;
+        if (_session is null) return;
 
         // 从历史画面上确认的：图就是刚才装进来的那一张，再存一遍纯属浪费磁盘
         if (_session.HistorySource is { Image: not null } source)
@@ -159,6 +159,9 @@ public sealed class CaptureController
             Task.Run(() => HistoryStore.SaveImage(full)).ContinueWith(t =>
             {
                 if (t.Result is not { } id) return;
+
+                // 还号和认领之间不能让出线程，见 HistoryStore.ReleaseId
+                HistoryStore.ReleaseId(id);
 
                 // 编码期间那一条可能已经被后来的截图挤出去了，那就把白存的文件删掉
                 if (!History.Attach(entry, id)) HistoryStore.PruneImages(History.ImageIds());
@@ -213,11 +216,7 @@ public sealed class CaptureController
     private void OnScrollCompleted(BitmapSource image, PixelRect region, CaptureAction action)
     {
         // 只记一个选区框，没有全桌面快照：覆盖层早关了，而且长截图期间屏幕内容早变了
-        if (History.Capacity > 0)
-        {
-            var desktop = _scrollSnapshot?.VirtualBounds ?? PixelRect.Empty;
-            History.Record(region, desktop, null);
-        }
+        History.Record(region, _scrollSnapshot?.VirtualBounds ?? PixelRect.Empty, null);
 
         // 暂存的那张冻屏由 OnScrollEnded 放掉：取消掉的长截图不会走到这里，
         // 而它一样得把那几张整屏位图放开
