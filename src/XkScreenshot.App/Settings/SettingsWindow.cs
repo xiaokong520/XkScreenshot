@@ -660,18 +660,31 @@ public sealed class SettingsWindow : Window
     /// 标题后面那个感叹号。
     ///
     /// 图标只有描边，鼠标从圈里穿过是碰不到它的 —— 命中测试只认画出来的那几个像素，
-    /// 所以垫一层透明底把整块方形都变成可悬停的区域。说明文字给个最大宽度让它换行，
-    /// 不然一句话会拉成横贯屏幕的一条。
+    /// 所以垫一层透明底把整块方形都变成可悬停的区域。再往外撑一圈 padding：
+    /// 记号本身才 14 点，是个很难瞄的靶子，而下面那个计时器是「每进来一次重数一遍」，
+    /// 手抖着蹭进蹭出两回，等的就是两三秒。padding 抵掉外边距，图标位置不动。
+    ///
+    /// 说明文字给个最大宽度让它换行，不然一句话会拉成横贯屏幕的一条。
     /// </summary>
-    private FrameworkElement HintMark(string hint) => new Border
+    private FrameworkElement HintMark(string hint)
     {
-        Background = Brushes.Transparent,
-        Child = IconBox(Icons.Alert, HintMarkSize, 0),
-        Margin = new Thickness(6, 0, 0, 0),
-        VerticalAlignment = VerticalAlignment.Center,
-        Cursor = Cursors.Help,
-        ToolTip = new TextBlock { Text = hint, MaxWidth = 280, TextWrapping = TextWrapping.Wrap },
-    };
+        var mark = new Border
+        {
+            Background = Brushes.Transparent,
+            Child = IconBox(Icons.Alert, HintMarkSize, 0),
+            Padding = new Thickness(4),
+            Margin = new Thickness(2, 0, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+            Cursor = Cursors.Help,
+            ToolTip = new TextBlock { Text = hint, MaxWidth = 280, TextWrapping = TextWrapping.Wrap },
+        };
+
+        // WPF 这个值的默认是写死的 1000 毫秒，跟系统那个「鼠标悬停时间」（一般 400）没关系，
+        // 所以同一台机器上别人的提示都比它快一倍多，这里等得像是卡住了。
+        ToolTipService.SetInitialShowDelay(mark, 250);
+
+        return mark;
+    }
 
     // ---------------- 小零件 ----------------
 
