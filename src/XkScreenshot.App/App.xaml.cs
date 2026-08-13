@@ -11,6 +11,7 @@ using XkScreenshot.Core.Monitors;
 using XkScreenshot.App.Output;
 using XkScreenshot.App.Overlay;
 using XkScreenshot.App.Settings;
+using XkScreenshot.App.Ui;
 using XkScreenshot.Capture;
 using XkScreenshot.Pin;
 using XkScreenshot.Core.Hotkeys;
@@ -58,15 +59,18 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
+        // 配置抢在抢名额之前读：下面那句「已经在运行了」也得按用户选的主题上色。
+        // 问系统是不行的 —— 主题锁成浅色而系统是深色的人，看到的会是一个跟设置窗
+        // 对不上的黑框，而那还是本程序弹的第一个窗口
+        _settings = SettingsStore.Load();
+
         if (!AcquireSingleInstance(e.Args))
         {
-            MessageBox.Show("XkScreenshot 已经在运行了。", "XkScreenshot",
-                MessageBoxButton.OK, MessageBoxImage.Information);
+            Dialog.Notify(null, _settings.ResolveDark(), "XkScreenshot 已经在运行了。");
             Shutdown();
             return;
         }
 
-        _settings = SettingsStore.Load();
         // 自启动的真相在注册表里，不在配置文件里：用户可能在任务管理器的启动项里关掉过它。
         // 以注册表为准，设置界面上那个勾才不会撒谎。
         _settings.RunAtStartup = StartupRegistration.IsEnabled();
@@ -77,7 +81,7 @@ public partial class App : Application
 
         _controller = new CaptureController(new GdiScreenCapture());
         _controller.Captured += OnCaptured;
-        _controller.Notice += ShowTrayWarning;
+        _controller.Notice += ShowWarning;
         _controller.History.Changed += SaveHistory;
 
         _pins.CopyRequested += CopyImage;
@@ -92,13 +96,13 @@ public partial class App : Application
         SetupTrayIcon();
         ApplySettings();
 
-        if (_startupNotice is not null) ShowTrayWarning(_startupNotice);
+        if (_startupNotice is not null) ShowWarning(_startupNotice);
 
         // 默认位置从 %APPDATA% 挪到了程序目录，老版本攒下的那份得接过来。
         // 用户自己指过目录的不碰：那份历史在他指的地方，早就跟 %APPDATA% 没关系了
         if (string.IsNullOrWhiteSpace(_settings.HistoryDirectory)
             && HistoryStore.AdoptAppDataHistory() is { } adoptError)
-            ShowTrayWarning(adoptError);
+            ShowWarning(adoptError);
 
         // 起手直接指过去，不走 Relocate：这会儿默认目录里的东西早在上一次切换时就搬走了，
         // 再搬一次只会把别的什么东西卷进来
@@ -194,7 +198,7 @@ public partial class App : Application
 
         if (HistoryStore.Relocate(directory) is { } error)
         {
-            ShowTrayWarning(error);
+            ShowWarning(error);
             return;
         }
 
@@ -235,7 +239,7 @@ public partial class App : Application
         // 注册失败必须说出来。RegisterHotKey 失败是静默的，
         // 不提示的话用户只会感知到「按了没反应」，然后放弃这个软件。
         var failed = RegisterHotkeys().Where(r => !r.Success).Select(r => r.Error!).ToList();
-        if (failed.Count > 0) ShowTrayWarning(string.Join(Environment.NewLine, failed));
+        if (failed.Count > 0) ShowWarning(string.Join(Environment.NewLine, failed));
 
         string capture = _settings.CaptureHotkey.ToString();
         if (_captureMenuItem is not null)
@@ -273,7 +277,7 @@ public partial class App : Application
         // 端一张旧截图上来，他会以为自己复制的内容没进剪贴板。
         if (busy)
         {
-            ShowTrayWarning("剪贴板正被其他程序占用，稍后再按一次");
+            ShowWarning("剪贴板正被其他程序占用，稍后再按一次");
             return;
         }
 
@@ -403,7 +407,7 @@ public partial class App : Application
 
         // error 为 null = 用户在 UAC 上点了取消。是他自己撤销的动作，不用再提示一次，
         // 但设置里那个开关得跟着退回来 —— 留着它，界面上就写着一个并没有生效的状态
-        if (error is not null) ShowTrayWarning(error);
+        if (error is not null) ShowWarning(error);
         _settings.RunAsAdmin = Elevation.IsElevated;
         SettingsStore.Save(_settings);
         return false;
@@ -466,12 +470,12 @@ public partial class App : Application
                 if (updated.RunAtStartup != StartupRegistration.IsEnabled()
                     && StartupRegistration.Apply(updated.RunAtStartup) is { } startupError)
                 {
-                    ShowTrayWarning(startupError);
+                    ShowWarning(startupError);
                     updated.RunAtStartup = StartupRegistration.IsEnabled();
                 }
 
                 _settings = updated;
-                if (SettingsStore.Save(_settings) is { } saveError) ShowTrayWarning(saveError);
+                if (SettingsStore.Save(_settings) is { } saveError) ShowWarning(saveError);
 
                 MoveHistoryTo(_settings.ResolveHistoryDirectory());
 
@@ -517,7 +521,7 @@ public partial class App : Application
                 }
                 catch (Exception ex)
                 {
-                    ShowTrayWarning("PaddleOCR 初始化失败：" + ex.Message);
+                    ShowWarning("PaddleOCR 初始化失败：" + ex.Message);
                 }
             }
         }
@@ -554,7 +558,7 @@ public partial class App : Application
     {
         if (_ocrEngine is null)
         {
-            ShowTrayWarning("OCR 引擎未就绪。请检查模型文件或在线 API 配置。");
+            ShowWarning("OCR 引擎未就绪。请检查模型文件或在线 API 配置。");
             return;
         }
 
@@ -571,7 +575,7 @@ public partial class App : Application
         catch (Exception ex)
         {
             window.Close();
-            ShowTrayWarning("OCR 失败：" + ex.Message);
+            ShowWarning("OCR 失败：" + ex.Message);
         }
     }
 
@@ -579,12 +583,12 @@ public partial class App : Application
     {
         if (_ocrEngine is null)
         {
-            ShowTrayWarning("OCR 引擎未就绪。");
+            ShowWarning("OCR 引擎未就绪。");
             return;
         }
         if (_translator is null)
         {
-            ShowTrayWarning("翻译引擎未就绪。请检查模型文件或在线 API 配置。");
+            ShowWarning("翻译引擎未就绪。请检查模型文件或在线 API 配置。");
             return;
         }
 
@@ -647,7 +651,7 @@ public partial class App : Application
         catch (Exception ex)
         {
             window.Close();
-            ShowTrayWarning("翻译失败：" + ex.Message);
+            ShowWarning("翻译失败：" + ex.Message);
         }
     }
 
@@ -735,7 +739,7 @@ public partial class App : Application
         }
         catch (Exception ex)
         {
-            ShowTrayWarning("写入剪贴板失败：" + ex.Message);
+            ShowWarning("写入剪贴板失败：" + ex.Message);
         }
     }
 
@@ -754,15 +758,27 @@ public partial class App : Application
         }
         catch (Exception ex)
         {
-            ShowTrayWarning("保存失败：" + ex.Message);
+            ShowWarning("保存失败：" + ex.Message);
         }
     }
 
+    /// <summary>
+    /// 顺手的回执：办成了，说一声就行，不必等人来点掉。走托盘气泡正合适。
+    /// </summary>
     private void ShowTrayInfo(string message)
         => _trayIcon?.ShowBalloonTip(2000, "XkScreenshot", message, WinForms.ToolTipIcon.Info);
 
-    private void ShowTrayWarning(string message)
-        => _trayIcon?.ShowBalloonTip(5000, "XkScreenshot", message, WinForms.ToolTipIcon.Warning);
+    /// <summary>
+    /// 出了岔子，弹窗说一句。
+    ///
+    /// 从前这里也走托盘气泡，但气泡会被「专注助手」按下、也会径直排进通知中心里
+    /// 看不见的地方。而这儿的每一条都是「刚才那件事没办成」—— 用户正等着结果，
+    /// 那句话不该是可以错过的。
+    ///
+    /// 设置窗开着就认它当主人：提示会居中到那个窗口上，而不是甩到屏幕正中。
+    /// </summary>
+    private void ShowWarning(string message)
+        => Dialog.Notify(_settingsWindow, _settings.ResolveDark(), message, DialogKind.Warning);
 
     protected override void OnExit(ExitEventArgs e)
     {

@@ -900,9 +900,7 @@ public sealed class SettingsWindow : Window
     /// </summary>
     private void ClearHistory()
     {
-        if (MessageBox.Show(this, "清空后无法恢复，确定吗？",
-                "XkScreenshot", MessageBoxButton.OKCancel, MessageBoxImage.Warning)
-            != MessageBoxResult.OK) return;
+        if (!Dialog.Confirm(this, _dark, "清空后无法恢复，确定吗？")) return;
 
         HistoryClearRequested?.Invoke();
 
@@ -1021,8 +1019,7 @@ public sealed class SettingsWindow : Window
             RefreshPaddleStatus();
             RefreshOcrPacks();
             _dlProgress.Visibility = Visibility.Collapsed;
-            MessageBox.Show(this, "PaddleOCR 模型下载完成。", "XkScreenshot",
-                MessageBoxButton.OK, MessageBoxImage.Information);
+            Dialog.Notify(this, _dark, "PaddleOCR 模型下载完成。");
         }
         catch (Exception ex)
         {
@@ -1030,8 +1027,7 @@ public sealed class SettingsWindow : Window
             RefreshPaddleStatus();
             _paddleStatus.Text = "下载失败";
             _dlProgress.Visibility = Visibility.Collapsed;
-            MessageBox.Show(this, "下载失败：" + ex.Message, "XkScreenshot",
-                MessageBoxButton.OK, MessageBoxImage.Warning);
+            Dialog.Notify(this, _dark, "下载失败：" + ex.Message, DialogKind.Warning);
         }
     }
 
@@ -1110,16 +1106,14 @@ public sealed class SettingsWindow : Window
             _ocrPackProgress.Visibility = Visibility.Collapsed;
             _busyOcrPack = null;
             RefreshOcrPacks();
-            MessageBox.Show(this, $"{pack.Name}识别模型下载完成。", "XkScreenshot",
-                MessageBoxButton.OK, MessageBoxImage.Information);
+            Dialog.Notify(this, _dark, $"{pack.Name}识别模型下载完成。");
         }
         catch (Exception ex)
         {
             _ocrPackProgress.Visibility = Visibility.Collapsed;
             _busyOcrPack = null;
             RefreshOcrPacks();
-            MessageBox.Show(this, "下载失败：" + ex.Message, "XkScreenshot",
-                MessageBoxButton.OK, MessageBoxImage.Warning);
+            Dialog.Notify(this, _dark, "下载失败：" + ex.Message, DialogKind.Warning);
         }
     }
 
@@ -1373,16 +1367,14 @@ public sealed class SettingsWindow : Window
             _langPairProgress.Visibility = Visibility.Collapsed;
             _busyLangPair = null;
             RefreshLangPairs();
-            MessageBox.Show(this, $"{lang.Name}翻译模型下载完成。", "XkScreenshot",
-                MessageBoxButton.OK, MessageBoxImage.Information);
+            Dialog.Notify(this, _dark, $"{lang.Name}翻译模型下载完成。");
         }
         catch (Exception ex)
         {
             _langPairProgress.Visibility = Visibility.Collapsed;
             _busyLangPair = null;
             RefreshLangPairs();
-            MessageBox.Show(this, "下载失败：" + ex.Message, "XkScreenshot",
-                MessageBoxButton.OK, MessageBoxImage.Warning);
+            Dialog.Notify(this, _dark, "下载失败：" + ex.Message, DialogKind.Warning);
         }
     }
 
@@ -1392,16 +1384,14 @@ public sealed class SettingsWindow : Window
         if (directory.Length > 0 && !Directory.Exists(directory))
         {
             // 目录不存在就当场拦下。等到真去保存时才发现，那张截图往往已经没了
-            MessageBox.Show(this, "保存目录不存在：" + directory, "XkScreenshot",
-                MessageBoxButton.OK, MessageBoxImage.Warning);
+            Dialog.Notify(this, _dark, "保存目录不存在：" + directory, DialogKind.Warning);
             return;
         }
 
         string historyDir = _historyDir.Text.Trim();
         if (historyDir.Length > 0 && !Directory.Exists(historyDir))
         {
-            MessageBox.Show(this, "截屏历史目录不存在：" + historyDir, "XkScreenshot",
-                MessageBoxButton.OK, MessageBoxImage.Warning);
+            Dialog.Notify(this, _dark, "截屏历史目录不存在：" + historyDir, DialogKind.Warning);
             return;
         }
 
@@ -1458,11 +1448,11 @@ public sealed class SettingsWindow : Window
         bool wanted = _runAsAdmin.IsChecked == true;
         if (wanted == Elevation.IsElevated) return true;
 
-        return MessageBox.Show(this,
+        return Dialog.Confirm(this, _dark,
             wanted
                 ? "保存后程序会退出并以管理员权限重新启动，中间会弹一次 UAC。继续吗？"
                 : "保存后程序会退出并以普通权限重新启动。继续吗？",
-            "XkScreenshot", MessageBoxButton.OKCancel, MessageBoxImage.Question) == MessageBoxResult.OK;
+            DialogKind.Info);
     }
 
     /// <summary>
@@ -1477,9 +1467,9 @@ public sealed class SettingsWindow : Window
     {
         if (_captureHotkey.Value.IsSet && _captureHotkey.Value == _pinHotkey.Value)
         {
-            MessageBox.Show(this,
+            Dialog.Notify(this, _dark,
                 $"「开始截图」和「贴图」都设成了 {_captureHotkey.Value}，请给其中一个换一个组合键。",
-                "XkScreenshot", MessageBoxButton.OK, MessageBoxImage.Warning);
+                DialogKind.Warning);
             return false;
         }
 
@@ -1488,10 +1478,9 @@ public sealed class SettingsWindow : Window
         if (IsTakenByOthers(_pinHotkey.Value)) taken.Add($"贴图（{_pinHotkey.Value}）");
         if (taken.Count == 0) return true;
 
-        return MessageBox.Show(this,
+        return Dialog.Confirm(this, _dark,
             string.Join(Environment.NewLine, taken)
             + Environment.NewLine + Environment.NewLine
-            + "以上热键已被其他程序占用，保存后不会生效。仍然保存吗？",
-            "XkScreenshot", MessageBoxButton.OKCancel, MessageBoxImage.Warning) == MessageBoxResult.OK;
+            + "以上热键已被其他程序占用，保存后不会生效。仍然保存吗？");
     }
 }
