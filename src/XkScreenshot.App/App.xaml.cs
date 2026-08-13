@@ -211,7 +211,7 @@ public partial class App : Application
         switch (binding.Name)
         {
             case CaptureHotkeyName:
-                _controller?.Start();
+                StartCapture();
                 break;
 
             case PinHotkeyName:
@@ -263,6 +263,16 @@ public partial class App : Application
     }
 
     /// <summary>
+    /// 起手截图。上一条回执还浮在屏幕上就先收掉 —— 覆盖层也是置顶的，
+    /// 两个置顶窗口压在一起谁在上面并无定论，而回执被压住只会露出半截。
+    /// </summary>
+    private void StartCapture()
+    {
+        Toast.DismissAll();
+        _controller?.Start();
+    }
+
+    /// <summary>
     /// 把剪贴板里的东西钉到屏幕上；剪贴板里没有可贴的内容就钉上一次截的那张 ——
     /// 「刚截完想再看一眼」和「从别处复制了点什么想摆着对照」是同一个动作的两种由头。
     /// </summary>
@@ -284,7 +294,7 @@ public partial class App : Application
         image ??= _lastCapture;
         if (image is null)
         {
-            ShowTrayInfo("剪贴板里没有可以贴的内容，也还没有截过图");
+            ShowToast("剪贴板里没有可以贴的内容，也还没有截过图", kind: ToastKind.Info);
             return;
         }
 
@@ -344,7 +354,7 @@ public partial class App : Application
     private void SetupTrayIcon()
     {
         var menu = new WinForms.ContextMenuStrip();
-        _captureMenuItem = menu.Items.Add("截图", null, (_, _) => _controller?.Start());
+        _captureMenuItem = menu.Items.Add("截图", null, (_, _) => StartCapture());
         menu.Items.Add("关闭全部贴图", null, (_, _) => _pins.CloseAll());
         menu.Items.Add(new WinForms.ToolStripSeparator());
         menu.Items.Add("设置…", null, (_, _) => ShowSettings());
@@ -356,7 +366,7 @@ public partial class App : Application
             Visible = true,
             ContextMenuStrip = menu,
         };
-        _trayIcon.DoubleClick += (_, _) => _controller?.Start();
+        _trayIcon.DoubleClick += (_, _) => StartCapture();
     }
 
     /// <summary>
@@ -733,21 +743,27 @@ public partial class App : Application
                 break;
 
             case CaptureAction.Save:
-                SaveImage(result.Image);
+                SaveImage(result.Image, result.Bounds);
                 break;
 
             default:
-                CopyImage(result.Image);
+                CopyImage(result.Image, result.Bounds);
                 break;
         }
     }
 
-    private void CopyImage(BitmapSource image)
+    /// <summary>
+    /// 贴图右键复制走的是这一条。贴图窗口自己在屏幕上，可它的位置这一层拿不到，
+    /// 所以回执只能退到屏幕角落 —— 从覆盖层截完图那条路上来的才贴得着选区。
+    /// </summary>
+    private void CopyImage(BitmapSource image) => CopyImage(image, PixelRect.Empty);
+
+    private void CopyImage(BitmapSource image, PixelRect anchor)
     {
         try
         {
             ClipboardWriter.SetImage(image);
-            ShowTrayInfo($"已复制到剪贴板（{image.PixelWidth}×{image.PixelHeight}）");
+            ShowToast("已复制到剪贴板", $"{image.PixelWidth} × {image.PixelHeight}", anchor);
         }
         catch (Exception ex)
         {
@@ -755,7 +771,9 @@ public partial class App : Application
         }
     }
 
-    private void SaveImage(BitmapSource image)
+    private void SaveImage(BitmapSource image) => SaveImage(image, PixelRect.Empty);
+
+    private void SaveImage(BitmapSource image, PixelRect anchor)
     {
         string directory = _settings.ResolveSaveDirectory();
         string prefix = _settings.ResolveFileNamePrefix();
@@ -766,7 +784,13 @@ public partial class App : Application
                 ? ImageSaver.SaveInto(image, directory, prefix)
                 : ImageSaver.SaveAs(image, directory, prefix);
 
-            if (path is not null) ShowTrayInfo("已保存到 " + path);
+            if (path is null) return;
+
+            // 回执上只写文件名，完整路径搁悬停说明里：自动保存的目录可能深在几层
+            // 文件夹底下，那一长串横过半个屏幕，反倒把「存好了」这句话淹了。
+            // 真要找那张图的人也不会去抄路径，他要的是点一下就到跟前 —— 就是这个点击
+            ShowToast("已保存", System.IO.Path.GetFileName(path), anchor,
+                tip: path, click: () => ImageSaver.Reveal(path));
         }
         catch (Exception ex)
         {
@@ -775,10 +799,24 @@ public partial class App : Application
     }
 
     /// <summary>
-    /// 顺手的回执：办成了，说一声就行，不必等人来点掉。走托盘气泡正合适。
+    /// 顺手的回执：办成了，说一声就行，不必等人来点掉。
+    ///
+    /// 从前走的是托盘气泡，可那条路上气泡会被「专注助手」按下、也会径直排进
+    /// 通知中心攒着 —— 而这句话晚三秒说出来就等于没说。现在是程序自己画的一个
+    /// 小浮窗，贴着刚截的那块区域弹，见 <see cref="Toast"/>。
+    ///
+    /// 设置里能把它整个关掉，但关掉的只是「办成了」这一类。截图这件事天天要做几十遍，
+    /// 用熟了的人不需要每次都被告知「复制好了」—— 可「没办成」不在此列：
+    /// 那种时候用户正等着结果，一声不吭他只会以为程序坏了。
     /// </summary>
-    private void ShowTrayInfo(string message)
-        => _trayIcon?.ShowBalloonTip(2000, "XkScreenshot", message, WinForms.ToolTipIcon.Info);
+    private void ShowToast(
+        string text, string? detail = null, PixelRect anchor = default,
+        ToastKind kind = ToastKind.Done, string? tip = null, Action? click = null)
+    {
+        if (kind == ToastKind.Done && !_settings.ShowToasts) return;
+
+        Toast.Show(_settings.ResolveDark(), text, detail, anchor, kind, tip, click);
+    }
 
     /// <summary>
     /// 出了岔子，弹窗说一句。

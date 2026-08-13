@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Windows.Media.Imaging;
@@ -63,6 +64,30 @@ public static class ImageSaver
 
         using var fs = File.Create(path);
         encoder.Save(fs);
+    }
+
+    /// <summary>
+    /// 在文件管理器里打开这张图所在的目录，并把它选中。
+    ///
+    /// 只开目录是不够的：自动保存的目录里攒着几十张名字只差几秒的截图，
+    /// 让用户自己去那堆时间戳里认出刚才那张，等于没帮上忙。
+    ///
+    /// 托 explorer.exe 去开而不是 ShellExecute 目录：提权运行时，前者会把差事
+    /// 转交给已经在跑的那个普通权限的 explorer，用户不会莫名多出一个管理员文件窗口。
+    /// </summary>
+    public static void Reveal(string path)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{path}\"")
+            {
+                UseShellExecute = true,
+            });
+        }
+        catch (Exception)
+        {
+            // 打不开就算了。这只是回执上顺手给的一下，为它弹个错误框太重了
+        }
     }
 
     private static string SuggestFileName(string prefix) => $"{prefix}_{Timestamp()}.png";

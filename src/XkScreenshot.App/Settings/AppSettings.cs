@@ -55,6 +55,17 @@ public sealed class AppSettings
     /// <summary>截图时默认用控件级检测而不是整窗。</summary>
     public bool ElementMode { get; set; }
 
+    /// <summary>
+    /// 办成之后弹不弹那句回执（复制好了、存到哪儿了）。
+    ///
+    /// 默认不弹：截图这件事一天要做几十遍，每一遍都跳出来说一句「复制好了」，
+    /// 那句话很快就从回执变成了噪音。想要的人自己去开。
+    ///
+    /// 只管「办成了」这一类。没办成的那几句不受它管 —— 用户按下热键正等着结果，
+    /// 那种时候一声不吭，他只会以为程序坏了。
+    /// </summary>
+    public bool ShowToasts { get; set; }
+
     /// <summary>回溯截屏历史缓存多少条。每条含一张整屏画面。</summary>
     public int HistoryCapacity { get; set; } = CaptureHistory.DefaultCapacity;
 
