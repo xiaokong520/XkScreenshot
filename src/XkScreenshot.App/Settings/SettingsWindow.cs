@@ -10,6 +10,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 using Microsoft.Win32;
 using XkScreenshot.App.Overlay;
 using XkScreenshot.App.Ui;
@@ -187,8 +188,18 @@ public sealed class SettingsWindow : Window
     /// <summary>清空历史那颗按钮。点完要就地变成「已清空」，所以得留个手。</summary>
     private Button? _clearHistory;
 
-    /// <summary>用户点了「确定」才有值，取消时保持 null。</summary>
+    /// <summary>「保存」那颗按钮，和它变回原名的那只闹钟。</summary>
+    private Button? _save;
+    private DispatcherTimer? _savedFlash;
+
+    /// <summary>用户点了「保存并退出」才有值，取消时保持 null。</summary>
     public AppSettings? Result { get; private set; }
+
+    /// <summary>
+    /// 用户按了「保存」但没关窗。带出去的是一份副本 —— 窗口还开着，还会接着改，
+    /// 交出去的要是同一个对象，之后每一次改动都在外面偷偷生效，「取消」也撤不回来。
+    /// </summary>
+    public event Action<AppSettings>? Saved;
 
     /// <summary>
     /// 正在录热键 —— 这期间本程序必须让出全部热键，否则用户想把某个键录进框里时，
@@ -197,7 +208,7 @@ public sealed class SettingsWindow : Window
     public event Action<bool>? RecordingChanged;
 
     /// <summary>
-    /// 用户要清空截屏历史。这一件不走「确定」那条草稿路：删过的东西没法跟着取消一起回来，
+    /// 用户要清空截屏历史。这一件不走「保存」那条草稿路：删过的东西没法跟着取消一起回来，
     /// 让它挂在草稿上只会让人以为还能反悔。
     /// </summary>
     public event Action? HistoryClearRequested;
@@ -238,7 +249,7 @@ public sealed class SettingsWindow : Window
         });
 
         // 只让数字敲进去，省掉一个「请输入数字」的弹窗。粘贴绕得过去，
-        // 所以 Commit 那边照样得解析一次兜底。
+        // 所以 Harvest 那边照样得解析一次兜底。
         _historyCapacity.PreviewTextInput += (_, e) =>
         {
             foreach (char c in e.Text)
@@ -288,7 +299,7 @@ public sealed class SettingsWindow : Window
         BuildPages();
         LoadFrom(_draft);
 
-        // 选完主题当场换皮。等点确定再生效的话，用户在这儿看到的还是老配色，
+        // 选完主题当场换皮。等点保存再生效的话，用户在这儿看到的还是老配色，
         // 而这一项唯一能验收的地方就是眼前这个窗口
         _theme.SelectionChanged += (_, _) => ApplyTheme();
 
@@ -359,14 +370,21 @@ public sealed class SettingsWindow : Window
         body.Children.Add(nav);
         body.Children.Add(scroll);
 
-        var ok = Button("确定", Commit, (Style)FindResource("AccentButton"));
-        ok.IsDefault = true;
-        ok.MinWidth = 92;
+        // 「保存」不关窗：调热键、调主题这些是要看着效果反复试的，每试一次都得重开一次
+        // 设置窗的话，试到第三次就不想试了
+        var save = _save = Button("保存", Save);
+        save.MinWidth = 92;
+
+        var saveAndExit = Button("保存并退出", SaveAndClose, (Style)FindResource("AccentButton"));
+        // 回车走这一颗：它是从前那颗「确定」，手上的肌肉记忆认的是它
+        saveAndExit.IsDefault = true;
+        saveAndExit.MinWidth = 92;
+
         var cancel = Button("取消", Close);
         cancel.IsCancel = true;
         cancel.MinWidth = 92;
 
-        // 页脚横跨整个窗口而不是只占右半边：确定/取消 管的是整份设置，不是当前这一页
+        // 页脚横跨整个窗口而不是只占右半边：这三颗管的是整份设置，不是当前这一页
         var footer = new Border
         {
             BorderThickness = new Thickness(0, 1, 0, 0),
@@ -375,7 +393,7 @@ public sealed class SettingsWindow : Window
             {
                 Orientation = Orientation.Horizontal,
                 HorizontalAlignment = HorizontalAlignment.Right,
-                Children = { ok, cancel },
+                Children = { save, saveAndExit, cancel },
             },
         };
         Paint(footer, Border.BackgroundProperty, "FooterBg");
@@ -524,7 +542,7 @@ public sealed class SettingsWindow : Window
     /// 热键卡：标题和输入框上下排，冲突提示紧跟在输入框下面。
     ///
     /// 不跟别的卡一样把控件贴到右边：热键框加一个「恢复默认」已经占掉大半宽度。
-    /// 而提示必须就在那个框旁边 —— 攒到点确定时才一次性弹出来，
+    /// 而提示必须就在那个框旁边 —— 攒到点保存时才一次性弹出来，
     /// 用户得回头猜是哪一项、当初按的又是什么组合，可这两件事他刚才明明都知道。
     /// </summary>
     private Border HotkeyCard(
@@ -994,7 +1012,7 @@ public sealed class SettingsWindow : Window
 
     /// <summary>
     /// 模型根目录，按框里现在填的算 —— 「已安装 / 未下载」得跟着用户正在改的那个路径走，
-    /// 不能等按了确定才对。留空时的落点和 AppSettings 共用一份，免得两边各走一套逻辑。
+    /// 不能等按了保存才对。留空时的落点和 AppSettings 共用一份，免得两边各走一套逻辑。
     /// </summary>
     private string ResolveCurrentModelsDir()
     {
@@ -1391,25 +1409,74 @@ public sealed class SettingsWindow : Window
         }
     }
 
-    private void Commit()
+    /// <summary>「保存」：设置当场生效，窗口留在原地接着改。</summary>
+    private void Save()
+    {
+        if (!Harvest()) return;
+
+        Saved?.Invoke(_draft.Clone());
+        FlashSaved();
+    }
+
+    /// <summary>「保存并退出」。</summary>
+    private void SaveAndClose()
+    {
+        if (!Harvest()) return;
+
+        Result = _draft;
+        Close();
+    }
+
+    /// <summary>
+    /// 让那颗按钮自己说一声「已保存」，一会儿再变回去。
+    ///
+    /// 不弹提示框：保存是用户自己按出来的，没出错就是成了，为此再让他点掉一个框
+    /// 是在为一件顺利的事收费。而窗口不关、界面上一个字都不变的话，
+    /// 又会让人怀疑那一下到底按上没有。
+    /// </summary>
+    private void FlashSaved()
+    {
+        if (_save is null) return;
+
+        _save.Content = "已保存";
+
+        if (_savedFlash is null)
+        {
+            _savedFlash = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1.4) };
+            _savedFlash.Tick += (_, _) =>
+            {
+                _savedFlash!.Stop();
+                if (_save is not null) _save.Content = "保存";
+            };
+        }
+
+        // 连着按两下：重新计时，而不是让第二下的字被第一下那只闹钟提前收走
+        _savedFlash.Stop();
+        _savedFlash.Start();
+    }
+
+    /// <summary>
+    /// 把界面上的东西收进草稿。返回 false 表示有一项没过关，草稿不算数，别往下走。
+    /// </summary>
+    private bool Harvest()
     {
         string directory = _directory.Text.Trim();
         if (directory.Length > 0 && !Directory.Exists(directory))
         {
             // 目录不存在就当场拦下。等到真去保存时才发现，那张截图往往已经没了
             Dialog.Notify(this, _dark, "保存目录不存在：" + directory, DialogKind.Warning);
-            return;
+            return false;
         }
 
         string historyDir = _historyDir.Text.Trim();
         if (historyDir.Length > 0 && !Directory.Exists(historyDir))
         {
             Dialog.Notify(this, _dark, "截屏历史目录不存在：" + historyDir, DialogKind.Warning);
-            return;
+            return false;
         }
 
-        if (!CheckHotkeys()) return;
-        if (!ConfirmElevationSwitch()) return;
+        if (!CheckHotkeys()) return false;
+        if (!ConfirmElevationSwitch()) return false;
 
         _draft.CaptureHotkey = _captureHotkey.Value;
         _draft.PinHotkey = _pinHotkey.Value;
@@ -1445,13 +1512,12 @@ public sealed class SettingsWindow : Window
             _scrollMaxHeight.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out int maxHeight)
             ? Math.Clamp(maxHeight, 1000, 60000) : ScrollOptions.Standard.MaxHeight;
 
-        Result = _draft;
-        Close();
+        return true;
     }
 
     /// <summary>
     /// 动了「以管理员权限运行」就得先打个招呼。权限是进程启动时定死的，改不了，
-    /// 只能整个重来一次 —— 点确定之后程序自己关掉又开起来，事先不说会像是崩了。
+    /// 只能整个重来一次 —— 点保存之后程序自己关掉又开起来，事先不说会像是崩了。
     ///
     /// 拿当前进程的实际权限比，而不是比设置里存的那个值：用户完全可能是右键
     /// 「以管理员身份运行」进来的，那时候存的值是什么已经不重要了。
