@@ -221,7 +221,7 @@ public partial class App : Application
     }
 
     /// <summary>
-    /// 把当前设置铺到各处。设置界面点确定后也走这里，所以每一项都必须是「重设」而不是「叠加」。
+    /// 把当前设置铺到各处。设置界面点保存后也走这里，所以每一项都必须是「重设」而不是「叠加」。
     /// </summary>
     private void ApplySettings()
     {
@@ -460,36 +460,48 @@ public partial class App : Application
         // 清空是当场生效的，不等「确定」：Clear 会报一次变化，落盘那条路顺手就把
         // 索引写空、把目录里的画面收干净
         window.HistoryClearRequested += () => _controller?.History.Clear();
+
+        // 「保存」不关窗，走的是同一条路：存下来、当场铺开，人接着在窗口里改
+        window.Saved += updated =>
+        {
+            if (Adopt(updated)) return;
+            ApplySettings();
+        };
+
         window.Closed += (_, _) =>
         {
             _settingsWindow = null;
 
-            if (window.Result is { } updated)
-            {
-                // 自启动写的是注册表，不是配置文件，失败了要单独说一声
-                if (updated.RunAtStartup != StartupRegistration.IsEnabled()
-                    && StartupRegistration.Apply(updated.RunAtStartup) is { } startupError)
-                {
-                    ShowWarning(startupError);
-                    updated.RunAtStartup = StartupRegistration.IsEnabled();
-                }
-
-                _settings = updated;
-                if (SettingsStore.Save(_settings) is { } saveError) ShowWarning(saveError);
-
-                MoveHistoryTo(_settings.ResolveHistoryDirectory());
-
-                // 权限得先存后换：换权限意味着这个进程马上就没了，没存的东西全跟着一起没
-                if (_settings.RunAsAdmin != Elevation.IsElevated
-                    && SwitchElevation(_settings.RunAsAdmin))
-                    return;
-            }
+            if (window.Result is { } updated && Adopt(updated)) return;
 
             // 取消也要走一遍：关窗时热键框可能正握着焦点、热键正让出去着，不装回来就再也回不来了
             ApplySettings();
         };
         window.Show();
         window.Activate();
+    }
+
+    /// <summary>
+    /// 收下设置窗交上来的那一份，存盘并把窗口外的东西（注册表、历史目录、进程权限）跟着摆好。
+    /// 返回 true 表示进程正在重启换权限，调用方别再往下做 —— 后面那些活儿由新实例接手。
+    /// </summary>
+    private bool Adopt(AppSettings updated)
+    {
+        // 自启动写的是注册表，不是配置文件，失败了要单独说一声
+        if (updated.RunAtStartup != StartupRegistration.IsEnabled()
+            && StartupRegistration.Apply(updated.RunAtStartup) is { } startupError)
+        {
+            ShowWarning(startupError);
+            updated.RunAtStartup = StartupRegistration.IsEnabled();
+        }
+
+        _settings = updated;
+        if (SettingsStore.Save(_settings) is { } saveError) ShowWarning(saveError);
+
+        MoveHistoryTo(_settings.ResolveHistoryDirectory());
+
+        // 权限得先存后换：换权限意味着这个进程马上就没了，没存的东西全跟着一起没
+        return _settings.RunAsAdmin != Elevation.IsElevated && SwitchElevation(_settings.RunAsAdmin);
     }
 
     private void CreateEngines()
