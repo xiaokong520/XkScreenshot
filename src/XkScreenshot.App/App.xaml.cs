@@ -452,6 +452,10 @@ public partial class App : Application
             if (recording) _hotkeys?.Clear();
             else RegisterHotkeys();
         };
+
+        // 清空是当场生效的，不等「确定」：Clear 会报一次变化，落盘那条路顺手就把
+        // 索引写空、把目录里的画面收干净
+        window.HistoryClearRequested += () => _controller?.History.Clear();
         window.Closed += (_, _) =>
         {
             _settingsWindow = null;

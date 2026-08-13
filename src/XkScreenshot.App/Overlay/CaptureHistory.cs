@@ -120,6 +120,17 @@ public sealed class CaptureHistory
     }
 
     /// <summary>
+    /// 全清掉。本来就是空的就什么也不做 —— 那一下没有任何变化，不值得让人跟着落一次盘。
+    /// </summary>
+    public void Clear()
+    {
+        if (_items.Count == 0) return;
+
+        _items.Clear();
+        Changed?.Invoke();
+    }
+
+    /// <summary>
     /// 画面文件改了名，把条目上的指向跟着换过来（换成 null = 那张图没了，条目退回「只有框」）。
     ///
     /// 不触发 <see cref="Changed"/>：调用它的人正走在落盘的路上，指向马上就会被写进索引，

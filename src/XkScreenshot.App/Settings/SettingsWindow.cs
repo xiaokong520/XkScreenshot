@@ -184,6 +184,9 @@ public sealed class SettingsWindow : Window
     private readonly StackPanel _nav = new();
     private readonly ContentControl _pageHost = new();
 
+    /// <summary>清空历史那颗按钮。点完要就地变成「已清空」，所以得留个手。</summary>
+    private Button? _clearHistory;
+
     /// <summary>用户点了「确定」才有值，取消时保持 null。</summary>
     public AppSettings? Result { get; private set; }
 
@@ -192,6 +195,12 @@ public sealed class SettingsWindow : Window
     /// 那个键会被自己的全局热键截走，当场触发一次截图而不是被记下来。
     /// </summary>
     public event Action<bool>? RecordingChanged;
+
+    /// <summary>
+    /// 用户要清空截屏历史。这一件不走「确定」那条草稿路：删过的东西没法跟着取消一起回来，
+    /// 让它挂在草稿上只会让人以为还能反悔。
+    /// </summary>
+    public event Action? HistoryClearRequested;
 
     /// <param name="heldBySelf">判断某个组合键是不是本程序自己正占着的。</param>
     public SettingsWindow(AppSettings current, Func<HotkeySpec, bool> heldBySelf)
@@ -410,6 +419,8 @@ public sealed class SettingsWindow : Window
             StackedCard(Icons.Folder, "截屏历史存放目录",
                 "每条历史含一张整屏画面。改路径时已存下的会一起搬过去。",
                 Fill(_historyDir, Button("浏览…", BrowseHistoryDir))),
+            Card(Icons.Trash, "清空截屏历史", null,
+                _clearHistory = Button("清空", ClearHistory)),
             Card(Icons.Scroll, "长截图滚动方式", null, _scrollMode),
             Card(Icons.MoveVertical, "长截图最大高度", null,
                 Line(_scrollMaxHeight, Suffix("像素（1000–60000）"))));
@@ -880,6 +891,25 @@ public sealed class SettingsWindow : Window
 
     private void BrowseModelsDir()
         => BrowseInto(_modelsDir, "选择离线模型存放目录", AppSettings.DefaultModelsDirectory);
+
+    /// <summary>
+    /// 清空截屏历史。删掉的东西「取消」也带不回来，所以先问一次。
+    ///
+    /// 清完就把按钮按住不放：一片空目录再点一次也没有意义，
+    /// 而按钮还是那副能点的样子，用户会怀疑刚才那下到底生效没有。
+    /// </summary>
+    private void ClearHistory()
+    {
+        if (MessageBox.Show(this, "清空后无法恢复，确定吗？",
+                "XkScreenshot", MessageBoxButton.OKCancel, MessageBoxImage.Warning)
+            != MessageBoxResult.OK) return;
+
+        HistoryClearRequested?.Invoke();
+
+        if (_clearHistory is null) return;
+        _clearHistory.Content = "已清空";
+        _clearHistory.IsEnabled = false;
+    }
 
     /// <summary>
     /// 选目录，从这个框当前指着的地方开始。
