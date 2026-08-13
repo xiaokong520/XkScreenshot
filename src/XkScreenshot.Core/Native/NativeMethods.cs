@@ -111,6 +111,15 @@ public static class NativeMethods
     /// <summary>鼠标穿透。长截图那圈区域边框用它 —— 它盖在目标窗口上，绝不能挡住点击。</summary>
     public const int WS_EX_TRANSPARENT = 0x00000020;
 
+    /// <summary>不进 Alt+Tab。回执浮窗用：它自己两秒就没了，没有「切回去」这一说。</summary>
+    public const int WS_EX_TOOLWINDOW = 0x00000080;
+
+    /// <summary>
+    /// 点了也不激活。回执浮窗用：它是浮在别人界面上的一句话，
+    /// 用户正打字的那个窗口不该因为它冒出来、或者被点了一下就丢掉焦点。
+    /// </summary>
+    public const int WS_EX_NOACTIVATE = 0x08000000;
+
     /// <summary>
     /// 分层窗口。贴图用它：内容走 UpdateLayeredWindow 整幅送上去，DWM 原子合成，
     /// 几何和画面在同一帧到位，缩放不会闪（见 PinForm 类注释）。

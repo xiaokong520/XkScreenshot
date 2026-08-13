@@ -94,6 +94,7 @@ public sealed class SettingsWindow : Window
     // 宽度按能完整显示五位数留：左右各 10 的内边距先吃掉 20，剩下的要装满格的 60000
     private readonly TextBox _scrollMaxHeight = new() { Width = 96, MaxLength = 5 };
     private readonly ToggleButton _saveWithoutPrompt = new();
+    private readonly ToggleButton _showToasts = new();
     private readonly ToggleButton _showHints = new();
     private readonly ToggleButton _elementMode = new();
     private readonly ToggleButton _runAtStartup = new();
@@ -281,7 +282,8 @@ public sealed class SettingsWindow : Window
         _apiProtocol.Items.Add("OpenAI");
         _apiProtocol.Items.Add("Anthropic");
         foreach (var toggle in new[]
-                 { _saveWithoutPrompt, _showHints, _elementMode, _runAtStartup, _runAsAdmin })
+                 { _saveWithoutPrompt, _showToasts, _showHints, _elementMode,
+                   _runAtStartup, _runAsAdmin })
             toggle.Style = (Style)FindResource("ToggleSwitch");
 
         // 权限被系统钉死的时候这个开关无从拨起，直接灰掉并挂一句说明
@@ -413,6 +415,8 @@ public sealed class SettingsWindow : Window
         AddPage(Icons.Sliders, "通用",
             Card(Icons.Palette, "主题颜色",
                 "管设置界面、识别与翻译结果窗口，以及截图时的提示面板和工具栏。", _theme),
+            Card(Icons.Bell, "操作完成通知提示",
+                "复制、保存之后在选区旁边闪一下回执，两秒自动消失。", _showToasts),
             Card(Icons.Power, "开机自动启动", null, _runAtStartup),
             Card(Icons.Shield, "以管理员权限运行",
                 Elevation.IsElevationLocked
@@ -863,6 +867,7 @@ public sealed class SettingsWindow : Window
         _historyDir.Text = s.HistoryDirectory;
         _prefix.Text = s.FileNamePrefix;
         _saveWithoutPrompt.IsChecked = s.SaveWithoutPrompt;
+        _showToasts.IsChecked = s.ShowToasts;
         _showHints.IsChecked = s.ShowHints;
         _elementMode.IsChecked = s.ElementMode;
         _runAtStartup.IsChecked = s.RunAtStartup;
@@ -1484,6 +1489,7 @@ public sealed class SettingsWindow : Window
         _draft.HistoryDirectory = historyDir;
         _draft.FileNamePrefix = _prefix.Text.Trim();
         _draft.SaveWithoutPrompt = _saveWithoutPrompt.IsChecked == true;
+        _draft.ShowToasts = _showToasts.IsChecked == true;
         _draft.DefaultAction = Actions[Math.Max(0, _defaultAction.SelectedIndex)].Action;
         _draft.ShowHints = _showHints.IsChecked == true;
         _draft.ElementMode = _elementMode.IsChecked == true;
