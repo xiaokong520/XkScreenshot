@@ -1,0 +1,175 @@
+# 打 tag 就出四个包：安装版 / 免安装 × 带运行时 / 不带运行时。
+#
+#   git tag v1.0.1 && git push origin v1.0.1
+#
+# 也可以在 Actions 页面手动触发，版本号留空就用 Directory.Build.props 里的那一份。
+# 手动触发只把产物挂成 artifact，不建 Release。
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号，如 1.0.1。留空则用 Directory.Build.props 里的 <Version>'
+        required: false
+        default: ''
+
+# 建 Release 要往仓库里写东西，默认的只读令牌不够
+permissions:
+  contents: write
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: 1
+  DOTNET_NOLOGO: 1
+  APP_PROJECT: src/XkScreenshot.App/XkScreenshot.App.csproj
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: 定版本号
+        id: ver
+        shell: pwsh
+        env:
+          # 走 env 而不是把 ${{ }} 直接拼进脚本里：输入里的引号不会拐带着改写脚本
+          INPUT_VERSION: ${{ inputs.version }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if ($env:REF_TYPE -eq 'tag') {
+            $v = $env:REF_NAME -replace '^v', ''
+          } elseif ($env:INPUT_VERSION) {
+            $v = $env:INPUT_VERSION -replace '^v', ''
+          } else {
+            $v = [regex]::Match((Get-Content Directory.Build.props -Raw), '<Version>([^<]+)</Version>').Groups[1].Value
+          }
+          if (-not $v) { throw '版本号是空的' }
+
+          # exe 的版本资源只认纯数字，1.0.1-beta 这种要把后缀削掉再写进去
+          $numeric = ($v -split '-')[0]
+
+          "version=$v"       | Out-File $env:GITHUB_OUTPUT -Append
+          "numeric=$numeric" | Out-File $env:GITHUB_OUTPUT -Append
+          Write-Host "打包版本 $v（版本资源 $numeric）"
+
+      # 两次发布都不加 --no-restore：带 -r 的还原和不带的不是同一套资产，
+      # 自包含还要多拉一个运行时包，共用一次还原会在第二次发布时缺东西。
+      - name: 发布 · 不带运行时
+        shell: pwsh
+        run: |
+          dotnet publish $env:APP_PROJECT -c Release -r win-x64 --self-contained false `
+            -o "stage/fd/XkScreenshot-${{ steps.ver.outputs.version }}" `
+            -p:Version=${{ steps.ver.outputs.version }}
+
+      - name: 发布 · 带运行时
+        shell: pwsh
+        run: |
+          dotnet publish $env:APP_PROJECT -c Release -r win-x64 --self-contained true `
+            -o "stage/sc/XkScreenshot-${{ steps.ver.outputs.version }}" `
+            -p:Version=${{ steps.ver.outputs.version }}
+
+      - name: 准备 Inno Setup
+        shell: pwsh
+        run: |
+          $root = "${env:ProgramFiles(x86)}\Inno Setup 6"
+          if (-not (Test-Path "$root\ISCC.exe")) {
+            choco install innosetup -y --no-progress
+          }
+          if (-not (Test-Path "$root\ISCC.exe")) { throw "没找到 ISCC.exe，Inno Setup 没装上" }
+
+          # 简体中文语言文件不在 Inno Setup 的发行包里，官方仓库的 Unofficial 目录下才有，
+          # 脚本 [Languages] 段点名要它，缺了直接编不过
+          $isl = "$root\Languages\ChineseSimplified.isl"
+          if (-not (Test-Path $isl)) {
+            Invoke-WebRequest -UseBasicParsing -OutFile $isl `
+              -Uri 'https://raw.githubusercontent.com/jrsoftware/issrc/main/Files/Languages/Unofficial/ChineseSimplified.isl'
+          }
+
+          "ISCC=$root\ISCC.exe" | Out-File $env:GITHUB_ENV -Append
+
+      # 同一份 iss 编两遍，靠 /D 换源目录和输出名。/DSelfContained 会把脚本里
+      # 查 .NET 运行时那段整个跳过 —— 运行时已经在包里了，再查纯属误导。
+      - name: 编安装包
+        shell: pwsh
+        run: |
+          $v = '${{ steps.ver.outputs.version }}'
+          $n = '${{ steps.ver.outputs.numeric }}'
+
+          & $env:ISCC "/DAppVersion=$v" "/DAppVersionNumeric=$n" `
+            "/DSourceDir=..\stage\fd\XkScreenshot-$v" `
+            installer\XkScreenshot.iss
+
+          & $env:ISCC "/DAppVersion=$v" "/DAppVersionNumeric=$n" `
+            "/DSourceDir=..\stage\sc\XkScreenshot-$v" `
+            "/DSelfContained" "/DOutputSuffix=-selfcontained" `
+            installer\XkScreenshot.iss
+
+      - name: 打便携版
+        shell: pwsh
+        run: |
+          $v = '${{ steps.ver.outputs.version }}'
+          New-Item -ItemType Directory -Force dist | Out-Null
+
+          # 在 stage\fd 里打，压出来的包顶上才是 XkScreenshot-1.0.1\ 这么一层目录，
+          # 而不是解压下来一地散文件
+          Push-Location stage\fd
+          7z a -tzip -mx=9 "..\..\dist\XkScreenshot-$v-portable.zip" "XkScreenshot-$v" | Out-Null
+          Pop-Location
+
+          Push-Location stage\sc
+          7z a -tzip -mx=9 "..\..\dist\XkScreenshot-$v-portable-selfcontained.zip" "XkScreenshot-$v" | Out-Null
+          Pop-Location
+
+          Copy-Item installer\out\*.exe dist\
+
+          Get-ChildItem dist |
+            Select-Object Name, @{ n = 'MB'; e = { [math]::Round($_.Length / 1MB, 1) } } |
+            Format-Table -AutoSize
+
+      - name: 挂成 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: XkScreenshot-${{ steps.ver.outputs.version }}
+          path: dist/*
+          retention-days: 30
+          # 四个包已经是压缩过的，再压一遍只是白等
+          compression-level: 0
+
+      - name: 建 Release
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $v = '${{ steps.ver.outputs.version }}'
+          @"
+          ## 下载哪个
+
+          | 文件 | 说明 |
+          | --- | --- |
+          | ``XkScreenshot-$v-setup.exe`` | 安装版。体积小，要先装 [.NET 8 桌面运行时](https://dotnet.microsoft.com/download/dotnet/8.0)（x64） |
+          | ``XkScreenshot-$v-setup-selfcontained.exe`` | 安装版。运行时已经打进包里，装完直接能跑 |
+          | ``XkScreenshot-$v-portable.zip`` | 免安装，解压即用。要先装 .NET 8 桌面运行时（x64） |
+          | ``XkScreenshot-$v-portable-selfcontained.zip`` | 免安装，解压即用。运行时在包里，什么都不用装 |
+
+          不确定机器上装没装运行时，就挑带 selfcontained 的那两个。
+
+          安装版装在 ``%LocalAppData%\Programs\XkScreenshot``，不弹 UAC。
+          OCR 和翻译的模型不在包里，程序里按需下载。
+
+          需要 Windows 10 1809 及以上，x64。
+          "@ | Out-File release-notes.md -Encoding utf8
+
+          $files = Get-ChildItem dist | ForEach-Object FullName
+          gh release create '${{ github.ref_name }}' $files `
+            --title "XkScreenshot $v" --notes-file release-notes.md

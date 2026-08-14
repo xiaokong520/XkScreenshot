@@ -2,6 +2,9 @@ bin/
 obj/
 publish/
 installer/out/
+stage/
+dist/
+release-notes.md
 .vs/
 *.user
 *.suo

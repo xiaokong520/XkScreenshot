@@ -3,21 +3,48 @@
 ; 编译：ISCC.exe installer\XkScreenshot.iss
 ; 输入：..\publish\   —— 先跑 dotnet publish -c Release -r win-x64 --self-contained false -o publish
 ; 产物：installer\out\XkScreenshot-1.0.0-setup.exe
+;
+; 下面这几个 define 都可以在命令行上用 /D 覆盖，CI 就是这么一份脚本编出两个安装包的：
+;
+;   ISCC /DAppVersion=1.2.3 /DSourceDir=..\publish\fd installer\XkScreenshot.iss
+;   ISCC /DAppVersion=1.2.3 /DSourceDir=..\publish\sc /DSelfContained /DOutputSuffix=-selfcontained ...
+;
+; 覆盖得靠 #ifndef 兜着 —— 直接写 #define 的话，命令行给的值会被脚本里这行原地盖掉。
 
 #define AppName      "XkScreenshot"
+
 ; 和根目录 Directory.Build.props 里的 <Version> 保持一致：程序「关于」页显示的是那一份
-#define AppVersion   "1.0.0"
+#ifndef AppVersion
+  #define AppVersion "1.0.0"
+#endif
+
+; 写进 exe 版本资源的那一份，只能是纯数字。AppVersion 带了 -beta 这类后缀时，
+; CI 会把后缀去掉再从这里传进来。
+#ifndef AppVersionNumeric
+  #define AppVersionNumeric AppVersion
+#endif
+
+; 输出文件名的尾巴，用来区分自包含和框架依赖两个包
+#ifndef OutputSuffix
+  #define OutputSuffix ""
+#endif
+
 #define AppPublisher "小空"
 #define AppExeName   "XkScreenshot.exe"
-#define SourceDir    "..\publish"
+
+#ifndef SourceDir
+  #define SourceDir "..\publish"
+#endif
 
 [Setup]
+; 自包含和框架依赖两个包共用这一个 AppId：它们是同一个程序，只是随包带不带运行时。
+; 分开写的话，两个包会在「应用和功能」里各占一条，来回换一次就装出两份。
 AppId={{7C4B9E52-3A61-4E8D-9F2C-1D5A8B0E6F34}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppVerName={#AppName} {#AppVersion}
 AppPublisher={#AppPublisher}
-VersionInfoVersion={#AppVersion}
+VersionInfoVersion={#AppVersionNumeric}
 
 ; 单用户安装，装到 %LocalAppData%\Programs\XkScreenshot。
 ;
@@ -38,7 +65,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 AppMutex=XkScreenshot.SingleInstance
 
 OutputDir=out
-OutputBaseFilename={#AppName}-{#AppVersion}-setup
+OutputBaseFilename={#AppName}-{#AppVersion}-setup{#OutputSuffix}
 SetupIconFile=..\src\XkScreenshot.App\Assets\XkScreenshot.ico
 UninstallDisplayIcon={app}\{#AppExeName}
 Compression=lzma2/max
@@ -69,6 +96,10 @@ Type: filesandordirs; Name: "{app}\models"
 ; 截屏历史同理。这里存的是最近几十次截图的整屏画面，是为了「再截一次同一块地方」
 ; 攒的，不是用户存下来的图 —— 那些在他自己选的保存目录里，不在这儿。
 Type: filesandordirs; Name: "{app}\history"
+
+; 下面整段只在框架依赖的包里编进去。自包含的包把运行时一起带上了，
+; 再去查机器上装没装 .NET 8 纯属误导 —— 没装也照样能跑。
+#ifndef SelfContained
 
 [Code]
 
@@ -130,3 +161,5 @@ begin
     ShellExec('open', DownloadPage, '', '', SW_SHOW, ewNoWait, ErrorCode);
   end;
 end;
+
+#endif
