@@ -84,18 +84,12 @@ jobs:
           $root = "${env:ProgramFiles(x86)}\Inno Setup 6"
           $exe  = "$root\ISCC.exe"
 
-          if (Test-Path $exe) {
-            $old = (Get-Item $exe).VersionInfo.FileVersion
-            Write-Host "runner 自带 Inno Setup $old"
-          }
-
           # 不管自带没自带都升一次。镜像里那个版本太老，[Languages] 点名要的简体中文语言
           # 文件是 6.4 才并进发行包的，光判断「装没装」会把老版本原样留下，编到那一行才炸。
+          # 实际用的版本不用在这儿打，ISCC 每次编译都会自己报 Compiler engine version。
           choco upgrade innosetup -y --no-progress
 
           if (-not (Test-Path $exe)) { throw "没找到 ISCC.exe，Inno Setup 没装上" }
-          $ver = (Get-Item $exe).VersionInfo.FileVersion
-          Write-Host "在用的 Inno Setup $ver"
 
           # 真碰上不带的版本时的兜底。路径里没有 Unofficial 那一层 ——
           # 非官方语言文件后来都并到 Files\Languages\ 下面去了。
