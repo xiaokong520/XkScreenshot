@@ -82,20 +82,31 @@ jobs:
         shell: pwsh
         run: |
           $root = "${env:ProgramFiles(x86)}\Inno Setup 6"
-          if (-not (Test-Path "$root\ISCC.exe")) {
-            choco install innosetup -y --no-progress
-          }
-          if (-not (Test-Path "$root\ISCC.exe")) { throw "没找到 ISCC.exe，Inno Setup 没装上" }
+          $exe  = "$root\ISCC.exe"
 
-          # 简体中文语言文件不在 Inno Setup 的发行包里，官方仓库的 Unofficial 目录下才有，
-          # 脚本 [Languages] 段点名要它，缺了直接编不过
+          if (Test-Path $exe) {
+            $old = (Get-Item $exe).VersionInfo.FileVersion
+            Write-Host "runner 自带 Inno Setup $old"
+          }
+
+          # 不管自带没自带都升一次。镜像里那个版本太老，[Languages] 点名要的简体中文语言
+          # 文件是 6.4 才并进发行包的，光判断「装没装」会把老版本原样留下，编到那一行才炸。
+          choco upgrade innosetup -y --no-progress
+
+          if (-not (Test-Path $exe)) { throw "没找到 ISCC.exe，Inno Setup 没装上" }
+          $ver = (Get-Item $exe).VersionInfo.FileVersion
+          Write-Host "在用的 Inno Setup $ver"
+
+          # 真碰上不带的版本时的兜底。路径里没有 Unofficial 那一层 ——
+          # 非官方语言文件后来都并到 Files\Languages\ 下面去了。
           $isl = "$root\Languages\ChineseSimplified.isl"
           if (-not (Test-Path $isl)) {
+            Write-Host "这个版本不带 ChineseSimplified.isl，去仓库取一份"
             Invoke-WebRequest -UseBasicParsing -OutFile $isl `
-              -Uri 'https://raw.githubusercontent.com/jrsoftware/issrc/main/Files/Languages/Unofficial/ChineseSimplified.isl'
+              -Uri 'https://raw.githubusercontent.com/jrsoftware/issrc/main/Files/Languages/ChineseSimplified.isl'
           }
 
-          "ISCC=$root\ISCC.exe" | Out-File $env:GITHUB_ENV -Append
+          "ISCC=$exe" | Out-File $env:GITHUB_ENV -Append
 
       # 同一份 iss 编两遍，靠 /D 换源目录和输出名。/DSelfContained 会把脚本里
       # 查 .NET 运行时那段整个跳过 —— 运行时已经在包里了，再查纯属误导。
