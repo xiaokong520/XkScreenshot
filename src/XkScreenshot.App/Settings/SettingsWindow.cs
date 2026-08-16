@@ -5,6 +5,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
@@ -189,6 +190,39 @@ public sealed class SettingsWindow : Window
         Visibility = Visibility.Collapsed,
     };
 
+    // ---------------- 检查更新 ----------------
+
+    /// <summary>「检查更新」按钮。查到新版本后就地换字，职责从「查」变成「装」。</summary>
+    private Button? _updateButton;
+
+    private readonly TextBlock _updateStatus = new()
+    {
+        FontSize = 12,
+        TextWrapping = TextWrapping.Wrap,
+        Margin = new Thickness(0, 8, 0, 0),
+        Visibility = Visibility.Collapsed,
+    };
+
+    private readonly ProgressBar _updateProgress = new()
+    {
+        Height = 4,
+        Minimum = 0,
+        Maximum = 100,
+        Value = 0,
+        Margin = new Thickness(0, 8, 0, 0),
+        Visibility = Visibility.Collapsed,
+    };
+
+    /// <summary>查到的新版本。null 表示还没查到、或已是最新。</summary>
+    private UpdateInfo? _update;
+    private bool _updateBusy;
+
+    /// <summary>
+    /// 下载安装包那一程的取消开关。窗口一关就撤单 —— 下载完的下一步是重启程序，
+    /// 这种大动作不该发生在没人看着的时候。
+    /// </summary>
+    private CancellationTokenSource? _updateCts;
+
     private readonly StackPanel _nav = new();
     private readonly ContentControl _pageHost = new();
 
@@ -347,7 +381,11 @@ public sealed class SettingsWindow : Window
 
         // 深色窗体配一条亮白标题栏是最扎眼的一种半吊子深色模式，但要等窗口有了句柄才能改
         SourceInitialized += (_, _) => Theme.ApplyTitleBar(this, _dark);
-        Closed += (_, _) => _probe.Dispose();
+        Closed += (_, _) =>
+        {
+            _probe.Dispose();
+            _updateCts?.Cancel();
+        };
     }
 
     private UIElement BuildLayout()
@@ -487,6 +525,11 @@ public sealed class SettingsWindow : Window
 
         AddPage(Icons.Info, "关于",
             AboutCard(),
+            StackedCard(Icons.Refresh, "检查更新",
+                UpdateChecker.IsInstalled
+                    ? "对比 GitHub 上的最新发布，有新版可以下载后自动安装并重启。"
+                    : "对比 GitHub 上的最新发布。便携版不自动覆盖文件，发现新版会转去发布页下载。",
+                UpdateRow()),
             StackedCard(Icons.Github, "开源仓库",
                 "源代码、问题反馈和新版本都在这里。",
                 Link(RepoUrl)));
@@ -804,6 +847,138 @@ public sealed class SettingsWindow : Window
         var v = typeof(SettingsWindow).Assembly.GetName().Version;
         return v is null ? "?" : $"{v.Major}.{v.Minor}.{v.Build}";
     }
+
+    /// <summary>「检查更新」卡的下半张：按钮一行，状态和进度条挂在底下。</summary>
+    private UIElement UpdateRow()
+    {
+        _updateButton = Button("检查更新", OnUpdateButton);
+        // Button 默认的左边距是给排在别人后面准备的，这颗打头，贴齐标题
+        _updateButton.Margin = new Thickness(0);
+
+        var stack = new StackPanel();
+        stack.Children.Add(Line(_updateButton));
+        stack.Children.Add(_updateStatus);
+        stack.Children.Add(_updateProgress);
+        return stack;
+    }
+
+    /// <summary>同一颗按钮的三种身份：没查过 → 查；查到了 → 装；没有对上号的包 → 去发布页。</summary>
+    private void OnUpdateButton()
+    {
+        if (_updateBusy) return;
+
+        if (_update is null) _ = CheckForUpdate();
+        else if (_update.AssetUrl is null) OpenInBrowser(_update.PageUrl);
+        else _ = DownloadAndInstall();
+    }
+
+    private async Task CheckForUpdate()
+    {
+        _updateBusy = true;
+        _updateButton!.IsEnabled = false;
+        _updateButton.Content = "检查中…";
+        _updateStatus.Visibility = Visibility.Collapsed;
+
+        try
+        {
+            // 一问一答的小请求，等不来就是网络到不了 GitHub，拖满默认那 100 秒没有意义
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+            _update = await UpdateChecker.CheckAsync(http);
+
+            if (_update is null)
+                SetUpdateStatus($"已是最新版本（{AppVersion()}）。", warn: false);
+            else
+            {
+                _updateButton.Content = _update.AssetUrl is null ? "去下载页" : "下载并安装";
+                ShowUpdateFound(_update);
+            }
+        }
+        catch (Exception ex)
+        {
+            SetUpdateStatus("检查失败：" + Reason(ex), warn: true);
+        }
+        finally
+        {
+            if (_update is null) _updateButton.Content = "检查更新";
+            _updateButton.IsEnabled = true;
+            _updateBusy = false;
+        }
+    }
+
+    private async Task DownloadAndInstall()
+    {
+        _updateBusy = true;
+        _updateButton!.IsEnabled = false;
+        _updateButton.Content = "下载中…";
+        _updateProgress.Value = 0;
+        _updateProgress.Visibility = Visibility.Visible;
+        _updateCts = new CancellationTokenSource();
+        var ct = _updateCts.Token;
+
+        try
+        {
+            string path = UpdateChecker.StagingPath(_update!.AssetName!);
+            using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(30) };
+            await DownloadFile(http, _update.AssetUrl!, path,
+                new Progress<int>(p => _updateProgress.Value = p), ct);
+
+            // 最后一口气也可能撤单：下载和关窗赛跑，装下去的结局是重启程序，得有人看着
+            ct.ThrowIfCancellationRequested();
+
+            SetUpdateStatus("下载完成，正在重启安装…", warn: false);
+            UpdateChecker.InstallOnExit(path);
+            Application.Current.Shutdown();
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // 关窗撤的单，没人在看，不用说什么
+        }
+        catch (Exception ex)
+        {
+            _updateProgress.Visibility = Visibility.Collapsed;
+            SetUpdateStatus("更新失败：" + Reason(ex), warn: true);
+            _updateButton.Content = "下载并安装";
+        }
+        finally
+        {
+            _updateCts.Dispose();
+            _updateCts = null;
+            _updateButton.IsEnabled = true;
+            _updateBusy = false;
+        }
+    }
+
+    /// <summary>「发现新版本」那行字，带一条看更新说明的链接 —— 装不装总得先知道改了什么。</summary>
+    private void ShowUpdateFound(UpdateInfo update)
+    {
+        Paint(_updateStatus, TextBlock.ForegroundProperty, "TextSecondary");
+        _updateStatus.Inlines.Clear();
+        _updateStatus.Inlines.Add(new Run($"发现新版本 {update.Version}，"));
+
+        var link = new Hyperlink(new Run("查看更新说明"));
+        link.SetResourceReference(TextElement.ForegroundProperty, "Accent");
+        link.Click += (_, _) => OpenInBrowser(update.PageUrl);
+        _updateStatus.Inlines.Add(link);
+        _updateStatus.Inlines.Add(new Run("。"));
+
+        _updateStatus.Visibility = Visibility.Visible;
+    }
+
+    private void SetUpdateStatus(string text, bool warn)
+    {
+        Paint(_updateStatus, TextBlock.ForegroundProperty, warn ? "Warn" : "TextSecondary");
+        // 赋 Text 顺带清掉上一条可能带着链接的 Inlines
+        _updateStatus.Text = text;
+        _updateStatus.Visibility = Visibility.Visible;
+    }
+
+    /// <summary>失败原因给人看的那句。超时和 GitHub 的拒绝各说各的，剩下的原样端出来。</summary>
+    private static string Reason(Exception ex) => ex switch
+    {
+        TaskCanceledException => "连接超时，访问 GitHub 可能需要代理",
+        HttpRequestException { StatusCode: { } code } => $"GitHub 返回了 {(int)code}",
+        _ => ex.Message,
+    };
 
     /// <summary>
     /// 一条可以点的链接，点了交给默认浏览器。
@@ -1383,13 +1558,13 @@ public sealed class SettingsWindow : Window
     }
 
     private static async Task DownloadFile(HttpClient http, string url, string path,
-        IProgress<int>? progress = null)
+        IProgress<int>? progress = null, CancellationToken ct = default)
     {
-        using var response = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
+        using var response = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct);
         response.EnsureSuccessStatusCode();
 
         long total = response.Content.Headers.ContentLength ?? -1;
-        using var src = await response.Content.ReadAsStreamAsync();
+        using var src = await response.Content.ReadAsStreamAsync(ct);
         using var dst = File.Create(path);
 
         if (total > 0 && progress is not null)
@@ -1397,16 +1572,16 @@ public sealed class SettingsWindow : Window
             var buf = new byte[8192];
             long read = 0;
             int n;
-            while ((n = await src.ReadAsync(buf)) > 0)
+            while ((n = await src.ReadAsync(buf, ct)) > 0)
             {
-                await dst.WriteAsync(buf.AsMemory(0, n));
+                await dst.WriteAsync(buf.AsMemory(0, n), ct);
                 read += n;
                 progress.Report((int)(read * 100 / total));
             }
         }
         else
         {
-            await src.CopyToAsync(dst);
+            await src.CopyToAsync(dst, ct);
         }
 
         progress?.Report(100);
