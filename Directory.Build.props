@@ -16,7 +16,7 @@
       版本号。设置的「关于」页显示的就是程序集上这一份；安装包在
       installer/XkScreenshot.iss 的 AppVersion 里另有一份，发新版两处一起改。
     -->
-    <Version>1.0.0</Version>
+    <Version>1.0.1</Version>
 
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>

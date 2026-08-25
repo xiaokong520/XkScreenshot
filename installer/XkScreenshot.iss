@@ -15,7 +15,7 @@
 
 ; 和根目录 Directory.Build.props 里的 <Version> 保持一致：程序「关于」页显示的是那一份
 #ifndef AppVersion
-  #define AppVersion "1.0.0"
+  #define AppVersion "1.0.1"
 #endif
 
 ; 写进 exe 版本资源的那一份，只能是纯数字。AppVersion 带了 -beta 这类后缀时，
