@@ -42,9 +42,16 @@ public static class ClipboardWriter
     {
         var data = new DataObject();
 
+        // 这个流不能 using 掉。SetDataObject(copy: true) 是先把这个 DataObject 挂上剪贴板
+        // （此时各格式还是延迟渲染的，剪贴板里躺的是指回本进程的引用），再去把它们渲染成
+        // 静态数据 —— 而渲染那一步同样要开剪贴板，同样会被占用方挡下。挡下之后剪贴板里
+        // 留着的还是那个活对象，谁来要 "PNG" 都会转回这里读这个流；这时候流要是已经关了，
+        // 拿到的就是「Cannot access a closed Stream」。让它活着，等 GC 收就好 ——
+        // MemoryStream 手里没有非托管资源，关不关都一样。
+        //
         // 预留容量：截图 PNG 大约压到每像素半字节上下，一次给够就不必让 MemoryStream
         // 一路翻倍扩容 —— 那些中途丢掉的缓冲每一片都在大对象堆上
-        using var png = new MemoryStream(image.PixelWidth * image.PixelHeight / 2 + 1024);
+        var png = new MemoryStream(image.PixelWidth * image.PixelHeight / 2 + 1024);
         var encoder = new PngBitmapEncoder();
         encoder.Frames.Add(BitmapFrame.Create(image));
         encoder.Save(png);
