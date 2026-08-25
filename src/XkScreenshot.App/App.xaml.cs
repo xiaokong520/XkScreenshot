@@ -767,7 +767,7 @@ public partial class App : Application
         }
         catch (Exception ex)
         {
-            ShowWarning("写入剪贴板失败：" + ex.Message);
+            ShowWarning("写入剪贴板失败：" + ClipboardWriter.Describe(ex));
         }
     }
 
