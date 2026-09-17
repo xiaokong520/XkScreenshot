@@ -22,6 +22,22 @@ public static class NativeMethods
     [DllImport("user32.dll")]
     public static extern bool SetCursorPos(int x, int y);
 
+    /// <summary>
+    /// 立刻换掉当前光标。贴图鼠标悬停在角上时用它换成旋转光标 —— 走 WM_SETCURSOR
+    /// 自己设，而不是给窗口挂 Control.Cursor（分层窗口没有子控件，那条路依赖
+    /// WinForms 自己维护的几何，见 PinForm._menu 的注释）。
+    /// </summary>
+    [DllImport("user32.dll")]
+    public static extern IntPtr SetCursor(IntPtr hCursor);
+
+    /// <summary>
+    /// 从 .cur 文件建光标句柄。贴图的自绘旋转光标走这里，**不能**用 .NET 的
+    /// Cursor(Stream)：那条路会把 32bpp 降级成 1bpp 单色（句柄里没有彩色位图），
+    /// 屏幕上是纯黑剪影，压到深色桌面上等于没有。详见 PinForm.CursorFromBitmap。
+    /// </summary>
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "LoadCursorFromFileW")]
+    public static extern IntPtr LoadCursorFromFile(string fileName);
+
     [DllImport("user32.dll", SetLastError = true)]
     public static extern uint SendInput(uint nInputs, INPUT[] inputs, int cbSize);
 
@@ -136,6 +152,9 @@ public static class NativeMethods
     public const uint SWP_NOSIZE = 0x0001;
 
     public const int WM_HOTKEY = 0x0312;
+
+    /// <summary>鼠标移动导致光标要重画时来这条。贴图用它换旋转光标（见 SetCursor）。</summary>
+    public const int WM_SETCURSOR = 0x0020;
 
     // ---------------- gdi32 ----------------
 
