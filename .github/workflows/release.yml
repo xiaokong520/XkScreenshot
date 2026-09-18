@@ -125,7 +125,7 @@ jobs:
           $v = '${{ steps.ver.outputs.version }}'
           New-Item -ItemType Directory -Force dist | Out-Null
 
-          # 在 stage\fd 里打，压出来的包顶上才是 XkScreenshot-1.0.1\ 这么一层目录，
+          # 在 stage\fd 里打，压出来的包顶上才是 XkScreenshot-<版本>\ 这么一层目录，
           # 而不是解压下来一地散文件
           Push-Location stage\fd
           7z a -tzip -mx=9 "..\..\dist\XkScreenshot-$v-portable.zip" "XkScreenshot-$v" | Out-Null

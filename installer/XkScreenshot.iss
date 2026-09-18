@@ -2,7 +2,7 @@
 ;
 ; 编译：ISCC.exe installer\XkScreenshot.iss
 ; 输入：..\publish\   —— 先跑 dotnet publish -c Release -r win-x64 --self-contained false -o publish
-; 产物：installer\out\XkScreenshot-1.0.0-setup.exe
+; 产物：installer\out\XkScreenshot-<AppVersion>-setup.exe
 ;
 ; 下面这几个 define 都可以在命令行上用 /D 覆盖，CI 就是这么一份脚本编出两个安装包的：
 ;
@@ -15,7 +15,7 @@
 
 ; 和根目录 Directory.Build.props 里的 <Version> 保持一致：程序「关于」页显示的是那一份
 #ifndef AppVersion
-  #define AppVersion "1.0.1"
+  #define AppVersion "1.0.2"
 #endif
 
 ; 写进 exe 版本资源的那一份，只能是纯数字。AppVersion 带了 -beta 这类后缀时，
