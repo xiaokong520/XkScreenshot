@@ -104,6 +104,7 @@ public sealed class SettingsWindow : Window
     private readonly ToggleButton _showToasts = new();
     private readonly ToggleButton _showHints = new();
     private readonly ToggleButton _elementMode = new();
+    private readonly ToggleButton _restorePins = new();
     private readonly ToggleButton _runAtStartup = new();
     private readonly ToggleButton _runAsAdmin = new();
     private readonly ComboBox _theme = new() { Width = 168 };
@@ -322,7 +323,7 @@ public sealed class SettingsWindow : Window
         _apiProtocol.Items.Add("OpenAI");
         _apiProtocol.Items.Add("Anthropic");
         foreach (var toggle in new[]
-                 { _saveWithoutPrompt, _showToasts, _showHints, _elementMode,
+                 { _saveWithoutPrompt, _showToasts, _showHints, _elementMode, _restorePins,
                    _runAtStartup, _runAsAdmin })
             toggle.Style = (Style)FindResource("ToggleSwitch");
 
@@ -461,6 +462,9 @@ public sealed class SettingsWindow : Window
                 "管设置界面、识别与翻译结果窗口，以及截图时的提示面板和工具栏。", _theme),
             Card(Icons.Bell, "操作完成通知提示",
                 "复制、保存之后在选区旁边闪一下回执，两秒自动消失。", _showToasts),
+            Card(Icons.Pin, "重启后恢复贴图",
+                "下次打开程序时把上次贴着的图按原样摆回来 —— 位置、大小、旋转角度、透明度都照旧。"
+                + "和「开机自动启动」配合，重启电脑也一样。关掉它存档会被清掉。", _restorePins),
             Card(Icons.Power, "开机自动启动", null, _runAtStartup),
             Card(Icons.Shield, "以管理员权限运行",
                 Elevation.IsElevationLocked
@@ -1170,6 +1174,7 @@ public sealed class SettingsWindow : Window
         _showToasts.IsChecked = s.ShowToasts;
         _showHints.IsChecked = s.ShowHints;
         _elementMode.IsChecked = s.ElementMode;
+        _restorePins.IsChecked = s.RestorePins;
         _runAtStartup.IsChecked = s.RunAtStartup;
         _runAsAdmin.IsChecked = s.RunAsAdmin;
 
@@ -1793,6 +1798,7 @@ public sealed class SettingsWindow : Window
         _draft.DefaultAction = Actions[Math.Max(0, _defaultAction.SelectedIndex)].Action;
         _draft.ShowHints = _showHints.IsChecked == true;
         _draft.ElementMode = _elementMode.IsChecked == true;
+        _draft.RestorePins = _restorePins.IsChecked == true;
         _draft.RunAtStartup = _runAtStartup.IsChecked == true;
         _draft.RunAsAdmin = _runAsAdmin.IsChecked == true;
         _draft.Theme = Themes[Math.Max(0, _theme.SelectedIndex)].Mode;

@@ -1,12 +1,15 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
 using System.Windows.Media.Imaging;
 using XkScreenshot.Core.Geometry;
+using XkScreenshot.Core.Monitors;
 using XkScreenshot.Core.Native;
 
 namespace XkScreenshot.Pin;
@@ -37,6 +40,10 @@ namespace XkScreenshot.Pin;
 /// 位置与尺寸全程物理像素。UpdateLayeredWindow 用的就是屏幕物理坐标，天然跨屏正确，
 /// 不碰 WPF 那套 DIP。锚点缩放用双精度 _left/_top 直接算、只在下发时取整，误差不累积，
 /// 贴图放大碰到屏幕边界时位置不会乱跑。
+///
+/// 贴图可以存档：位置、倍率、角度、透明度和画面一起落在程序目录下的 pins\ 里，
+/// 下次打开程序按原样摆回来（见 PinStore、PinManager.Restore）。存不存由设置里
+/// 「重启后恢复贴图」决定 —— 一件事要跨会话活下去，就得有个地方把它写下来。
 /// </summary>
 public sealed class PinForm : Form
 {
@@ -199,7 +206,46 @@ public sealed class PinForm : Form
     /// <summary>用户请求另存这张贴图。</summary>
     public event Action<BitmapSource>? SaveRequested;
 
+    /// <summary>
+    /// 这张贴图动过了：挪了位置、缩放了、转了角度、调了透明度、切了置顶。
+    ///
+    /// 落盘那一边听着它（见 PinManager）—— 攒到退出时再写是不行的，
+    /// 理由见 PinManager.Save 的注释。
+    /// </summary>
+    internal event Action? Changed;
+
+    /// <summary>一次「动完了」。拖拽和旋转的每一帧都走它的话，索引会被写成每秒几十遍。</summary>
+    private void NotifyChanged() => Changed?.Invoke();
+
+    /// <summary>
+    /// 存档里的画面文件 id，由 PinManager 认领后写回。贴图自己不用它 ——
+    /// 摆在这儿只是让「哪张图对应哪个文件」跟着窗口走，不用在外面另记一份映射。
+    /// </summary>
+    internal string? StoreId { get; set; }
+
+    /// <summary>这张贴图的画面。存档那边要拿它去后台编码，所以得有个出口。</summary>
+    internal BitmapSource Source => _source;
+
+    /// <summary>
+    /// 存档要的那一份：位置、倍率、角度、透明度、置顶，外加画面文件 id。
+    /// 倍率存的是权威值 <see cref="_scale"/>，不是渲染尺寸 —— 反过来的话恢复出来会跟着取整漂。
+    /// </summary>
+    internal PinSnapshot Snapshot(string image)
+        => new(_left, _top, _scale, _angle, _opacity, TopMost, image);
+
     public PinForm(BitmapSource image, PixelRect origin)
+        : this(image, origin.X, origin.Y, 1.0, 0.0, 1.0, topMost: true)
+    {
+    }
+
+    /// <summary>
+    /// 从存档恢复时用的那一份：位置、倍率、角度、透明度、置顶一并接过来（见 PinManager.Restore）。
+    ///
+    /// 倍率照旧要过一遍上限钳制 —— 存档可能是大屏上存的，今天这台机器的帧位图预算未必一样。
+    /// 顺序上必须先定角度再算倍率：上限里那个 <see cref="RotationAreaFactor"/> 是跟着角度走的。
+    /// </summary>
+    internal PinForm(BitmapSource image, double left, double top,
+        double scale, double angle, double opacity, bool topMost)
     {
         _source = image;
         _source.Freeze();
@@ -208,16 +254,23 @@ public sealed class PinForm : Form
         _imageW = _bitmap.Width;
         _imageH = _bitmap.Height;
 
-        _left = origin.X;
-        _top = origin.Y;
+        _left = left;
+        _top = top;
+
+        _angle = NormalizeAngle(Math.Round(angle, 3));
 
         // 源图大到连一倍都顶到帧位图上限时，从 1.0 收一档 —— 否则开局就破了
-        // 「尺寸 = 图片 × 倍率」的不变量，锚点公式从第一格就飘
-        _scale = Math.Min(1.0, MaxScaleForImage);
+        // 「尺寸 = 图片 × 倍率」的不变量，锚点公式从第一格就飘。
+        // 钳制一律落在倍率上（而不是渲染尺寸上），理由见 MaxFramePixels。
+        _scale = Math.Clamp(scale, MinScale, Math.Min(MaxScale, MaxScaleForImage));
+
+        // 透明度不用在这儿下发：它随每帧的 SourceConstantAlpha 一起走（见 UploadFrame），
+        // OnLoad 里第一次 RenderFrame 就把它带上了
+        _opacity = Math.Clamp(opacity, MinOpacity, 1.0);
 
         FormBorderStyle = FormBorderStyle.None;
         ShowInTaskbar = false;
-        TopMost = true;
+        TopMost = topMost;
         StartPosition = FormStartPosition.Manual;
         AutoScaleMode = AutoScaleMode.None; // 尺寸位置全用物理像素，别让 WinForms 掺和缩放
 
@@ -226,6 +279,37 @@ public sealed class PinForm : Form
         SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint, true);
 
         _menu = BuildContextMenu();
+    }
+
+    /// <summary>
+    /// 把窗口挪回当前桌面里。只给「从存档恢复」用 —— 存档里的坐标来自上一次的显示器布局，
+    /// 那块屏今天可能已经拔了、分辨率可能已经改了，那时候贴图还在，只是谁也看不见它。
+    ///
+    /// 只挪不缩：比屏幕还大的贴图本来就该那么大（同 App.PlaceUnderCursor 的注释）。
+    /// 挪到哪台显示器上按相交面积挑，一块都不相交（那台屏没了）就退回主屏。
+    ///
+    /// 得在窗口显示**之前**调：显示之后再挪，用户会先看到它在错的地方闪一下。
+    /// 尺寸现算而不是读 _frameW/_frameH —— 此刻 OnLoad 还没跑，帧还没画出来。
+    /// </summary>
+    internal void PullIntoDesktop(IReadOnlyList<MonitorInfo> monitors)
+    {
+        if (monitors.Count == 0) return;
+
+        var (w, h) = FrameSize(_scale);
+        var rect = new PixelRect((int)Math.Round(_left), (int)Math.Round(_top), w, h);
+
+        MonitorInfo? target = null;
+        long best = 0;
+        foreach (var monitor in monitors)
+        {
+            long overlap = rect.Intersect(monitor.Bounds).Area;
+            if (overlap > best) { best = overlap; target = monitor; }
+        }
+        target ??= monitors.FirstOrDefault(m => m.IsPrimary) ?? monitors[0];
+
+        var bounds = target.Bounds;
+        _left = Math.Clamp(_left, bounds.X, Math.Max(bounds.X, bounds.Right - w));
+        _top = Math.Clamp(_top, bounds.Y, Math.Max(bounds.Y, bounds.Bottom - h));
     }
 
     protected override CreateParams CreateParams
@@ -293,6 +377,8 @@ public sealed class PinForm : Form
         _scale = next;
 
         RenderFrame();
+        // 滚轮一格算一次，不是每帧一次，直接落盘
+        NotifyChanged();
     }
 
     /// <summary>
@@ -458,6 +544,10 @@ public sealed class PinForm : Form
         _top = cy - h / 2.0;
 
         RenderFrame();
+
+        // 拖拽旋转期间这条路上每帧都会走一遍，落盘得等松手那一下（见 OnMouseUp）。
+        // 滚轮、菜单、Ctrl+R 那几条是离散动作，各转一次写一次
+        if (!_rotating) NotifyChanged();
     }
 
     /// <summary>
@@ -692,6 +782,7 @@ public sealed class PinForm : Form
 
         _opacity = value;
         NativeMethods.SetLayeredWindowAttributes(Handle, 0, (byte)Math.Round(_opacity * 255), NativeMethods.LWA_ALPHA);
+        NotifyChanged();
     }
 
     protected override void OnMouseDown(MouseEventArgs e)
@@ -753,11 +844,17 @@ public sealed class PinForm : Form
         }
 
         _dragging = false;
-        if (!_rotating) return;
+        if (!_rotating)
+        {
+            // 只是挪了位置：也只在松手这一刻写一次存档（拖动期间每帧都写就是几十遍索引）
+            NotifyChanged();
+            return;
+        }
 
         _rotating = false;
         // 刚转完，图片的四个角已经换地方了，光标形状得按新位置重判一次
         UpdateHoverCorner();
+        NotifyChanged();
     }
 
     protected override void OnMouseDoubleClick(MouseEventArgs e)
@@ -916,8 +1013,15 @@ public sealed class PinForm : Form
         // 菜单是常驻的一份，角度得每次弹出时现读，不然「当前角度」会一直停在第一次的值
         menu.Opening += (_, _) => angleLabel.Text = $"当前角度：{_angle:0.##}°";
 
-        var topmostItem = new ToolStripMenuItem("总在最前") { CheckOnClick = true, Checked = true };
-        topmostItem.Click += (_, _) => TopMost = topmostItem.Checked;
+        // 初值照窗口此刻的实际状态来：从存档恢复的贴图可能本来就没置顶（见恢复构造），
+        // 写死 true 的话，菜单上勾着、窗口却压在别的窗口底下
+        var topmostItem = new ToolStripMenuItem("总在最前") { CheckOnClick = true, Checked = TopMost };
+        topmostItem.Click += (_, _) =>
+        {
+            TopMost = topmostItem.Checked;
+            // 置顶与否也要存：不存的话，一张特意摘掉置顶的贴图重启后又压回最上面
+            NotifyChanged();
+        };
         menu.Items.Add(topmostItem);
 
         menu.Items.Add(new ToolStripSeparator());
