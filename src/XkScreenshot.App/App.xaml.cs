@@ -93,6 +93,15 @@ public partial class App : Application
         _hotkeys = new HotkeyManager();
         _hotkeys.Pressed += OnHotkeyPressed;
 
+        // 贴图存档。目录跟截屏历史一样定在程序目录下（那边也是这个理由：
+        // %APPDATA% 在系统盘上，几十张贴图的画面压在那儿迟早会硌着人）。
+        //
+        // 恢复必须排在 ApplySettings 前面 —— 那边末尾会落一次盘，顺序反了就是先照着
+        // 「一张贴图也没有」把目录清干净，再去读那个刚被清空的存档。
+        PinStore.Directory = System.IO.Path.Combine(AppSettings.AppRootDirectory, "pins");
+        _pins.SetPersistence(_settings.RestorePins);
+        if (_settings.RestorePins) _pins.Restore(PinStore.Load());
+
         SetupTrayIcon();
         ApplySettings();
 
@@ -232,6 +241,12 @@ public partial class App : Application
             // 调小了就当场裁掉多余的那几条，不必等下一次截图
             _controller.History.Capacity = _settings.HistoryCapacity;
         }
+
+        // 贴图存档跟着这一项开关：关掉时 SetPersistence 会把存档清干净，
+        // 打开时紧跟的这句立刻把眼前这批存上 —— 用户是在设置里改的，
+        // 改完要是直接重启，眼下屏幕上的这些正是他想留下的那些
+        _pins.SetPersistence(_settings.RestorePins);
+        _pins.Save();
 
         CreateEngines();
         _translationCache?.Clear();
@@ -843,6 +858,12 @@ public partial class App : Application
             _trayIcon.Visible = false;
             _trayIcon.Dispose();
         }
+
+        // 贴图存档收尾：最后再写一遍索引，并等后台那几张画面落盘。
+        // 「贴完就去点重启」是真实存在的用法，那时候画面可能还在编码路上 ——
+        // 不等它的话，索引里那一行指着的是一个永远没出现的文件，丢的正是刚贴的那一张
+        _pins.Save();
+        PinStore.FlushPending(TimeSpan.FromSeconds(3));
 
         _instanceMutex?.Dispose();
         base.OnExit(e);

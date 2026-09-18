@@ -85,6 +85,15 @@ public sealed class AppSettings
     /// <summary>长截图最大高度（像素），防内存爆掉。</summary>
     public int ScrollMaxHeight { get; set; } = ScrollOptions.Standard.MaxHeight;
 
+    /// <summary>
+    /// 重启之后把上次贴着的图重新摆回来：位置、大小、旋转角度、透明度都照旧。
+    ///
+    /// 默认关着。一个用惯了「随手贴、随手关」的人，不会指望程序退出时屏幕上的东西还被记着；
+    /// 攒了几十张贴图的人更是如此 —— 下次开机一起涌出来，只会让他去点「关闭全部贴图」。
+    /// 要它的人自己去开，见 <see cref="XkScreenshot.Pin.PinStore"/>。
+    /// </summary>
+    public bool RestorePins { get; set; }
+
     public bool RunAtStartup { get; set; }
 
     /// <summary>以管理员权限运行。切换它要重启整个进程 —— 令牌在进程启动时就定死了。</summary>

@@ -97,6 +97,10 @@ Type: filesandordirs; Name: "{app}\models"
 ; 攒的，不是用户存下来的图 —— 那些在他自己选的保存目录里，不在这儿。
 Type: filesandordirs; Name: "{app}\history"
 
+; 贴图存档（「重启后恢复贴图」用的那份：位置 + 画面）。它记的是「上次退出时屏幕上摆着什么」，
+; 是会话状态而不是用户存下来的东西，卸载之后留着只是一堆认不出来的 PNG。
+Type: filesandordirs; Name: "{app}\pins"
+
 ; 下面整段只在框架依赖的包里编进去。自包含的包把运行时一起带上了，
 ; 再去查机器上装没装 .NET 8 纯属误导 —— 没装也照样能跑。
 #ifndef SelfContained
