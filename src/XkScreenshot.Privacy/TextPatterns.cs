@@ -94,7 +94,22 @@ internal static class TextPatterns
             @"[\u4e00-\u9fa5A-Za-z0-9\-]{1,40}" +
             @"(?:街道|路|街|大道|胡同|巷|弄|村|镇|小区|大厦|广场|花园|公寓|号楼|号院|号|栋|幢|单元|室|层))",
             Options, MatchTimeout)),
+
+        // 单个地址片段：表单里「街道/区县/城市/州」各占一行，拆开以后上面那条整段规则就匹配不到了。
+        // 这里只认「XX路N号」和「XX省/市/县/镇/乡」两种，且整行就是它 —— 半句话里的不算。
+        new(PrivacyKind.Address, new Regex(
+            @"^(?<v>[\u4e00-\u9fa5]{2,8}(?:路|街|大道|巷|弄|胡同)\s*\d{1,5}\s*号|[\u4e00-\u9fa5]{2,6}(?:省|市|县|镇|乡))$",
+            Options, MatchTimeout), IsPlaceName),
     ];
+
+    /// <summary>「城市」「股市」「超市」这类以「市」结尾的普通词，不是地名。</summary>
+    private static readonly HashSet<string> NotPlaces = new(StringComparer.Ordinal)
+    {
+        "城市", "股市", "上市", "超市", "都市", "夜市", "菜市", "门市", "集市", "闹市", "早市",
+        "全县", "全省", "全市", "省市", "外省", "本市", "该市", "县城", "乡镇", "城镇", "城乡", "老乡",
+    };
+
+    private static bool IsPlaceName(string value) => !NotPlaces.Contains(value);
 
     /// <summary>找出一行里所有要糊的片段，按起点排序、互不重叠。</summary>
     public static List<TextSpan> Find(string text, PrivacyOptions options)

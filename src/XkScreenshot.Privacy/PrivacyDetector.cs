@@ -131,6 +131,14 @@ public sealed class PrivacyDetector : IDisposable
                 regions.Add(TextRegion(i, span));
         }
 
+        // 表单式地址：左边字段名、右边值。地址被拆成「街道/区县/城市/州」几行时，
+        // 每行都只剩一个片段，上面那条整段规则认不出来
+        if (options.Address && lines.Count > 0)
+        {
+            foreach (var rect in FormFieldFinder.FindAddressValues(lines, pixels.Width))
+                regions.Add(new PrivacyRegion(rect, PrivacyKind.Address));
+        }
+
         // 头像
         var avatars = new List<Avatar>();
         if (options.Avatar || options.Name)
