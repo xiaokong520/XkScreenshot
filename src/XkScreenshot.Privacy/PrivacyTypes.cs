@@ -51,7 +51,7 @@ public sealed record PrivacyOptions(
     bool Phone = true,
     bool IdCard = true,
     bool BankCard = true,
-    bool IpAddress = false,
+    bool IpAddress = true,
     bool Secret = true,
     bool Address = true,
     bool Avatar = true,

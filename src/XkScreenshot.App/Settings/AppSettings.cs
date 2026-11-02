@@ -244,14 +244,14 @@ public sealed class AppSettings
     }
 }
 
-/// <summary>智能打码各类隐私信息的开关。IP 默认关：技术截图里的 IP 往往正是要给人看的内容。</summary>
+/// <summary>智能打码各类隐私信息的开关。9 类全部默认开启，用户按需关掉自己不在意的。</summary>
 public sealed record PrivacySettings
 {
     public bool Email { get; set; } = true;
     public bool Phone { get; set; } = true;
     public bool IdCard { get; set; } = true;
     public bool BankCard { get; set; } = true;
-    public bool IpAddress { get; set; }
+    public bool IpAddress { get; set; } = true;
     public bool Secret { get; set; } = true;
     /// <summary>邮寄地址（省市区 + 街道门牌）。默认开：定位卡片、快递单上的地址就是要遮的东西。</summary>
     public bool Address { get; set; } = true;

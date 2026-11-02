@@ -543,7 +543,7 @@ public sealed class SettingsWindow : Window
             Card(Icons.Info, "手机号", null, _privacyPhone),
             Card(Icons.Info, "身份证号", "只认校验码对得上的，订单号之类的长数字不会被误伤。", _privacyIdCard),
             Card(Icons.Info, "银行卡号", "只认通过 Luhn 校验的。", _privacyBankCard),
-            Card(Icons.Info, "IP 地址", "默认关：技术截图里的 IP 往往正是要给人看的内容。", _privacyIp),
+            Card(Icons.Info, "IP 地址", "内网和外网 IP 都会认；技术截图里要展示 IP 时记得先关掉。", _privacyIp),
             Card(Icons.Key, "密钥与令牌", "API Key、GitHub Token、JWT，以及「密码：」后面的内容。", _privacySecret),
             Card(Icons.Info, "详细地址",
                 "「省 + 市 + 区」再带街道门牌的邮寄地址，定位卡片、快递单上最常见。"
