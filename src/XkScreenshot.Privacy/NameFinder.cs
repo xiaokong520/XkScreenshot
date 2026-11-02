@@ -58,6 +58,30 @@ internal static class NameFinder
         Options | RegexOptions.IgnoreCase, MatchTimeout);
 
     /// <summary>
+    /// 常见单姓。用来把「跟客户说一下」「找老板谈谈」里的普通名词挡在外面 ——
+    /// 这些句式里名字的位置是固定的，缺的只是一道「它像不像人名」的判据。
+    /// 覆盖百家姓里排在前面的那些，够日常中文用了。
+    /// </summary>
+    private const string Surnames =
+        "赵钱孙李周吴郑王冯陈褚卫蒋沈韩杨朱秦尤许何吕施张孔曹严华金魏陶姜谢邹苏潘葛范彭鲁韦马方俞任袁柳鲍史唐薛雷贺汤殷罗毕郝安常傅齐康伍余顾孟黄萧尹姚邵汪毛米戴宋庞熊纪舒屈项祝董梁杜阮蓝闵席季强贾江童颜郭梅盛林钟徐邱骆高夏蔡田樊胡霍虞万卢莫房解应宗丁邓洪包左石崔龚程邢裴陆荣翁荀惠封靳段富车侯全仰秋仲伊宫宁仇甘厉祖武刘景龙叶黎白怀蒲赖卓屠蒙池乔翟谭劳姬申扶冉雍桑桂牛通燕冀浦尚温庄晏柴阎连茹艾鱼容向古易廖终居衡步都耿满匡国文寇广东欧沃利越隆师巩聂晁勾冷辛那简饶曾沙鞠丰巢关查后荆红游权盖益";
+
+    /// <summary>首字是不是常见姓氏。正文名字识别（分词那条路）也用这个判据。</summary>
+    internal static bool LooksLikeSurname(char c) => Surnames.Contains(c);
+
+    /// <summary>
+    /// 明确的人名上下文：「跟李雷说」「找王小明问」「加张伟的微信」「刘总监」。
+    ///
+    /// 正文里顺口提到的人名本地没有可靠的识别办法，但这几种句式里名字的位置几乎是固定的；
+    /// 再要求首字是常见姓氏，就能把「跟客户说一下」「找老板谈谈」挡在外面。
+    /// 误伤代价很大的场景（比如「给客服打电话」），「客」「服」都不在姓氏表里。
+    /// </summary>
+    private static readonly Regex ContextName = new(
+        @"(?:(?:跟|和|与|找|叫|让|给|问)(?<v>[\u4e00-\u9fa5]{2,3})(?=说|讲|聊|问|谈|提|发|打|要|去|来|看|帮|确认|沟通|联系)" +
+        @"|(?<v>[\u4e00-\u9fa5]{2,3})(?=的(?:微信|电话|手机|邮箱|QQ|号码|联系方式))" +
+        @"|(?<v>[\u4e00-\u9fa5]{1,3}(?:老师|师傅|总监|经理|主任|医生|律师|教授|同学|师兄|师姐)))",
+        Options, MatchTimeout);
+
+    /// <summary>
     /// 名字那行后面常跟着的时间、日期、状态 —— 从第一个命中处截断，后面的不算名字。
     /// 括号不在此列：群聊里「【头衔】昵称（备注#id）」整个都是名字，括号里的备注和 id 更要糊。
     /// </summary>
@@ -135,6 +159,28 @@ internal static class NameFinder
             if (value.IndexOfAny(['：', ':', '×', '|', '—']) >= 0) continue;
 
             var span = new TextSpan(g.Index, g.Length, PrivacyKind.Name);
+            if (taken.Any(t => t.Overlaps(span)) || found.Any(f => f.Overlaps(span))) continue;
+            found.Add(span);
+        }
+
+        foreach (Match m in ContextName.Matches(normalized))
+        {
+            var g = m.Groups["v"];
+            if (!g.Success || g.Length is < 2 or > 5) continue;
+
+            // 正则贪婪会把前面的字也吃进来（「能是刘总监」「加张伟」），
+            // 一路剥到首字像姓氏为止；剥到只剩两个字还不对，就不是名字。
+            int start = g.Index, length = g.Length;
+            string value = g.Value;
+            while (length >= 2 && !Surnames.Contains(value[0]))
+            {
+                start++;
+                length--;
+                value = value[1..];
+            }
+            if (length < 2 || !Surnames.Contains(value[0])) continue;
+
+            var span = new TextSpan(start, length, PrivacyKind.Name);
             if (taken.Any(t => t.Overlaps(span)) || found.Any(f => f.Overlaps(span))) continue;
             found.Add(span);
         }

@@ -143,6 +143,17 @@ public sealed class PrivacyDetector : IDisposable
             }
         }
 
+        // 本地分词识别的正文人名（默认关，比在线准不了多少，胜在不联网）
+        if (options.LocalNames && lines.Count > 0)
+        {
+            foreach (var (line, span) in LocalNameClassifier.Classify(lines, ct))
+            {
+                if (taken[line].Any(t => t.Overlaps(span))) continue;
+                taken[line].Add(span);
+                regions.Add(TextRegion(line, span));
+            }
+        }
+
         ct.ThrowIfCancellationRequested();
         return new PrivacyReport(Merge(regions, pixels.Width, pixels.Height, ct), notice);
     }

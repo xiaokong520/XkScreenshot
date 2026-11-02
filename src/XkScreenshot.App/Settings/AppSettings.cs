@@ -232,7 +232,8 @@ public sealed class AppSettings
             Address: p.Address,
             Avatar: p.Avatar,
             Name: p.Name,
-            Llm: llm);
+            Llm: llm,
+            LocalNames: p.LocalNames);
     }
 }
 
@@ -249,6 +250,9 @@ public sealed record PrivacySettings
     public bool Address { get; set; } = true;
     public bool Avatar { get; set; } = true;
     public bool Name { get; set; } = true;
+
+    /// <summary>本地名字识别（结巴分词）。默认关：准确率一般，还会把品牌词当人名。</summary>
+    public bool LocalNames { get; set; }
 
     /// <summary>在线名字识别。会把识别出的文字发给在线 API，默认关。</summary>
     public bool UseLlm { get; set; }

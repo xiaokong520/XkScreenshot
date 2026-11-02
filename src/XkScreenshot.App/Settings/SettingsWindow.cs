@@ -116,6 +116,7 @@ public sealed class SettingsWindow : Window
     private readonly ToggleButton _privacyAddress = new();
     private readonly ToggleButton _privacyAvatar = new();
     private readonly ToggleButton _privacyName = new();
+    private readonly ToggleButton _privacyLocalNames = new();
     private readonly ToggleButton _privacyLlm = new();
     private readonly ToggleButton _runAtStartup = new();
     private readonly ToggleButton _runAsAdmin = new();
@@ -338,7 +339,7 @@ public sealed class SettingsWindow : Window
                  { _saveWithoutPrompt, _showToasts, _showHints, _elementMode, _restorePins,
                    _runAtStartup, _runAsAdmin,
                    _privacyEmail, _privacyPhone, _privacyIdCard, _privacyBankCard, _privacyIp,
-                   _privacySecret, _privacyAddress, _privacyAvatar, _privacyName, _privacyLlm })
+                   _privacySecret, _privacyAddress, _privacyAvatar, _privacyName, _privacyLocalNames, _privacyLlm })
             toggle.Style = (Style)FindResource("ToggleSwitch");
 
         // 权限被系统钉死的时候这个开关无从拨起，直接灰掉并挂一句说明
@@ -545,6 +546,9 @@ public sealed class SettingsWindow : Window
                 + "只说「在哪个区」的句子不会动。", _privacyAddress),
             Card(Icons.Camera, "头像", "真人照片和列表里成排出现的头像。", _privacyAvatar),
             Card(Icons.Type, "名字", "「发件人：」这类标签后面、@ 后面、头像旁边的名字。", _privacyName),
+            Card(Icons.Bot, "本地名字识别",
+                "用离线分词词库找出正文里提到的人名，比如「跟李雷说一下」。"
+                + "准确率不如在线模型：「支付宝」这类品牌词可能被当成名字，建议先试着用一次。", _privacyLocalNames),
             Card(Icons.Bot, "在线名字识别",
                 "用「识别 / 翻译」页的 API 认出正文里提到的人名、机构名。"
                 + "会把识别出的文字发送到在线 API（不发图片）。", _privacyLlm));
@@ -1215,6 +1219,7 @@ public sealed class SettingsWindow : Window
         _privacyAddress.IsChecked = s.Privacy.Address;
         _privacyAvatar.IsChecked = s.Privacy.Avatar;
         _privacyName.IsChecked = s.Privacy.Name;
+        _privacyLocalNames.IsChecked = s.Privacy.LocalNames;
         _privacyLlm.IsChecked = s.Privacy.UseLlm;
         _runAtStartup.IsChecked = s.RunAtStartup;
         _runAsAdmin.IsChecked = s.RunAsAdmin;
@@ -1851,6 +1856,7 @@ public sealed class SettingsWindow : Window
             Address = _privacyAddress.IsChecked == true,
             Avatar = _privacyAvatar.IsChecked == true,
             Name = _privacyName.IsChecked == true,
+            LocalNames = _privacyLocalNames.IsChecked == true,
             UseLlm = _privacyLlm.IsChecked == true,
         };
         _draft.RunAtStartup = _runAtStartup.IsChecked == true;

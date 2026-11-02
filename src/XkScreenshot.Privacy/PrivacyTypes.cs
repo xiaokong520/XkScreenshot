@@ -56,7 +56,8 @@ public sealed record PrivacyOptions(
     bool Address = true,
     bool Avatar = true,
     bool Name = true,
-    LlmAccess? Llm = null)
+    LlmAccess? Llm = null,
+    bool LocalNames = false)
 {
     public static readonly PrivacyOptions Standard = new();
 
@@ -75,7 +76,7 @@ public sealed record PrivacyOptions(
     };
 
     /// <summary>要不要跑 OCR。只要头像的话也得跑 —— 头像是靠旁边那行字定位的。</summary>
-    public bool NeedsText => Email || Phone || IdCard || BankCard || IpAddress || Secret || Address || Name || Avatar;
+    public bool NeedsText => Email || Phone || IdCard || BankCard || IpAddress || Secret || Address || Name || Avatar || LocalNames;
 }
 
 /// <summary>一次检测的结果，外加一句需要让用户知道的话（比如在线识别失败退回了本地）。</summary>
