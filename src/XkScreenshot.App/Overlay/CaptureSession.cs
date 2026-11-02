@@ -712,9 +712,8 @@ public sealed class CaptureSession : IDisposable
                     {
                         PrivacyStage.Locating => "正在定位打码区域",
                         PrivacyStage.OnlineNames => "正在在线识别名字（最长 15 秒）",
-                        // 在线模式下这一段仍然在本地跑：文字和头像要靠行框定位，在线 OCR 给不出坐标。
-                        // 文案得说清楚，否则用户切了在线却看到「本地」，只会以为设置没生效
-                        _ => options.Online ? "正在本地定位文字与头像（在线模式）" : "正在本地识别隐私",
+                        // 在线模式整图交给模型，本地只负责截屏和画马赛克
+                        _ => options.Online ? "正在在线识别隐私（最长 30 秒）" : "正在本地识别隐私",
                     };
                     Changed?.Invoke();
                 });

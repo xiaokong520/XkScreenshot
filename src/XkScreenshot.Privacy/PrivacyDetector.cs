@@ -24,10 +24,11 @@ public sealed class PrivacyDetector : IDisposable
     /// <summary>人脸框只框到五官，头像还有头发、背景，四周各放 25%。</summary>
     private const double FaceGrow = 0.25;
 
-    private readonly IOcrEngine _ocr;
+    /// <summary>离线模式的文字引擎。在线模式整图交给模型，不需要它，所以可以为 null。</summary>
+    private readonly IOcrEngine? _ocr;
     private readonly FaceDetector _faces = new();
 
-    public PrivacyDetector(IOcrEngine ocr)
+    public PrivacyDetector(IOcrEngine? ocr)
     {
         _ocr = ocr;
     }
@@ -42,7 +43,44 @@ public sealed class PrivacyDetector : IDisposable
         if (!image.IsFrozen) image = (BitmapSource)image.GetAsFrozen();
         var frozen = image;
         // 即使 OCR 命中缓存、同步返回，后续规则和像素扫描也绝不回到 UI 线程。
+        if (options.Online)
+            return Task.Run(() => DetectOnlineAsync(frozen, pixels, options, ct, progress), ct);
         return Task.Run(() => DetectCoreAsync(frozen, pixels, options, ct, progress), ct);
+    }
+
+    /// <summary>
+    /// 在线模式：整张图交给多模态模型，由它直接给出隐私区域。
+    ///
+    /// 不走本地 OCR、也不做头像列扫描 —— 用户选在线就是接受「坐标由模型估」这件事。
+    /// 失败一律退回空结果加一句说明，不自动降级到本地：那样用户会以为在线生效了。
+    /// </summary>
+    private async Task<PrivacyReport> DetectOnlineAsync(
+        BitmapSource image, PixelBuffer pixels, PrivacyOptions options, CancellationToken ct,
+        IProgress<PrivacyStage>? progress)
+    {
+        progress?.Report(PrivacyStage.Recognizing);
+        if (options.Llm is not { } llm)
+            return new PrivacyReport([], "在线打码需要先在「识别 / 翻译」页填写 API Key");
+
+        try
+        {
+            var regions = await OnlinePrivacyFinder.FindAsync(llm, image, pixels.Width, pixels.Height, ct)
+                .ConfigureAwait(false);
+            ct.ThrowIfCancellationRequested();
+
+            if (regions.Count == 0)
+                return new PrivacyReport([], "在线模型没有标出隐私区域，分享前请人工检查");
+
+            return new PrivacyReport(Merge(regions, pixels.Width, pixels.Height, ct), null);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            return new PrivacyReport([], "在线识别超时，可以重试或切回离线模式");
+        }
+        catch (Exception) when (!ct.IsCancellationRequested)
+        {
+            return new PrivacyReport([], "在线识别失败，请检查网络和「识别 / 翻译」页的 API 配置");
+        }
     }
 
     private async Task<PrivacyReport> DetectCoreAsync(
@@ -50,6 +88,9 @@ public sealed class PrivacyDetector : IDisposable
         IProgress<PrivacyStage>? progress)
     {
         progress?.Report(PrivacyStage.Recognizing);
+        if (_ocr is null)
+            return new PrivacyReport([], "离线打码需要先在设置里下载 PaddleOCR 模型");
+
         var ocrTask = options.NeedsText
             ? _ocr.RecognizeAsync(image, ct)
             : Task.FromResult<IReadOnlyList<OcrLine>>([]);

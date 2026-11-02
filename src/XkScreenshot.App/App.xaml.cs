@@ -540,8 +540,8 @@ public partial class App : Application
         string bergamotDir = System.IO.Path.Combine(modelRoot, BergamotModelDir.FolderName);
 
         // OCR engine
-        // PaddleOCR 单独攥着：智能打码不管识别走在线还是离线，都只用它 ——
-        // 离线模式下文字识别直接复用同一个实例，免得两份会话一起占内存
+        // PaddleOCR 单独攥着：离线打码和离线识别都复用它 —— 免得两份会话一起占内存。
+        // 在线打码整图交给模型，不需要它，所以 PrivacyDetector 在模型缺失时也要建起来。
         if (!ReferenceEquals(_ocrEngine, _paddle)) (_ocrEngine as IDisposable)?.Dispose();
         _ocrEngine = null;
         _privacy?.Dispose();
@@ -554,7 +554,6 @@ public partial class App : Application
             try
             {
                 _paddle = new PaddleOcrEngine(paddleOcrDir);
-                _privacy = new PrivacyDetector(_paddle);
             }
             catch (Exception ex)
             {
@@ -563,6 +562,9 @@ public partial class App : Application
                     ShowWarning("PaddleOCR 初始化失败：" + ex.Message);
             }
         }
+
+        // 离线打码离不开本地模型（DetectCoreAsync 里会检查并给出提示），在线模式则完全不需要
+        _privacy = new PrivacyDetector(_paddle);
 
         if (_settings.Recognition.Mode == OcrMode.Online)
         {
