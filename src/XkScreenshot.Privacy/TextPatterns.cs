@@ -54,6 +54,13 @@ internal static class TextPatterns
             @"(?i)(?:api[_\- ]?key|secret|token|password|passwd|pwd|密码|密钥|口令)\s*[""']?\s*[:=：]\s*[""']?(?<v>[^\s""',，;；}{]{4,})",
             Options, MatchTimeout)),
 
+        // 标签和值贴在一起、中间没有冒号的形式（「密码」后面直接跟值）。
+        // 值允许纯字母（密码不一定是数字），但必须是 ASCII —— 「密码忘了」「密码和账号」这种
+        // 中文跟在后面就不会被当成密码。英文标签（password field）走上面那条，必须有冒号。
+        new(PrivacyKind.Secret, new Regex(
+            @"(?i)(?:密码|密钥|口令)\s*(?:是|为)?\s*(?<v>[A-Za-z0-9!@#$%^&*._\-]{3,64})",
+            Options, MatchTimeout)),
+
         new(PrivacyKind.Email, new Regex(
             @"(?<v>[A-Za-z0-9._%+\-]+ *@ *[A-Za-z0-9\-]+(?: *\. *[A-Za-z0-9\-]+)* *\. *[A-Za-z]{2,})", Options, MatchTimeout)),
 
