@@ -671,12 +671,18 @@ public sealed class CaptureSession : IDisposable
             Notice?.Invoke("请先在设置里选择需要打码的隐私类型");
             return;
         }
+        // 选了在线却没配 Key：现在就拦下来，别让用户等一次完整的本地识别再看到空结果
+        if (options.Online && options.Llm is null)
+        {
+            Notice?.Invoke("在线打码需要先在「识别 / 翻译」页填写 API Key");
+            return;
+        }
 
         var startSelection = Selection;
         var startSnapshot = Snapshot;
         var cts = new System.Threading.CancellationTokenSource();
         _autoCts = cts;
-        AutoMosaicStatus = "正在准备识别";
+        AutoMosaicStatus = options.Online ? "正在准备在线识别" : "正在准备识别";
         Changed?.Invoke();
 
         bool IsCurrent() => !_disposed && ReferenceEquals(_autoCts, cts) && !cts.IsCancellationRequested
@@ -706,7 +712,9 @@ public sealed class CaptureSession : IDisposable
                     {
                         PrivacyStage.Locating => "正在定位打码区域",
                         PrivacyStage.OnlineNames => "正在在线识别名字（最长 15 秒）",
-                        _ => "正在本地识别隐私",
+                        // 在线模式下这一段仍然在本地跑：文字和头像要靠行框定位，在线 OCR 给不出坐标。
+                        // 文案得说清楚，否则用户切了在线却看到「本地」，只会以为设置没生效
+                        _ => options.Online ? "正在本地定位文字与头像（在线模式）" : "正在本地识别隐私",
                     };
                     Changed?.Invoke();
                 });
