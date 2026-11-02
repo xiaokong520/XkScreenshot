@@ -520,9 +520,29 @@ public sealed class MosaicAnnotation : Annotation
     public required Rect Area { get; init; }
     public required int Block { get; init; }
 
+    /// <summary>
+    /// 马赛克只给四个角。
+    ///
+    /// 自动打码生成的多半是一窄条（名字行去掉上下留白只有 24px 高），八个控制点里
+    /// 那对上下点会挤在一起，`Handles.FitIn` 判成「太挤、不给控制点」——
+    /// 于是这种细条既看不见控制点也拉不动，用户只能删掉重画。
+    /// 四角足够改大小；HandleCount 不是 8 时 FitIn 那道门不再拦。
+    /// </summary>
+    private static readonly int[] Corners =
+        [Handles.TopLeft, Handles.TopRight, Handles.BottomLeft, Handles.BottomRight];
+
     public override ToolKind Kind => ToolKind.Mosaic;
     public override Rect Bounds => Area;
     public override Rect Frame => Area;
+
+    public override int HandleCount => Corners.Length;
+
+    public override Point HandleAt(int index) => Handles.At(Frame, Corners[index]);
+
+    public override int HandleAxis(int index) => Corners[index];
+
+    public override Annotation DragHandle(int index, Point to)
+        => WithFrame(Handles.Resize(Frame, Corners[index], to));
 
     /// <summary>马赛克没有颜色和线宽可言 —— 它取的就是画面本身的颜色。</summary>
     public override AnnotationStyle StyleOver(AnnotationStyle fallback)
