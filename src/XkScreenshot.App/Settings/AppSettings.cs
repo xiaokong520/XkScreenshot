@@ -207,14 +207,19 @@ public sealed class AppSettings
     }
 
     /// <summary>
-    /// 智能打码这一次找哪几类。在线名字识别要用户打开、而且「识别 / 翻译」页里填了 API Key 才启用 ——
-    /// 只开了开关却没配 Key，每次都去撞一个必然失败的请求再提示一遍，毫无意义。
+    /// 智能打码这一次找哪几类。
+    ///
+    /// 在线模式只改「正文里的人名」这一段：文字和头像仍然靠本地 PaddleOCR 定位 ——
+    /// 大模型 OCR 给不出行框，头像是拿文字行当锚点找的，走在线就全乱。
+    /// 在线名字识别还要求「识别 / 翻译」页里填了 API Key：只选了在线却没配 Key，
+    /// 每次都去撞一个必然失败的请求再提示一遍，毫无意义。
     /// </summary>
     public PrivacyOptions ToPrivacyOptions(LlmApiClient? client)
     {
         var p = Privacy;
+        bool online = p.Mode == OcrMode.Online;
         LlmAccess? llm = null;
-        if (p.UseLlm && client is not null && !string.IsNullOrWhiteSpace(Translation.ApiKey))
+        if (online && client is not null && !string.IsNullOrWhiteSpace(Translation.ApiKey))
         {
             llm = new LlmAccess(client, new LlmApiConfig(
                 Translation.ApiProtocol == ApiProtocolSetting.Anthropic ? ApiProtocol.Anthropic : ApiProtocol.OpenAI,
@@ -233,7 +238,9 @@ public sealed class AppSettings
             Avatar: p.Avatar,
             Name: p.Name,
             Llm: llm,
-            LocalNames: p.LocalNames);
+            // 两种模式互斥：在线用大模型找名字，离线才轮到分词词库
+            LocalNames: p.LocalNames && !online,
+            Online: online);
     }
 }
 
@@ -254,8 +261,11 @@ public sealed record PrivacySettings
     /// <summary>本地名字识别（结巴分词）。默认关：准确率一般，还会把品牌词当人名。</summary>
     public bool LocalNames { get; set; }
 
-    /// <summary>在线名字识别。会把识别出的文字发给在线 API，默认关。</summary>
-    public bool UseLlm { get; set; }
+    /// <summary>
+    /// 打码的识别方式。离线全部本地；在线只把「正文里的人名」交给大模型判断，
+    /// 文字和头像仍然是本地 PaddleOCR 在定位（在线 OCR 给不出行框）。
+    /// </summary>
+    public OcrMode Mode { get; set; } = OcrMode.Offline;
 }
 
 /// <summary>界面配色。System = 跟着系统的浅色/深色走。</summary>

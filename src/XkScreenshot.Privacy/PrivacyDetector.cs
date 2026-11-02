@@ -141,6 +141,12 @@ public sealed class PrivacyDetector : IDisposable
                     notice = "在线名字识别失败，已用本地结果";
                 }
             }
+            else if (options.Online && options.Llm is null)
+            {
+                // 选了在线却没拿到访问器：Key 没填、或引擎没建起来。不说明的话用户
+                // 只会看到「人名没打上」，以为是识别不准
+                notice = "在线打码需要先在「识别 / 翻译」页填写 API Key";
+            }
         }
 
         // 本地分词识别的正文人名（默认关，比在线准不了多少，胜在不联网）

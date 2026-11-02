@@ -583,7 +583,7 @@ public partial class App : Application
         if (_controller is not null)
         {
             _controller.Privacy = _privacy;
-            if (_settings.Privacy.UseLlm) _llmClient ??= new LlmApiClient();
+            if (_settings.Privacy.Mode == OcrMode.Online) _llmClient ??= new LlmApiClient();
             _controller.PrivacyOptions = _settings.ToPrivacyOptions(_llmClient);
         }
 

@@ -117,7 +117,7 @@ public sealed class SettingsWindow : Window
     private readonly ToggleButton _privacyAvatar = new();
     private readonly ToggleButton _privacyName = new();
     private readonly ToggleButton _privacyLocalNames = new();
-    private readonly ToggleButton _privacyLlm = new();
+    private readonly ComboBox _privacyMode = new() { Width = 168 };
     private readonly ToggleButton _runAtStartup = new();
     private readonly ToggleButton _runAsAdmin = new();
     private readonly ComboBox _theme = new() { Width = 168 };
@@ -331,6 +331,8 @@ public sealed class SettingsWindow : Window
         _scrollMode.Items.Add("手动");
         _ocrMode.Items.Add("离线");
         _ocrMode.Items.Add("在线");
+        _privacyMode.Items.Add("离线");
+        _privacyMode.Items.Add("在线");
         _translationMode.Items.Add("离线");
         _translationMode.Items.Add("在线");
         _apiProtocol.Items.Add("OpenAI");
@@ -339,7 +341,7 @@ public sealed class SettingsWindow : Window
                  { _saveWithoutPrompt, _showToasts, _showHints, _elementMode, _restorePins,
                    _runAtStartup, _runAsAdmin,
                    _privacyEmail, _privacyPhone, _privacyIdCard, _privacyBankCard, _privacyIp,
-                   _privacySecret, _privacyAddress, _privacyAvatar, _privacyName, _privacyLocalNames, _privacyLlm })
+                   _privacySecret, _privacyAddress, _privacyAvatar, _privacyName, _privacyLocalNames })
             toggle.Style = (Style)FindResource("ToggleSwitch");
 
         // 权限被系统钉死的时候这个开关无从拨起，直接灰掉并挂一句说明
@@ -534,8 +536,11 @@ public sealed class SettingsWindow : Window
                 LangPairRow()));
 
         AddPage(Icons.ShieldCheck, "隐私打码",
+            Card(Icons.Sliders, "识别方式",
+                "离线：文字、头像、名字全部本地识别。在线：文字和头像仍在本地定位，"
+                + "只把「正文里的人名」交给「识别 / 翻译」页配的在线模型（只发文字，不发图片）。", _privacyMode),
             Card(Icons.Info, "邮箱", "截图时按 P 或点工具条上的盾牌，自动给下面打开的几类打上马赛克。"
-                + "文字识别固定用本地 PaddleOCR，要先在「识别 / 翻译」页下载模型。", _privacyEmail),
+                + "文字识别用本地 PaddleOCR，要先在「识别 / 翻译」页下载模型。", _privacyEmail),
             Card(Icons.Info, "手机号", null, _privacyPhone),
             Card(Icons.Info, "身份证号", "只认校验码对得上的，订单号之类的长数字不会被误伤。", _privacyIdCard),
             Card(Icons.Info, "银行卡号", "只认通过 Luhn 校验的。", _privacyBankCard),
@@ -546,12 +551,9 @@ public sealed class SettingsWindow : Window
                 + "只说「在哪个区」的句子不会动。", _privacyAddress),
             Card(Icons.Camera, "头像", "真人照片和列表里成排出现的头像。", _privacyAvatar),
             Card(Icons.Type, "名字", "「发件人：」这类标签后面、@ 后面、头像旁边的名字。", _privacyName),
-            Card(Icons.Bot, "本地名字识别",
-                "用离线分词词库找出正文里提到的人名，比如「跟李雷说一下」。"
-                + "准确率不如在线模型：「支付宝」这类品牌词可能被当成名字，建议先试着用一次。", _privacyLocalNames),
-            Card(Icons.Bot, "在线名字识别",
-                "用「识别 / 翻译」页的 API 认出正文里提到的人名、机构名。"
-                + "会把识别出的文字发送到在线 API（不发图片）。", _privacyLlm));
+            Card(Icons.Bot, "离线 · 本地名字识别",
+                "离线模式下，用分词词库再找一遍正文里提到的人名，比如「跟李雷说一下」。"
+                + "准确率一般：「支付宝」这类品牌词可能被当成名字，建议先试着用一次。", _privacyLocalNames));
 
         AddPage(Icons.Folder, "保存",
             StackedCard(Icons.Folder, "默认目录",
@@ -1220,7 +1222,7 @@ public sealed class SettingsWindow : Window
         _privacyAvatar.IsChecked = s.Privacy.Avatar;
         _privacyName.IsChecked = s.Privacy.Name;
         _privacyLocalNames.IsChecked = s.Privacy.LocalNames;
-        _privacyLlm.IsChecked = s.Privacy.UseLlm;
+        _privacyMode.SelectedIndex = s.Privacy.Mode == OcrMode.Online ? 1 : 0;
         _runAtStartup.IsChecked = s.RunAtStartup;
         _runAsAdmin.IsChecked = s.RunAsAdmin;
 
@@ -1857,7 +1859,7 @@ public sealed class SettingsWindow : Window
             Avatar = _privacyAvatar.IsChecked == true,
             Name = _privacyName.IsChecked == true,
             LocalNames = _privacyLocalNames.IsChecked == true,
-            UseLlm = _privacyLlm.IsChecked == true,
+            Mode = _privacyMode.SelectedIndex == 1 ? OcrMode.Online : OcrMode.Offline,
         };
         _draft.RunAtStartup = _runAtStartup.IsChecked == true;
         _draft.RunAsAdmin = _runAsAdmin.IsChecked == true;

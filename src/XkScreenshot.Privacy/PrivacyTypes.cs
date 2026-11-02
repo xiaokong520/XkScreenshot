@@ -57,7 +57,9 @@ public sealed record PrivacyOptions(
     bool Avatar = true,
     bool Name = true,
     LlmAccess? Llm = null,
-    bool LocalNames = false)
+    bool LocalNames = false,
+    /// <summary>用户选了在线模式（哪怕 Key 没配好）。只用来在缺 Key 时给一句说明。</summary>
+    bool Online = false)
 {
     public static readonly PrivacyOptions Standard = new();
 
