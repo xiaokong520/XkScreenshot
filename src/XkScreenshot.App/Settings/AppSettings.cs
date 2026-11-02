@@ -238,8 +238,8 @@ public sealed class AppSettings
             Avatar: p.Avatar,
             Name: p.Name,
             Llm: llm,
-            // 两种模式互斥：在线用大模型找名字，离线才轮到分词词库
-            LocalNames: p.LocalNames && !online,
+            // 两种模式互斥：在线用大模型找名字，离线就自动用内置的分词词库
+            LocalNames: !online,
             Online: online);
     }
 }
@@ -258,12 +258,9 @@ public sealed record PrivacySettings
     public bool Avatar { get; set; } = true;
     public bool Name { get; set; } = true;
 
-    /// <summary>本地名字识别（结巴分词）。默认关：准确率一般，还会把品牌词当人名。</summary>
-    public bool LocalNames { get; set; }
-
     /// <summary>
-    /// 打码的识别方式。离线全部本地；在线只把「正文里的人名」交给大模型判断，
-    /// 文字和头像仍然是本地 PaddleOCR 在定位（在线 OCR 给不出行框）。
+    /// 打码的识别方式。离线全部本地（规则 + 内置分词词库）；在线只把「正文里的人名」
+    /// 交给大模型判断，文字和头像仍然是本地 PaddleOCR 在定位（在线 OCR 给不出行框）。
     /// </summary>
     public OcrMode Mode { get; set; } = OcrMode.Offline;
 }

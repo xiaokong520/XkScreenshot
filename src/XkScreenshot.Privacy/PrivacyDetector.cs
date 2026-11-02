@@ -149,8 +149,8 @@ public sealed class PrivacyDetector : IDisposable
             }
         }
 
-        // 本地分词识别的正文人名（默认关，比在线准不了多少，胜在不联网）
-        if (options.LocalNames && lines.Count > 0)
+        // 离线模式的分词人名：跟「名字」开关走，关掉名字就不该再跑一遍词库
+        if (options.Name && options.LocalNames && lines.Count > 0)
         {
             foreach (var (line, span) in LocalNameClassifier.Classify(lines, ct))
             {
