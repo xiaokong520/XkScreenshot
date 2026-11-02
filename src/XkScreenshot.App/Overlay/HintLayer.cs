@@ -23,6 +23,7 @@ public sealed class HintLayer : FrameworkElement
         new(["W", "A", "S", "D"], false, "光标移动 1 像素"),
         new(["←", "↑", "↓", "→"], false, "移动选区 / 选中的标注"),
         new(["L"], false, "长截图"),
+        new(["P"], false, "智能打码"),
         new(["滚轮"], false, "调粗细 / 字号 / 马赛克粒度"),
         new(["Delete"], false, "删除选中的标注"),
         new(["Ctrl", "A"], true, "选中整屏 / 整个桌面"),

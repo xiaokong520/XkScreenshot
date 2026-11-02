@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>XkScreenshot.Privacy</RootNamespace>
+    <UseWPF>true</UseWPF>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.27.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 人脸检测模型只有两百多 KB，直接打进程序集，不走 models/ 那套运行期下载 -->
+    <EmbeddedResource Include="Assets\face_detection_yunet_2023mar.onnx" LogicalName="yunet.onnx" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="XkScreenshot.Privacy.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\XkScreenshot.Core\XkScreenshot.Core.csproj" />
+    <ProjectReference Include="..\XkScreenshot.Ocr\XkScreenshot.Ocr.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -209,6 +209,11 @@ public static class Icons
         paths: ["m5 8 6 6", "m4 14 6-6 2-3", "M2 5h12", "M7 2h1",
                 "m22 22-5-10-5 10", "M14 18h6"]);
 
+    /// <summary>智能打码 —— 盾牌里打个勾，跟设置里「隐私」页的 <see cref="Shield"/> 呼应。</summary>
+    public static readonly Geometry ShieldCheck = Build(
+        paths: ["M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z",
+                "m9 12 2 2 4-4"]);
+
     /// <summary>OCR —— 四角取景框圈住几行文字，比 <see cref="ScanLine"/> 更明确是「认字」。</summary>
     public static readonly Geometry ScanText = Build(
         paths: ["M3 7V5a2 2 0 0 1 2-2h2", "M17 3h2a2 2 0 0 1 2 2v2",

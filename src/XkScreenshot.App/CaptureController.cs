@@ -11,6 +11,7 @@ using XkScreenshot.App.Scroll;
 using XkScreenshot.App.Settings;
 using XkScreenshot.Capture;
 using XkScreenshot.Core.Geometry;
+using XkScreenshot.Privacy;
 using XkScreenshot.Scroll;
 
 namespace XkScreenshot.App;
@@ -55,6 +56,12 @@ public sealed class CaptureController
     /// <summary>长截图的参数。设置界面改完直接换掉这一份。</summary>
     public ScrollOptions ScrollOptions { get; set; } = ScrollOptions.Standard;
 
+    /// <summary>智能打码用的检测器。PaddleOCR 没装时为 null，按 P 会提示先去下载。</summary>
+    public PrivacyDetector? Privacy { get; set; }
+
+    /// <summary>智能打码找哪几类。设置改完直接换掉这一份。</summary>
+    public PrivacyOptions PrivacyOptions { get; set; } = PrivacyOptions.Standard;
+
     /// <summary>
     /// 截过的区域，供覆盖层回溯。挂在这一层而不是会话里 ——
     /// 它要跨越一次次截图活下去，而会话每次都是新的。
@@ -66,6 +73,12 @@ public sealed class CaptureController
 
     /// <summary>有需要告知用户但不算错误的事情（比如长截图到上限停了）。</summary>
     public event Action<string>? Notice;
+
+    /// <summary>
+    /// 截图进行中顺口说一句的事（智能打码没找到东西之类）。跟 <see cref="Notice"/> 分开：
+    /// 这时覆盖层还铺着，弹个要点确定的对话框会把人从截图里拽出来。
+    /// </summary>
+    public event Action<string>? Hint;
 
     public void Start()
     {
@@ -80,10 +93,12 @@ public sealed class CaptureController
         var snapshot = DesktopSnapshot.Take(_capture, own);
         if (snapshot.Frames.Count == 0) return;
 
-        _session = new CaptureSession(snapshot, Defaults, History, LoadHistorySnapshot);
+        _session = new CaptureSession(snapshot, Defaults, History, LoadHistorySnapshot,
+            () => Privacy, () => PrivacyOptions);
         _session.Confirmed += OnConfirmed;
         _session.Cancelled += Cancel;
         _session.ScrollRequested += OnScrollRequested;
+        _session.Notice += message => Hint?.Invoke(message);
 
         foreach (var frame in snapshot.Frames)
         {

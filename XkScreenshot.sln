@@ -20,6 +20,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "XkScreenshot.Ocr", "src\XkS
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "XkScreenshot.Translate", "src\XkScreenshot.Translate\XkScreenshot.Translate.csproj", "{B1000000-0000-0000-0000-000000000002}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "XkScreenshot.Privacy", "src\XkScreenshot.Privacy\XkScreenshot.Privacy.csproj", "{B1000000-0000-0000-0000-000000000003}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -58,6 +60,10 @@ Global
 		{B1000000-0000-0000-0000-000000000002}.Debug|x64.Build.0 = Debug|x64
 		{B1000000-0000-0000-0000-000000000002}.Release|x64.ActiveCfg = Release|x64
 		{B1000000-0000-0000-0000-000000000002}.Release|x64.Build.0 = Release|x64
+		{B1000000-0000-0000-0000-000000000003}.Debug|x64.ActiveCfg = Debug|x64
+		{B1000000-0000-0000-0000-000000000003}.Debug|x64.Build.0 = Debug|x64
+		{B1000000-0000-0000-0000-000000000003}.Release|x64.ActiveCfg = Release|x64
+		{B1000000-0000-0000-0000-000000000003}.Release|x64.Build.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -68,5 +74,6 @@ Global
 		{5831BC00-E9C0-4D16-AB44-583CEF39314A} = {8F58A295-207A-4E5A-BBD6-B516A632C4A8}
 		{B1000000-0000-0000-0000-000000000001} = {8F58A295-207A-4E5A-BBD6-B516A632C4A8}
 		{B1000000-0000-0000-0000-000000000002} = {8F58A295-207A-4E5A-BBD6-B516A632C4A8}
+		{B1000000-0000-0000-0000-000000000003} = {8F58A295-207A-4E5A-BBD6-B516A632C4A8}
 	EndGlobalSection
 EndGlobal

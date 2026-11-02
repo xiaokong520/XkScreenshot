@@ -35,6 +35,17 @@ public sealed class AnnotationDocument
         Changed?.Invoke();
     }
 
+    /// <summary>一次加进一批，只算一步撤销 —— 智能打码一下生成十几块，撤销时理应一起消失。</summary>
+    public void AddRange(IEnumerable<Annotation> annotations)
+    {
+        var batch = annotations.ToList();
+        if (batch.Count == 0) return;
+
+        PushUndo();
+        _items.AddRange(batch);
+        Changed?.Invoke();
+    }
+
     public bool RemoveAt(int index)
     {
         if (index < 0 || index >= _items.Count) return false;

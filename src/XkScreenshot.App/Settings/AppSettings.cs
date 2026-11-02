@@ -5,7 +5,9 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using XkScreenshot.App.Overlay;
 using XkScreenshot.Core.Hotkeys;
+using XkScreenshot.Core.Llm;
 using XkScreenshot.Core.Native;
+using XkScreenshot.Privacy;
 using XkScreenshot.Scroll;
 
 namespace XkScreenshot.App.Settings;
@@ -115,6 +117,9 @@ public sealed class AppSettings
     public RecognitionSettings Recognition { get; set; } = new();
     public TranslationSettings Translation { get; set; } = new();
 
+    /// <summary>智能打码（选区工具条上的盾牌、快捷键 P）找哪几类。</summary>
+    public PrivacySettings Privacy { get; set; } = new();
+
     /// <summary>
     /// <see cref="SaveDirectory"/> 留空时实际用的目录。
     ///
@@ -197,8 +202,56 @@ public sealed class AppSettings
             ApiKey = Translation.ApiKey,
             Model = Translation.Model,
         };
+        c.Privacy = Privacy with { };
         return c;
     }
+
+    /// <summary>
+    /// 智能打码这一次找哪几类。在线名字识别要用户打开、而且「识别 / 翻译」页里填了 API Key 才启用 ——
+    /// 只开了开关却没配 Key，每次都去撞一个必然失败的请求再提示一遍，毫无意义。
+    /// </summary>
+    public PrivacyOptions ToPrivacyOptions(LlmApiClient? client)
+    {
+        var p = Privacy;
+        LlmAccess? llm = null;
+        if (p.UseLlm && client is not null && !string.IsNullOrWhiteSpace(Translation.ApiKey))
+        {
+            llm = new LlmAccess(client, new LlmApiConfig(
+                Translation.ApiProtocol == ApiProtocolSetting.Anthropic ? ApiProtocol.Anthropic : ApiProtocol.OpenAI,
+                Translation.ApiBase, Translation.ApiKey, Translation.Model));
+        }
+
+        // 一律写参数名：这个 record 的位置参数加过几次，按顺序传很容易把「头像」和「名字」弄反
+        return new PrivacyOptions(
+            Email: p.Email,
+            Phone: p.Phone,
+            IdCard: p.IdCard,
+            BankCard: p.BankCard,
+            IpAddress: p.IpAddress,
+            Secret: p.Secret,
+            Address: p.Address,
+            Avatar: p.Avatar,
+            Name: p.Name,
+            Llm: llm);
+    }
+}
+
+/// <summary>智能打码各类隐私信息的开关。IP 默认关：技术截图里的 IP 往往正是要给人看的内容。</summary>
+public sealed record PrivacySettings
+{
+    public bool Email { get; set; } = true;
+    public bool Phone { get; set; } = true;
+    public bool IdCard { get; set; } = true;
+    public bool BankCard { get; set; } = true;
+    public bool IpAddress { get; set; }
+    public bool Secret { get; set; } = true;
+    /// <summary>邮寄地址（省市区 + 街道门牌）。默认开：定位卡片、快递单上的地址就是要遮的东西。</summary>
+    public bool Address { get; set; } = true;
+    public bool Avatar { get; set; } = true;
+    public bool Name { get; set; } = true;
+
+    /// <summary>在线名字识别。会把识别出的文字发给在线 API，默认关。</summary>
+    public bool UseLlm { get; set; }
 }
 
 /// <summary>界面配色。System = 跟着系统的浅色/深色走。</summary>

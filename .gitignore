@@ -15,3 +15,5 @@ TODO.md
 models/
 history/
 pins/
+# 测试工程只在本地跑，不进仓库（sln 里也不引用）
+tests/

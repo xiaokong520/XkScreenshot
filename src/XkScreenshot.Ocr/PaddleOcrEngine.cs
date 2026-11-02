@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using Microsoft.ML.OnnxRuntime;
 using RapidOcrNet;
@@ -122,7 +123,13 @@ public sealed class PaddleOcrEngine : IOcrEngine, IDisposable
     /// </summary>
     private RapidOcr Load(string recPath, string keysPath)
     {
-        var options = new SessionOptions { LogSeverityLevel = OrtLoggingLevel.ORT_LOGGING_LEVEL_ERROR };
+        using var options = new SessionOptions
+        {
+            LogSeverityLevel = OrtLoggingLevel.ORT_LOGGING_LEVEL_ERROR,
+            // OCR 和人脸会同时推理，不能让每个会话各自占满全部 CPU。
+            IntraOpNumThreads = Math.Clamp(Environment.ProcessorCount / 2, 1, 8),
+            InterOpNumThreads = 1,
+        };
         options.EnableCpuMemArena = false;
 
         var ocr = new RapidOcr();
@@ -144,19 +151,26 @@ public sealed class PaddleOcrEngine : IOcrEngine, IDisposable
     }
 
     /// <inheritdoc />
-    public async Task<IReadOnlyList<OcrLine>> RecognizeAsync(BitmapSource image, CancellationToken ct = default)
+    public Task<IReadOnlyList<OcrLine>> RecognizeAsync(BitmapSource image, CancellationToken ct = default)
     {
-        using var original = ConvertToSkBitmap(image);
-        float scale = ResolveScale(original.Width, original.Height);
+        ct.ThrowIfCancellationRequested();
+        // WPF 位图跨线程前必须冻结。只做轻量的所有权交接；像素转换、放大都在后台。
+        if (!image.IsFrozen) image = (BitmapSource)image.GetAsFrozen();
+        var frozen = image;
+        return Task.Run(() =>
+        {
+            ct.ThrowIfCancellationRequested();
+            using var original = ConvertToSkBitmap(frozen);
+            float scale = ResolveScale(original.Width, original.Height);
+            ct.ThrowIfCancellationRequested();
+            if (scale <= 1.01f) return Recognize(original, 1f, ct);
 
-        using var input = scale <= 1.01f
-            ? original.Copy()
-            : original.Resize(
+            using var input = original.Resize(
                 new SKImageInfo((int)(original.Width * scale), (int)(original.Height * scale)),
-                // 三次插值：放大字形要的是笔画边缘平滑，双线性会把细笔画抹平
                 new SKSamplingOptions(SKCubicResampler.Mitchell));
-
-        return await Task.Run(() => Recognize(input, scale, ct), ct).ConfigureAwait(false);
+            ct.ThrowIfCancellationRequested();
+            return Recognize(input, scale, ct);
+        }, ct);
     }
 
     private IReadOnlyList<OcrLine> Recognize(SKBitmap input, float scale, CancellationToken ct)
@@ -166,12 +180,15 @@ public sealed class PaddleOcrEngine : IOcrEngine, IDisposable
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
+            ct.ThrowIfCancellationRequested();
 
             try
             {
                 _base ??= Load(_recPath, _keysPath);
 
+                ct.ThrowIfCancellationRequested();
                 var best = Run(_base, input, scale, options);
+                ct.ThrowIfCancellationRequested();
                 if (best.MeanScore >= SuspectMeanScore) return best.Lines;
 
                 // 默认模型读得吃力。可能是图本身糊，也可能这段文字它压根不认识 ——
@@ -181,6 +198,7 @@ public sealed class PaddleOcrEngine : IOcrEngine, IDisposable
                     ct.ThrowIfCancellationRequested();
 
                     var attempt = Run(GetPack(pack.Code), input, scale, options);
+                    ct.ThrowIfCancellationRequested();
                     if (attempt.TotalScore > best.TotalScore * SwitchMargin) best = attempt;
                 }
 
@@ -289,21 +307,28 @@ public sealed class PaddleOcrEngine : IOcrEngine, IDisposable
             if (points[i].Y > maxY) maxY = points[i].Y;
         }
 
-        return new PixelRect(
-            (int)(minX / scale), (int)(minY / scale),
-            (int)((maxX - minX) / scale), (int)((maxY - minY) / scale));
+        return PixelRect.FromLtrb(
+            (int)MathF.Floor(minX / scale), (int)MathF.Floor(minY / scale),
+            (int)MathF.Ceiling(maxX / scale), (int)MathF.Ceiling(maxY / scale));
     }
 
     // ---------------- 图像转换 ----------------
 
     private static SKBitmap ConvertToSkBitmap(BitmapSource source)
     {
-        // 编码为 PNG → SKBitmap 解码，兼容所有像素格式
-        using var ms = new MemoryStream();
-        var encoder = new PngBitmapEncoder();
-        encoder.Frames.Add(BitmapFrame.Create(source));
-        encoder.Save(ms);
-        ms.Position = 0;
-        return SKBitmap.Decode(ms);
+        // 直接拷贝像素，避免先压缩 PNG 再解压的 CPU 开销和临时大数组。
+        var bgra = source.Format == PixelFormats.Bgra32
+            ? source : new FormatConvertedBitmap(source, PixelFormats.Bgra32, null, 0);
+        var bitmap = new SKBitmap(bgra.PixelWidth, bgra.PixelHeight, SKColorType.Bgra8888, SKAlphaType.Unpremul);
+        try
+        {
+            bgra.CopyPixels(System.Windows.Int32Rect.Empty, bitmap.GetPixels(), bitmap.ByteCount, bitmap.RowBytes);
+            return bitmap;
+        }
+        catch
+        {
+            bitmap.Dispose();
+            throw;
+        }
     }
 }

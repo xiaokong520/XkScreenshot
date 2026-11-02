@@ -38,6 +38,22 @@ Windows 截图工具，基于 .NET 8 + WPF。除了框选、标注、贴图这�
 
 源语种按文字系统自动判定，目标语种在识别结果窗口里选择。同样支持切换到在线大模型。
 
+### 智能打码
+
+选好区域后按 P（或点工具条上的盾牌），自动给选区里的隐私信息打马赛克：邮箱、手机号、身份证号
+（需通过校验码）、银行卡号（需通过 Luhn 校验）、API Key / Token、详细地址（省市区 + 街道门牌）、
+头像（含右侧自己发的消息）、名字，IP 地址可选。
+一次生成的马赛克只占一步撤销，误判的单块可以选中后按 Delete 删掉。
+
+识别在后台进行，工具条会显示当前阶段；再次按 P 或点击盾牌可取消，重新框选会自动丢弃旧结果。
+同一选区、同一设置下再次打码会复用上次成功结果，不重复识别，也不会叠加已完全覆盖的区域。
+文字边界会优先按原图笔画校准，减少邮箱、汉字、手机号混排时多盖旁边文字；小字或粘连严重、无法可靠校准时保留保守范围，避免漏码。
+自动识别可能遗漏或误判，分享前仍请人工检查。
+
+文字识别固定用本地 PaddleOCR（在线识别模式下也一样），人脸检测用内嵌的 YuNet 模型，全程在本地
+完成。设置里可以打开「在线名字识别」，把识别出的文字（不含图片）发给在线大模型找出正文里的人名，
+默认关闭。
+
 ### 贴图
 
 把选区钉在屏幕上，可以拖动、滚轮缩放、Ctrl+滚轮调透明度、Del 关闭，右键菜单可复制、另存、
@@ -101,6 +117,7 @@ Program Files 会导致下载失败。
 | W A S D | 光标移动 1 像素 |
 | ← ↑ ↓ → | 移动选区 / 选中的标注 |
 | L | 长截图 |
+| P | 智能打码 |
 | 滚轮 | 调粗细 / 字号 / 马赛克粒度 |
 | Delete | 删除选中的标注 |
 | Ctrl + A | 选中整屏 / 整个桌面 |
@@ -150,6 +167,7 @@ ISCC.exe installer\XkScreenshot.iss
 | `XkScreenshot.Scroll` | 滚动驱动、帧比对、拼接、预览条 |
 | `XkScreenshot.Ocr` | `IOcrEngine` 抽象、离线 PaddleOCR 引擎、在线 LLM 引擎、语言包 |
 | `XkScreenshot.Translate` | `ITranslator` 抽象、Bergamot 离线引擎、在线 LLM 引擎、缓存 |
+| `XkScreenshot.Privacy` | 智能打码：文字规则、人脸与头像检测、名字识别 |
 | `XkScreenshot.Pin` | 贴图窗口与生命周期管理 |
 | `XkScreenshot.App` | WPF 宿主、托盘、覆盖层交互、设置界面、输出（剪贴板/文件） |
 
@@ -190,6 +208,7 @@ ISCC.exe installer\XkScreenshot.iss
 | [PP-OCRv5](https://huggingface.co/PaddlePaddle) 模型 | 识别模型与语言包，取自 PaddlePaddle 官方组织 |
 | [BergamotTranslatorSharp](https://github.com/Freeesia/BergamotTranslatorSharp)（MPL-2.0） | 离线翻译引擎 |
 | [Bergamot / Firefox Translations](https://github.com/mozilla/translations) 模型 | 翻译模型 |
+| [YuNet](https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet)（MIT） | 人脸检测模型，内嵌在 `XkScreenshot.Privacy` |
 | [Lucide](https://lucide.dev)（MIT） | 界面图标，以矢量路径内嵌在 `Ui/Icons.cs` |
 | [Inno Setup](https://jrsoftware.org/isinfo.php) | 打安装包 |
 

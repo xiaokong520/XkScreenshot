@@ -266,6 +266,8 @@ public sealed class OverlayWindow : Window
         _toolbarLayer.CanUndo = _session.Annotations.CanUndo;
         _toolbarLayer.CanRedo = _session.Annotations.CanRedo;
         _toolbarLayer.CanDelete = _session.SelectedAnnotation >= 0;
+        _toolbarLayer.Busy = _session.AutoMosaicBusy;
+        _toolbarLayer.BusyText = _session.AutoMosaicStatus;
 
         // 子工具栏跟着「选中的标注 / 当前工具」走，不是跟着工具走：
         // 选中一个画好的图形，调的就该是它的参数
@@ -624,6 +626,7 @@ public sealed class OverlayWindow : Window
             case ToolbarCommand.Scroll: _session.RequestScroll(); break;
             case ToolbarCommand.Ocr: _session.Confirm(CaptureAction.Ocr); break;
             case ToolbarCommand.Translate: _session.Confirm(CaptureAction.Translate); break;
+            case ToolbarCommand.AutoMosaic: _session.AutoMosaic(); break;
             case ToolbarCommand.Cancel: _session.Escape(); break;
         }
     }
@@ -858,6 +861,10 @@ public sealed class OverlayWindow : Window
 
             case Key.G:
                 _session.Confirm(CaptureAction.Translate);
+                break;
+
+            case Key.P:
+                if (!e.IsRepeat) _session.AutoMosaic();
                 break;
 
             // 回溯截屏区域历史。挑 , . 是因为它俩在这套覆盖层里还没人用，

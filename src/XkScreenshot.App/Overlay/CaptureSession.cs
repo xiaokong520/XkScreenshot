@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Threading.Tasks;
+using System.Windows.Threading;
 using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -12,6 +14,7 @@ using XkScreenshot.Capture;
 using XkScreenshot.Core.Geometry;
 using XkScreenshot.Core.Monitors;
 using XkScreenshot.Core.Windows;
+using XkScreenshot.Privacy;
 
 namespace XkScreenshot.App.Overlay;
 
@@ -140,7 +143,9 @@ public sealed class CaptureSession : IDisposable
         DesktopSnapshot snapshot,
         CaptureDefaults? defaults = null,
         CaptureHistory? history = null,
-        Func<HistoryEntry, DesktopSnapshot?>? historyLoader = null)
+        Func<HistoryEntry, DesktopSnapshot?>? historyLoader = null,
+        Func<PrivacyDetector?>? privacy = null,
+        Func<PrivacyOptions>? privacyOptions = null)
     {
         var d = defaults ?? CaptureDefaults.Standard;
 
@@ -148,6 +153,8 @@ public sealed class CaptureSession : IDisposable
         LiveSnapshot = snapshot;
         _history = history;
         _historyLoader = historyLoader;
+        _privacy = privacy;
+        _privacyOptions = privacyOptions;
         DefaultAction = d.Action;
         ShowHints = d.ShowHints;
         ElementMode = d.ElementMode;
@@ -306,6 +313,9 @@ public sealed class CaptureSession : IDisposable
 
     /// <summary>用户请求从当前选区开始长截图。参数是选区在虚拟屏幕上的物理像素坐标。</summary>
     public event Action<PixelRect>? ScrollRequested;
+
+    /// <summary>需要跟用户说一句的事（智能打码没找到东西、在线识别失败之类），由外面弹成提示。</summary>
+    public event Action<string>? Notice;
 
     public void UpdateCursor(PixelPoint cursor)
     {
@@ -624,6 +634,144 @@ public sealed class CaptureSession : IDisposable
         return _mosaicSource;
     }
 
+    // ---------------- 智能打码 ----------------
+
+    private readonly Func<PrivacyDetector?>? _privacy;
+    private readonly Func<PrivacyOptions>? _privacyOptions;
+    private System.Threading.CancellationTokenSource? _autoCts;
+    private bool _disposed;
+    private AutoMosaicCache? _autoCache;
+    private sealed record AutoMosaicCache(DesktopSnapshot Snapshot, PixelRect Selection,
+        PrivacyDetector Detector, PrivacyOptions Options, PrivacyReport Report);
+
+    public bool AutoMosaicBusy => _autoCts is not null;
+    public string? AutoMosaicStatus { get; private set; }
+
+    /// <summary>后台检测；再次点击可取消。同一画面、选区和选项复用上一次成功结果。</summary>
+    public async void AutoMosaic()
+    {
+        if (_disposed) return;
+        if (AutoMosaicBusy)
+        {
+            CancelAutoMosaic();
+            Changed?.Invoke();
+            return;
+        }
+        if (Selection.IsEmpty || Phase != SelectionPhase.Settled) return;
+
+        var detector = _privacy?.Invoke();
+        if (detector is null)
+        {
+            Notice?.Invoke("智能打码需要先在设置里下载 PaddleOCR 模型");
+            return;
+        }
+        var options = _privacyOptions?.Invoke() ?? PrivacyOptions.Standard;
+        if (!options.NeedsText)
+        {
+            Notice?.Invoke("请先在设置里选择需要打码的隐私类型");
+            return;
+        }
+
+        var startSelection = Selection;
+        var startSnapshot = Snapshot;
+        var cts = new System.Threading.CancellationTokenSource();
+        _autoCts = cts;
+        AutoMosaicStatus = "正在准备识别";
+        Changed?.Invoke();
+
+        bool IsCurrent() => !_disposed && ReferenceEquals(_autoCts, cts) && !cts.IsCancellationRequested
+            && Selection == startSelection && ReferenceEquals(Snapshot, startSnapshot);
+
+        try
+        {
+            // 先让按钮和状态画出来，再开始准备图像。
+            await Dispatcher.Yield(DispatcherPriority.Background);
+            if (!IsCurrent()) return;
+
+            PrivacyReport report;
+            if (_autoCache is { } cache && ReferenceEquals(cache.Snapshot, startSnapshot)
+                && cache.Selection == startSelection && ReferenceEquals(cache.Detector, detector)
+                && cache.Options == options)
+            {
+                report = cache.Report;
+            }
+            else
+            {
+                var source = (MosaicSource)MosaicContext();
+                var pixels = new PixelBuffer(source.Bgra, source.Width, source.Height, source.Stride);
+                var progress = new Progress<PrivacyStage>(stage =>
+                {
+                    if (!IsCurrent()) return;
+                    AutoMosaicStatus = stage switch
+                    {
+                        PrivacyStage.Locating => "正在定位打码区域",
+                        PrivacyStage.OnlineNames => "正在在线识别名字（最长 15 秒）",
+                        _ => "正在本地识别隐私",
+                    };
+                    Changed?.Invoke();
+                });
+                report = await Task.Run(async () =>
+                {
+                    cts.Token.ThrowIfCancellationRequested();
+                    // 复用已有原始像素；不再裁第二遍屏，也不在 UI 线程复制整张图。
+                    var image = BitmapSource.Create(source.Width, source.Height, 96, 96,
+                        PixelFormats.Bgra32, null, source.Bgra, source.Stride);
+                    image.Freeze();
+                    return await detector.DetectAsync(image, pixels, options, cts.Token, progress)
+                        .ConfigureAwait(false);
+                }, cts.Token);
+                if (!IsCurrent()) return;
+                // 在线失败时允许下次重试，而不是永远复用降级结果。
+                if (report.Notice is null)
+                    _autoCache = new(startSnapshot, startSelection, detector, options, report);
+            }
+            if (!IsCurrent()) return;
+
+            var existing = Annotations.Items.OfType<MosaicAnnotation>().Select(m => m.Area).ToList();
+            var fresh = report.Regions
+                .Select(r => new Rect(r.Bounds.X, r.Bounds.Y, r.Bounds.Width, r.Bounds.Height))
+                // 遮住 80% 仍可能露出几位号码，必须完全覆盖才跳过。
+                .Where(r => !existing.Any(e => e.Contains(r)))
+                .ToList();
+
+            if (fresh.Count > 0)
+            {
+                FlushStyleEdit();
+                Annotations.AddRange(fresh.Select(r => new MosaicAnnotation
+                {
+                    Area = r, Block = MosaicBlock, Stroke = StrokeColor, Thickness = StrokeThickness,
+                }));
+            }
+
+            if (report.Notice is not null) Notice?.Invoke(report.Notice);
+            else if (report.Regions.Count == 0) Notice?.Invoke("未识别到隐私信息，分享前请人工检查");
+            else if (fresh.Count == 0) Notice?.Invoke("识别出的隐私区域已全部打码");
+            else Notice?.Invoke($"已打码 {fresh.Count} 处，可撤销；分享前请检查是否有遗漏");
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            if (IsCurrent()) Notice?.Invoke("智能打码失败：" + ex.Message);
+        }
+        finally
+        {
+            if (ReferenceEquals(_autoCts, cts))
+            {
+                _autoCts = null;
+                AutoMosaicStatus = null;
+                if (!_disposed) Changed?.Invoke();
+            }
+            cts.Dispose();
+        }
+    }
+
+    private void CancelAutoMosaic()
+    {
+        _autoCts?.Cancel();
+        _autoCts = null;
+        AutoMosaicStatus = null;
+    }
+
     /// <summary>按当前格式把光标处的颜色格式化成可复制的文本。</summary>
     public string FormatCursorColor() => ColorFormat switch
     {
@@ -777,6 +925,8 @@ public sealed class CaptureSession : IDisposable
     {
         if (ReferenceEquals(next, Snapshot)) return;
 
+        CancelAutoMosaic();
+        _autoCache = null;
         Snapshot = next;
 
         // 马赛克缓存是按选区键的，换了画面同一个选区对应的像素已经不是那一批了
@@ -1099,6 +1249,7 @@ public sealed class CaptureSession : IDisposable
     /// </summary>
     private void StartFreshSelection(PixelRect next)
     {
+        _autoCache = null;
         Selection = next;
         ActiveTool = ToolKind.None;
         SelectedAnnotation = -1;
@@ -1110,6 +1261,8 @@ public sealed class CaptureSession : IDisposable
         _styleOrigin = null;
         _styleIndex = -1;
         Annotations.Reset();
+        // 还在跑的智能打码是给旧选区算的
+        CancelAutoMosaic();
     }
 
     /// <summary>
@@ -1121,6 +1274,8 @@ public sealed class CaptureSession : IDisposable
     {
         if (next == Selection) return;
 
+        CancelAutoMosaic();
+        _autoCache = null;
         Annotations.Rebase(Selection.X - next.X, Selection.Y - next.Y);
         Selection = next;
     }
@@ -1269,7 +1424,10 @@ public sealed class CaptureSession : IDisposable
     /// </summary>
     public void Dispose()
     {
+        _disposed = true;
+        _autoCache = null;
         _probe.Updated -= OnProbeUpdated;
         _probe.Dispose();
+        CancelAutoMosaic();
     }
 }

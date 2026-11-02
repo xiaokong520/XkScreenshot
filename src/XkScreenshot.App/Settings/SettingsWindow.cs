@@ -105,6 +105,18 @@ public sealed class SettingsWindow : Window
     private readonly ToggleButton _showHints = new();
     private readonly ToggleButton _elementMode = new();
     private readonly ToggleButton _restorePins = new();
+
+    // 智能打码
+    private readonly ToggleButton _privacyEmail = new();
+    private readonly ToggleButton _privacyPhone = new();
+    private readonly ToggleButton _privacyIdCard = new();
+    private readonly ToggleButton _privacyBankCard = new();
+    private readonly ToggleButton _privacyIp = new();
+    private readonly ToggleButton _privacySecret = new();
+    private readonly ToggleButton _privacyAddress = new();
+    private readonly ToggleButton _privacyAvatar = new();
+    private readonly ToggleButton _privacyName = new();
+    private readonly ToggleButton _privacyLlm = new();
     private readonly ToggleButton _runAtStartup = new();
     private readonly ToggleButton _runAsAdmin = new();
     private readonly ComboBox _theme = new() { Width = 168 };
@@ -324,7 +336,9 @@ public sealed class SettingsWindow : Window
         _apiProtocol.Items.Add("Anthropic");
         foreach (var toggle in new[]
                  { _saveWithoutPrompt, _showToasts, _showHints, _elementMode, _restorePins,
-                   _runAtStartup, _runAsAdmin })
+                   _runAtStartup, _runAsAdmin,
+                   _privacyEmail, _privacyPhone, _privacyIdCard, _privacyBankCard, _privacyIp,
+                   _privacySecret, _privacyAddress, _privacyAvatar, _privacyName, _privacyLlm })
             toggle.Style = (Style)FindResource("ToggleSwitch");
 
         // 权限被系统钉死的时候这个开关无从拨起，直接灰掉并挂一句说明
@@ -517,6 +531,23 @@ public sealed class SettingsWindow : Window
             StackedCard(Icons.ArrowRightLeft, "离线翻译语言",
                 "每种 30~120 MB。非英语互译靠英语中转，两边都要装。",
                 LangPairRow()));
+
+        AddPage(Icons.ShieldCheck, "隐私打码",
+            Card(Icons.Info, "邮箱", "截图时按 P 或点工具条上的盾牌，自动给下面打开的几类打上马赛克。"
+                + "文字识别固定用本地 PaddleOCR，要先在「识别 / 翻译」页下载模型。", _privacyEmail),
+            Card(Icons.Info, "手机号", null, _privacyPhone),
+            Card(Icons.Info, "身份证号", "只认校验码对得上的，订单号之类的长数字不会被误伤。", _privacyIdCard),
+            Card(Icons.Info, "银行卡号", "只认通过 Luhn 校验的。", _privacyBankCard),
+            Card(Icons.Info, "IP 地址", "默认关：技术截图里的 IP 往往正是要给人看的内容。", _privacyIp),
+            Card(Icons.Key, "密钥与令牌", "API Key、GitHub Token、JWT，以及「密码：」后面的内容。", _privacySecret),
+            Card(Icons.Info, "详细地址",
+                "「省 + 市 + 区」再带街道门牌的邮寄地址，定位卡片、快递单上最常见。"
+                + "只说「在哪个区」的句子不会动。", _privacyAddress),
+            Card(Icons.Camera, "头像", "真人照片和列表里成排出现的头像。", _privacyAvatar),
+            Card(Icons.Type, "名字", "「发件人：」这类标签后面、@ 后面、头像旁边的名字。", _privacyName),
+            Card(Icons.Bot, "在线名字识别",
+                "用「识别 / 翻译」页的 API 认出正文里提到的人名、机构名。"
+                + "会把识别出的文字发送到在线 API（不发图片）。", _privacyLlm));
 
         AddPage(Icons.Folder, "保存",
             StackedCard(Icons.Folder, "默认目录",
@@ -1175,6 +1206,16 @@ public sealed class SettingsWindow : Window
         _showHints.IsChecked = s.ShowHints;
         _elementMode.IsChecked = s.ElementMode;
         _restorePins.IsChecked = s.RestorePins;
+        _privacyEmail.IsChecked = s.Privacy.Email;
+        _privacyPhone.IsChecked = s.Privacy.Phone;
+        _privacyIdCard.IsChecked = s.Privacy.IdCard;
+        _privacyBankCard.IsChecked = s.Privacy.BankCard;
+        _privacyIp.IsChecked = s.Privacy.IpAddress;
+        _privacySecret.IsChecked = s.Privacy.Secret;
+        _privacyAddress.IsChecked = s.Privacy.Address;
+        _privacyAvatar.IsChecked = s.Privacy.Avatar;
+        _privacyName.IsChecked = s.Privacy.Name;
+        _privacyLlm.IsChecked = s.Privacy.UseLlm;
         _runAtStartup.IsChecked = s.RunAtStartup;
         _runAsAdmin.IsChecked = s.RunAsAdmin;
 
@@ -1799,6 +1840,19 @@ public sealed class SettingsWindow : Window
         _draft.ShowHints = _showHints.IsChecked == true;
         _draft.ElementMode = _elementMode.IsChecked == true;
         _draft.RestorePins = _restorePins.IsChecked == true;
+        _draft.Privacy = new PrivacySettings
+        {
+            Email = _privacyEmail.IsChecked == true,
+            Phone = _privacyPhone.IsChecked == true,
+            IdCard = _privacyIdCard.IsChecked == true,
+            BankCard = _privacyBankCard.IsChecked == true,
+            IpAddress = _privacyIp.IsChecked == true,
+            Secret = _privacySecret.IsChecked == true,
+            Address = _privacyAddress.IsChecked == true,
+            Avatar = _privacyAvatar.IsChecked == true,
+            Name = _privacyName.IsChecked == true,
+            UseLlm = _privacyLlm.IsChecked == true,
+        };
         _draft.RunAtStartup = _runAtStartup.IsChecked == true;
         _draft.RunAsAdmin = _runAsAdmin.IsChecked == true;
         _draft.Theme = Themes[Math.Max(0, _theme.SelectedIndex)].Mode;

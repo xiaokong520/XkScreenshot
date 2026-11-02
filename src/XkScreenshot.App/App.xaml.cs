@@ -18,6 +18,7 @@ using XkScreenshot.Core.Hotkeys;
 using XkScreenshot.Core.Llm;
 using XkScreenshot.Core.Native;
 using XkScreenshot.Ocr;
+using XkScreenshot.Privacy;
 using XkScreenshot.Translate;
 using WinForms = System.Windows.Forms;
 
@@ -48,6 +49,8 @@ public partial class App : Application
     /// <summary>启动早期出的岔子。那会儿托盘图标还没建起来，只能先记着，等有地方说了再说。</summary>
     private string? _startupNotice;
     private IOcrEngine? _ocrEngine;
+    private PaddleOcrEngine? _paddle;
+    private PrivacyDetector? _privacy;
     private ITranslator? _translator;
     private TranslationCache? _translationCache;
     private LlmApiClient? _llmClient;
@@ -82,6 +85,7 @@ public partial class App : Application
         _controller = new CaptureController(new GdiScreenCapture());
         _controller.Captured += OnCaptured;
         _controller.Notice += ShowWarning;
+        _controller.Hint += message => ShowToast(message, kind: ToastKind.Info);
         _controller.History.Changed += SaveHistory;
 
         _pins.CopyRequested += CopyImage;
@@ -536,7 +540,30 @@ public partial class App : Application
         string bergamotDir = System.IO.Path.Combine(modelRoot, BergamotModelDir.FolderName);
 
         // OCR engine
-        (_ocrEngine as IDisposable)?.Dispose();
+        // PaddleOCR 单独攥着：智能打码不管识别走在线还是离线，都只用它 ——
+        // 离线模式下文字识别直接复用同一个实例，免得两份会话一起占内存
+        if (!ReferenceEquals(_ocrEngine, _paddle)) (_ocrEngine as IDisposable)?.Dispose();
+        _ocrEngine = null;
+        _privacy?.Dispose();
+        _privacy = null;
+        _paddle?.Dispose();
+        _paddle = null;
+
+        if (System.IO.Directory.Exists(paddleOcrDir))
+        {
+            try
+            {
+                _paddle = new PaddleOcrEngine(paddleOcrDir);
+                _privacy = new PrivacyDetector(_paddle);
+            }
+            catch (Exception ex)
+            {
+                // 在线模式下用户不一定在意本地模型，只在离线识别真要用它时才吵
+                if (_settings.Recognition.Mode != OcrMode.Online)
+                    ShowWarning("PaddleOCR 初始化失败：" + ex.Message);
+            }
+        }
+
         if (_settings.Recognition.Mode == OcrMode.Online)
         {
             var config = new LlmApiConfig(
@@ -550,17 +577,14 @@ public partial class App : Application
         }
         else
         {
-            if (System.IO.Directory.Exists(paddleOcrDir))
-            {
-                try
-                {
-                    _ocrEngine = new PaddleOcrEngine(paddleOcrDir);
-                }
-                catch (Exception ex)
-                {
-                    ShowWarning("PaddleOCR 初始化失败：" + ex.Message);
-                }
-            }
+            _ocrEngine = _paddle;
+        }
+
+        if (_controller is not null)
+        {
+            _controller.Privacy = _privacy;
+            if (_settings.Privacy.UseLlm) _llmClient ??= new LlmApiClient();
+            _controller.PrivacyOptions = _settings.ToPrivacyOptions(_llmClient);
         }
 
         // Translation engine
@@ -848,7 +872,9 @@ public partial class App : Application
     protected override void OnExit(ExitEventArgs e)
     {
         _controller?.AbortScroll();
-        (_ocrEngine as IDisposable)?.Dispose();
+        if (!ReferenceEquals(_ocrEngine, _paddle)) (_ocrEngine as IDisposable)?.Dispose();
+        _privacy?.Dispose();
+        _paddle?.Dispose();
         (_translator as IDisposable)?.Dispose();
         _llmClient?.Dispose();
         _hotkeys?.Dispose();
