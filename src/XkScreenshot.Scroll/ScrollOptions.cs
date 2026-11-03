@@ -35,58 +35,121 @@ public enum ScrollFinishReason
 /// <summary>
 /// 长截图的可调项。全部来自设置界面。
 ///
-/// 抓帧节奏（多久抓一帧、等多久算稳定）不在这里 —— 那几个数是拼接能不能成立的前提，
-/// 不是口味问题，调错了功能直接坏掉，见 <see cref="ScrollTiming"/>。
+/// 抓帧节奏和滚动速度都不在这里：它们是拼接能不能成立的前提，不是口味问题 ——
+/// 抓太慢、滚太快，相邻两帧就没有重叠，接不上。所以那几个数写在 <see cref="ScrollTiming"/>，
+/// 不接受用户随手改。
 /// </summary>
-public sealed record ScrollOptions(ScrollMode Mode, int WheelNotches, int MaxHeight)
+public sealed record ScrollOptions(ScrollMode Mode, int MaxHeight)
 {
     public const int MinHeightLimit = 1000;
     public const int MaxHeightLimit = 60000;
 
-    /// <summary>自动模式每次滚多少格。1 格 ≈ 三行字 ≈ 50px，慢慢截、帧间重叠最大。</summary>
-    internal const int DefaultWheelNotches = 1;
-
-    public static readonly ScrollOptions Standard = new(ScrollMode.Auto, DefaultWheelNotches, 20000);
+    public static readonly ScrollOptions Standard = new(ScrollMode.Auto, 20000);
 
     /// <summary>把设置里可能被人手改坏的值夹回可用范围。</summary>
     public ScrollOptions Sanitized() => new(
         Mode,
-        Math.Clamp(WheelNotches, 1, 10),
         Math.Clamp(MaxHeight, MinHeightLimit, MaxHeightLimit));
 }
 
-/// <summary>抓帧与滚动的节奏。</summary>
+/// <summary>
+/// 自动滚动的节奏。
+///
+/// ## 为什么是「一直慢慢滚」而不是「滚一下、等停、抓一张」
+///
+/// 后者每一屏都要等两件事：画面开始动（确认滚轮生效）、画面停下来（确认真抓到了完整的一屏）。
+/// 两段等待加起来通常比滚动本身还长，屏幕上看到的就是「顿一下、滑一段、再顿一下」。
+/// 手机上的长截图不这么干：它一直匀速滑，一边滑一边抽帧，看起来是在「扫」过整页。
+///
+/// 于是滚轮按 <see cref="PumpMs"/> 的节拍连续发小量，抓帧按 <see cref="CaptureMs"/> 自己的节奏，
+/// 两件事彻底分开。抓到的每一帧都是滚动过程中的瞬时切片 —— 拼接器要的只是「和前面有足够重叠」，
+/// 并不要求画面静止。
+///
+/// ## 速度为什么由程序自己校正
+///
+/// 一格滚轮在不同应用里是 40 到 120 像素（记事本三行、浏览器一百来像素、列表两三个条目），
+/// 同一个发送速率发出去，实际快慢能差三倍。所以这里只给一个目标速度
+/// <see cref="CruisePixelsPerSecond"/>，发多少由引擎按实测速度反推。
+/// </summary>
 public static class ScrollTiming
 {
-    /// <summary>抓帧间隔。60ms 上下：再快只是白抓，再慢用户会觉得滚一屏要等半天。</summary>
-    public const int TickMs = 60;
+    /// <summary>主循环的节拍。16ms ≈ 60Hz，再密也只是白醒一趟。</summary>
+    public const int PumpMs = 16;
 
     /// <summary>
-    /// 发完滚轮后等画面开始动的上限。超时就当成「这一下没滚动」。
+    /// 抓帧间隔。
     ///
-    /// 不能只看一帧就下结论：滚轮到目标进程要走一圈输入队列，平滑滚动的应用
-    /// 更是要过几十毫秒才开始动，那时候画面确实还和刚才一模一样。
+    /// 连续滚动时它同时决定「一帧跨多远」：巡航速度下就是二十几像素，
+    /// 相对一屏还有九成以上的重叠，怎么都对得上。
     /// </summary>
-    public const int ChangeTimeoutMs = 700;
+    public const int CaptureMs = 60;
 
     /// <summary>
-    /// 画面开始动之后，等它停下来的上限。超时就按当前这一帧硬拼。
+    /// 巡航速度，物理像素/秒。
     ///
-    /// 有这条兜底是因为「稳定」在有些页面上永远等不到：正在播的视频、跑马灯、
-    /// 一秒一跳的时钟，都会让每一帧都跟上一帧不一样。宁可拼一张可能带残影的，
-    /// 也不能卡在那里一动不动。
+    /// 按手机长截图的观感折算：大约三秒滚一屏，一屏按八百像素算。
+    /// 再快用户就看不清滚的是什么，也更容易一帧跨过一屏、接不上。
+    /// 这是观感参数，不是技术参数 —— 想改就改这一个数，起手速率会跟着算。
+    /// </summary>
+    public const int CruisePixelsPerSecond = 260;
+
+    /// <summary>
+    /// 每次发出去的滚轮量（单位 1/120 格，20 就是 1/6 格）。
+    ///
+    /// 不满一格的量是最顺的那种发法（见 <see cref="ScrollDriver.Wheel"/>），
+    /// 但也别拆得太碎：有些控件是「收到一条消息就滚一格」，拆成六份它就会滚六倍。
+    /// 这个量在「够细」和「别太多条消息」之间取了个中间值。
+    /// </summary>
+    public const int WheelUnits = 20;
+
+    /// <summary>
+    /// 起手速率（格/秒），按「一格约一百像素」估算。
+    ///
+    /// 不写死成一个数，是因为写死了第一个测速窗口之前会明显偏离目标：
+    /// 目标 260px/s 却按每秒 4 格起手（约 400px/s），开头那一秒就是偏快的，
+    /// 用户看到的是「起步猛一下、然后才慢下来」。
+    /// </summary>
+    public const double InitialNotchesPerSecond = CruisePixelsPerSecond / 100.0;
+
+    public const double MinNotchesPerSecond = 0.8;
+    public const double MaxNotchesPerSecond = 12.0;
+
+    /// <summary>测速窗口。太短会被「三行一跳」这种量化噪声带偏。</summary>
+    public const int SpeedWindowMs = 500;
+
+    /// <summary>速率校正的力度（0~1）。大了会来回抖，小了要好几秒才收敛。</summary>
+    public const double SpeedGain = 0.4;
+
+    /// <summary>一直没动多久之后，按「这个控件只认整格」试一次整格滚轮。</summary>
+    public const int ProbeAfterMs = 800;
+
+    /// <summary>
+    /// 自动模式连着多久没有新内容就判定到底。
+    ///
+    /// 给到两秒是有意的：懒加载的页面常常要缓一下才把下一屏放出来，
+    /// 而「以为到底了」比「多等一秒」难受得多。
+    /// </summary>
+    public const int BottomIdleMs = 2000;
+
+    /// <summary>连着几帧对不上就停手（只对自动模式；手动模式由用户决定滚到哪儿）。</summary>
+    public const int MatchLostLimit = 4;
+
+    /// <summary>
+    /// 「等画面停稳」的超时。有这条兜底是因为稳定在有些页面上永远等不到：
+    /// 正在播的视频、跑马灯、一秒一跳的时钟，每一帧都跟上一帧不一样。
     /// </summary>
     public const int StableTimeoutMs = 900;
 
-    /// <summary>自动模式下连着几次滚不动就判定到底。</summary>
-    public const int BottomConfirmTries = 3;
-
-    /// <summary>连着几帧对不上就停手。</summary>
-    public const int MatchLostLimit = 6;
-
-    /// <summary>自动模式接管鼠标后，光标偏离锚点超过这个距离就认为用户要自己来。</summary>
-    public const int HandoverDistancePx = 12;
+    /// <summary>每次退到「等停稳」把速率压掉多少 —— 追不上就说明这一格跨得太远。</summary>
+    public const double SettleSlowdown = 0.75;
 
     /// <summary>刚开始的这段时间不判定「用户动了鼠标」—— 那多半是他刚点完按钮手还没停。</summary>
     public const int HandoverGraceMs = 500;
+
+    /// <summary>
+    /// 光标进出选区之后，要稳定多久才当真。
+    ///
+    /// 光标在选区边界上来回蹭的时候，别让「暂停 / 继续」跟着抖。
+    /// </summary>
+    public const int PointerSettleMs = 250;
 }

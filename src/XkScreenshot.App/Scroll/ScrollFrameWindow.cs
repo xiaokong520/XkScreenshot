@@ -2,6 +2,7 @@ using System;
 using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Media;
+using XkScreenshot.App.Overlay;
 using XkScreenshot.Core.Geometry;
 using XkScreenshot.Core.Native;
 
@@ -71,7 +72,7 @@ internal sealed class ScrollFrameWindow : Window
 
     private readonly PixelRect _outer;
 
-    public ScrollFrameWindow(PixelRect region)
+    public ScrollFrameWindow(PixelRect region, OverlayPalette palette)
     {
         _outer = new PixelRect(
             region.X - BorderPx, region.Y - BorderPx,
@@ -86,7 +87,7 @@ internal sealed class ScrollFrameWindow : Window
         Background = Brushes.Transparent;
         WindowStartupLocation = WindowStartupLocation.Manual;
         IsHitTestVisible = false;
-        Content = new Ring { Thickness = BorderPx };
+        Content = new Ring { Thickness = BorderPx, Brush = palette.Accent };
 
         SourceInitialized += (_, _) =>
         {
@@ -98,11 +99,14 @@ internal sealed class ScrollFrameWindow : Window
 
     private sealed class Ring : FrameworkElement
     {
-        private static readonly Pen BorderPen =
-            Freeze(new Pen(new SolidColorBrush(Color.FromArgb(0xE0, 0x3B, 0x9E, 0xFF)), 1));
-
         /// <summary>边框的物理像素宽度。画的时候按本窗口的 DPI 折成 DIP。</summary>
         public int Thickness { get; init; } = 3;
+
+        /// <summary>
+        /// 和覆盖层强调色同一个值（跟着主题走）。早先这里是写死的亮蓝，
+        /// 浅色主题下那圈框就它一个刺眼。
+        /// </summary>
+        public Brush Brush { get; init; } = Brushes.DodgerBlue;
 
         public Ring() => IsHitTestVisible = false;
 
@@ -112,8 +116,7 @@ internal sealed class ScrollFrameWindow : Window
             if (scale <= 0) scale = 1;
 
             double t = Thickness / scale;
-            var pen = BorderPen.Clone();
-            pen.Thickness = t;
+            var pen = new Pen(Brush, t);
             pen.Freeze();
 
             // 描边是以路径为中线往两边各铺一半的，所以矩形要往里缩半个线宽，
@@ -122,12 +125,6 @@ internal sealed class ScrollFrameWindow : Window
                 t / 2, t / 2,
                 Math.Max(0, ActualWidth - t),
                 Math.Max(0, ActualHeight - t)));
-        }
-
-        private static T Freeze<T>(T freezable) where T : Freezable
-        {
-            freezable.Freeze();
-            return freezable;
         }
     }
 }

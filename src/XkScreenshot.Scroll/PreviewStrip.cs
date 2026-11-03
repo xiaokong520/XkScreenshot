@@ -15,10 +15,10 @@ namespace XkScreenshot.Scroll;
 /// </summary>
 internal sealed class PreviewStrip
 {
-    private const int TargetWidth = 128;
+    private const int TargetWidth = 200;
 
     /// <summary>缩略图自身的行数上限。到顶就抽稀一半，抽样密度随之减半。</summary>
-    private const int MaxRows = 720;
+    private const int MaxRows = 1200;
 
     private readonly int _srcStride;
     private readonly int _colStep;

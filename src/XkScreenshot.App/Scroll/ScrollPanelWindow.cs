@@ -8,7 +8,6 @@ using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Effects;
-using System.Windows.Media.Imaging;
 using XkScreenshot.App.Overlay;
 using XkScreenshot.Core.Geometry;
 using XkScreenshot.Core.Monitors;
@@ -18,23 +17,33 @@ using XkScreenshot.Scroll;
 namespace XkScreenshot.App.Scroll;
 
 /// <summary>
-/// 长截图的控制面板：拼到哪儿了、谁在滚、拼完往哪儿去。
+/// 长截图的控制条：拼到多大了、谁在滚、拼完往哪儿去。
+///
+/// 形态是**一行**贴边的窄条，而不是一张占了小半屏的卡片 ——
+/// 长截图期间用户要盯着的是**正在滚动的目标窗口**，任何压在旁边的厚面板都在抢视线。
+/// 缩略图从这条里搬了出去（见 <see cref="ScrollPreviewWindow"/>）。
+///
+/// 排版从左到右就四样：尺寸 → 自动/手动 → 完成/编辑/取消。
+/// 原来是两行（上面尺寸+模式、下面提示+按钮），第一行只有两个元素、中间空出一大片，
+/// 看着像两块不相干的东西凑在一起；两行的高度也让这条压在画面上更碍事。
+///
+/// **不挂状态句子**（"正在慢速滚动…"、"这一帧接不上…"）：滚动期间它一直在变，
+/// 挂在这条窄条上只是噪声。**也不挂快捷键提示**：那几个键本来就和右边三个按钮一一对应，
+/// 同一件事说两遍，还会把按钮挤出卡片 —— 真忘了 Esc 取消也不致命。
 ///
 /// 落位优先摆在目标区域**外面**（下、上、右、左依次试）。这不是审美问题：抓帧走的是
 /// 屏幕 DC，压在区域上的东西会被原样拍进长图。区域占满整屏时确实无处可躲，
 /// 那时只能靠 <see cref="ScrollChrome.ExcludeFromCapture"/>。
 ///
-/// 出图去向给了三个按钮而不是一个「完成」：长截图动辄几千像素高，
-/// 各人要的去向差别很大 —— 存档的想保存、发群里的想复制、对照着写东西的想贴出来。
-/// 回车仍然走设置里那个默认去向，对应的按钮会高亮，省得用户去猜回车干什么。
+/// 三个去向：完成（走设置里的默认动作）、编辑（进长图编辑器）、取消。
+/// 「完成」不写成「复制/保存/贴图」：按钮上写动作名，用户得先看懂那个动作是不是自己要的；
+/// 写「完成」则一眼就是「我拼够了」，具体是复制还是保存，本来就是设置里定好的。
 /// </summary>
 internal sealed class ScrollPanelWindow : Window
 {
-    private const double PanelWidth = 440;
-    private const double PreviewWidth = 104;
-    private const double PreviewHeight = 150;
+    private const double PanelWidth = 412;
 
-    /// <summary>面板和目标区域之间的空隙，物理像素。</summary>
+    /// <summary>控制条和目标区域之间的空隙，物理像素。</summary>
     private const int GapPx = 14;
 
     private readonly PixelRect _region;
@@ -42,15 +51,18 @@ internal sealed class ScrollPanelWindow : Window
 
     private readonly RadioButton _autoChip;
     private readonly RadioButton _manualChip;
-    private readonly TextBlock _state = new();
     private readonly TextBlock _metrics = new();
-    private readonly TextBlock _hint = new();
-    private readonly PreviewBox _preview = new();
 
     /// <summary>正在按引擎的状态回填模式开关，这期间的 Checked 不该再发回引擎。</summary>
     private bool _syncing;
 
     private bool _placed;
+
+    /// <summary>
+    /// 摆位时要避开的矩形（选区右侧的预览窗）。空 = 不用避。
+    /// 预览总是先摆，它占住右边之后，控制条就不该再往同一块地方挤。
+    /// </summary>
+    public PixelRect Avoid { get; set; }
 
     /// <summary>用户在面板上换了滚动方式。</summary>
     public event Action<ScrollMode>? ModeChanged;
@@ -58,10 +70,13 @@ internal sealed class ScrollPanelWindow : Window
     /// <summary>用户要收工，参数是成品的去向。</summary>
     public event Action<CaptureAction>? Accepted;
 
+    /// <summary>用户要拿这张长图继续编辑，而不是直接出图。</summary>
+    public event Action? EditRequested;
+
     /// <summary>用户放弃这次长截图。</summary>
     public event Action? Cancelled;
 
-    public ScrollPanelWindow(PixelRect region, ScrollMode mode, CaptureAction defaultAction)
+    public ScrollPanelWindow(PixelRect region, ScrollMode mode, CaptureAction defaultAction, bool dark)
     {
         _region = region;
         _defaultAction = defaultAction;
@@ -88,86 +103,116 @@ internal sealed class ScrollPanelWindow : Window
             Source = new Uri("pack://application:,,,/XkScreenshot;component/Scroll/ScrollPanelTheme.xaml"),
         });
 
+        // 必须在建控件之前注入：主题里的颜色全是 DynamicResource，控件一建就从这儿找
+        ApplyPalette(OverlayPalette.For(dark));
+
         _autoChip = ModeChip("自动", ScrollMode.Auto);
         _manualChip = ModeChip("手动", ScrollMode.Manual);
         Content = BuildLayout();
         SetMode(mode);
-        UpdateHint();
 
         SourceInitialized += (_, _) => ScrollChrome.ExcludeFromCapture(this);
         ContentRendered += (_, _) => Place();
     }
 
+    /// <summary>
+    /// 把覆盖层那套配色搬进来。
+    ///
+    /// 面板和工具条会同时出现在屏幕上（选区框、工具条、这条控制条），差一档色就看得出来
+    /// 是两个程序。所以颜色一律取自 <see cref="OverlayPalette"/> —— 深浅主题也跟着它走，
+    /// 早先这里写死过一套深色，浅色主题下就它一个黑的。
+    ///
+    /// 底色用 <see cref="OverlayPalette.PanelOpaque"/> 而不是工具条那层半透明：
+    /// 工具条底下是冻住的截图，能先模糊再压色；这条面板压在**实时**画面上，没有可模糊的底，
+    /// 半透明叠上去遇到深色内容字就看不见了。
+    /// </summary>
+    private void ApplyPalette(OverlayPalette palette)
+    {
+        Resources["PanelBg"] = palette.PanelOpaque;
+        Resources["PanelBorder"] = palette.PanelBorder.Brush;
+        Resources["PanelTopHighlight"] = palette.PanelTopHighlight.Brush;
+        Resources["PanelText"] = palette.Text;
+        Resources["PanelTextSecondary"] = palette.TextSecondary;
+        Resources["PanelTextMuted"] = palette.TextMuted;
+        Resources["PanelAccent"] = palette.Accent;
+        Resources["PanelAccentText"] = palette.IconActive;
+        Resources["PanelAccentFill"] = palette.AccentFill;
+        Resources["PanelAccentBorder"] = palette.AccentBorder.Brush;
+        Resources["PanelControlHover"] = palette.Hover;
+        Resources["PanelControlPressed"] = palette.ChipFill;
+
+        // 「完成」悬停时底色要再亮一档，调色板里没有现成的那一档，从强调色算出来
+        if (palette.Accent is SolidColorBrush accent)
+        {
+            var hover = new SolidColorBrush(Color.FromArgb(0x66, accent.Color.R, accent.Color.G, accent.Color.B));
+            hover.Freeze();
+            Resources["PanelAccentHover"] = hover;
+        }
+        else
+        {
+            Resources["PanelAccentHover"] = palette.AccentFill;
+        }
+    }
+
     // ---------------- 界面 ----------------
 
+    /// <summary>
+    /// 一行装完：`1325 × 5354` ｜ 自动 手动 ｜ 完成 编辑 取消。
+    ///
+    /// 用 DockPanel 从右往左钉：按钮最先钉（贴最右），模式胶囊钉在它左边，
+    /// 尺寸吃剩下的空间。这样右半边永远不会被挤走 —— 尺寸再长也只是自己被省略号截短，
+    /// 而答案按钮（完成/取消）不能挪位、不能缩，否则用户点空一次就够烦的。
+    /// </summary>
     private UIElement BuildLayout()
     {
-        var title = new TextBlock
-        {
-            Text = "长截图",
-            FontSize = 14,
-            FontWeight = FontWeights.SemiBold,
-            Foreground = Brush("PanelText"),
-            VerticalAlignment = VerticalAlignment.Center,
-        };
+        _metrics.FontSize = 12.5;
+        _metrics.Foreground = Brush("PanelText");
+        _metrics.TextTrimming = TextTrimming.CharacterEllipsis;
+        _metrics.VerticalAlignment = VerticalAlignment.Center;
+        // 右边留出间距，尺寸和胶囊之间才有一条明确的空气缝，而不是两个东西挨着
+        _metrics.Margin = new Thickness(2, 0, 16, 0);
 
         var chips = new StackPanel
         {
             Orientation = Orientation.Horizontal,
-            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Center,
             Children = { _autoChip, _manualChip },
         };
         DockPanel.SetDock(chips, Dock.Right);
 
-        var header = new DockPanel { LastChildFill = true, Children = { chips, title } };
-
-        _preview.Width = PreviewWidth;
-        _preview.Height = PreviewHeight;
-
-        _state.Foreground = Brush("PanelText");
-        _state.TextTrimming = TextTrimming.CharacterEllipsis;
-
-        _metrics.Foreground = Brush("PanelTextSecondary");
-        _metrics.FontSize = 12;
-        _metrics.Margin = new Thickness(0, 7, 0, 0);
-        _metrics.TextTrimming = TextTrimming.CharacterEllipsis;
-
-        _hint.Foreground = Brush("PanelTextMuted");
-        _hint.FontSize = 11.5;
-        _hint.Margin = new Thickness(0, 12, 0, 0);
-        _hint.TextWrapping = TextWrapping.Wrap;
-
-        var info = new StackPanel { Margin = new Thickness(14, 0, 0, 0) };
-        info.Children.Add(_state);
-        info.Children.Add(_metrics);
-        info.Children.Add(_hint);
-        Grid.SetColumn(info, 1);
-
-        var body = new Grid { Margin = new Thickness(0, 14, 0, 0) };
-        body.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        body.Children.Add(_preview);
-        body.Children.Add(info);
-
         var actions = new StackPanel
         {
             Orientation = Orientation.Horizontal,
-            HorizontalAlignment = HorizontalAlignment.Right,
-            Margin = new Thickness(0, 14, 0, 0),
-            Children =
-            {
-                ActionButton("复制", CaptureAction.Copy),
-                ActionButton("保存", CaptureAction.Save),
-                ActionButton("贴图", CaptureAction.Pin),
-                Spacer(),
-                CancelButton(),
-            },
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(12, 0, 0, 0),
+        };
+        actions.Children.Add(ActionButton("完成", isDefault: true, () => Accepted?.Invoke(_defaultAction)));
+        actions.Children.Add(ActionButton("编辑", isDefault: false, () => EditRequested?.Invoke()));
+        actions.Children.Add(ActionButton("取消", isDefault: false, () => Cancelled?.Invoke()));
+        DockPanel.SetDock(actions, Dock.Right);
+
+        // 顺序就是钉的顺序：actions 先在，贴最右；chips 后钉，落在它左边；尺寸填剩下的
+        var row = new DockPanel { LastChildFill = true, Children = { actions, chips, _metrics } };
+
+        // 沿顶边的一道内高光：工具条的玻璃感基本全靠它，这条面板跟着一起走，
+        // 两块面板摆在同一片画面上才像一套东西（见 PanelChrome.DrawGlassPanel）
+        var highlight = new System.Windows.Shapes.Rectangle
+        {
+            Height = 1,
+            Margin = new Thickness(11, 1, 11, 0),
+            VerticalAlignment = VerticalAlignment.Top,
+            RadiusX = 0.5,
+            RadiusY = 0.5,
+            Fill = Brush("PanelTopHighlight"),
+            IsHitTestVisible = false,
         };
 
-        var stack = new StackPanel();
-        stack.Children.Add(header);
-        stack.Children.Add(body);
-        stack.Children.Add(actions);
+        // 单行不需要上下两层留白：高度由 30 高（按钮）决定，左右只留够呼吸的量
+        var body = new Grid
+        {
+            Margin = new Thickness(14, 9, 10, 9),
+            Children = { row, highlight },
+        };
 
         var card = new Border
         {
@@ -175,8 +220,7 @@ internal sealed class ScrollPanelWindow : Window
             BorderBrush = Brush("PanelBorder"),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(10),
-            Padding = new Thickness(16),
-            Child = stack,
+            Child = body,
             // 面板浮在实时画面上，没有投影就像是被贴进了别人的界面里
             Effect = new DropShadowEffect { BlurRadius = 22, ShadowDepth = 4, Opacity = 0.42, Color = Colors.Black },
         };
@@ -197,30 +241,20 @@ internal sealed class ScrollPanelWindow : Window
         {
             if (_syncing) return;
             ModeChanged?.Invoke(mode);
-            UpdateHint();
         };
         return chip;
     }
 
-    private Button ActionButton(string text, CaptureAction action)
+    private Button ActionButton(string text, bool isDefault, Action action)
     {
         var button = new Button
         {
             Content = text,
-            Style = (Style)FindResource(action == _defaultAction ? "PanelAccentButton" : "PanelButton"),
+            Style = (Style)FindResource(isDefault ? "PanelAccentButton" : "PanelButton"),
         };
-        button.Click += (_, _) => Accepted?.Invoke(action);
+        button.Click += (_, _) => action();
         return button;
     }
-
-    private Button CancelButton()
-    {
-        var button = new Button { Content = "取消", Style = (Style)FindResource("PanelButton") };
-        button.Click += (_, _) => Cancelled?.Invoke();
-        return button;
-    }
-
-    private static UIElement Spacer() => new Border { Width = 10 };
 
     private Brush Brush(string key) => (Brush)FindResource(key);
 
@@ -230,52 +264,20 @@ internal sealed class ScrollPanelWindow : Window
     {
         SetMode(progress.Mode);
 
-        _state.Text = Describe(progress.State, progress.Mode);
         _metrics.Text = string.Format(CultureInfo.InvariantCulture,
-            "{0} × {1}　·　已拼 {2} 帧", progress.Width, progress.Height, progress.Frames);
-
-        _preview.Image = progress.Preview;
-        _preview.SourceWidth = progress.Width;
-        _preview.SourceRows = progress.PreviewSourceRows;
-        _preview.InvalidateVisual();
+            "{0} × {1}", progress.Width, progress.Height);
     }
-
-    private static string Describe(ScrollState state, ScrollMode mode) => state switch
-    {
-        ScrollState.Scrolling => "正在自动滚动…",
-        ScrollState.Settling => "画面还在动，等它停稳",
-        ScrollState.Lost => "这一帧接不上，往回滚一点再试",
-        ScrollState.Waiting => "轮到你滚了，滚到哪儿就拼到哪儿",
-        _ => mode == ScrollMode.Auto ? "正在自动滚动…" : "轮到你滚了，滚到哪儿就拼到哪儿",
-    };
 
     private void SetMode(ScrollMode mode)
     {
         var chip = mode == ScrollMode.Auto ? _autoChip : _manualChip;
         if (chip.IsChecked == true) return;
 
-        // 引擎那边会自己让位到手动（用户一动鼠标就交还控制权），
-        // 回填这个状态不能再当成用户点了开关，否则两边来回发通知
+        // 引擎那边会自己让位到手动（用户按了鼠标键），回填这个状态不能再当成
+        // 用户点了开关，否则两边来回发通知
         _syncing = true;
         chip.IsChecked = true;
         _syncing = false;
-        UpdateHint();
-    }
-
-    private void UpdateHint()
-    {
-        string action = _defaultAction switch
-        {
-            CaptureAction.Pin => "贴图",
-            CaptureAction.Save => "保存",
-            _ => "复制",
-        };
-
-        string extra = _autoChip.IsChecked == true
-            ? "　·　动一下鼠标即可自己接手"
-            : string.Empty;
-
-        _hint.Text = $"Enter {action}　·　Esc 取消{extra}";
     }
 
     // ---------------- 落位 ----------------
@@ -301,13 +303,18 @@ internal sealed class ScrollPanelWindow : Window
             if (candidate.X < work.X || candidate.Y < work.Y) continue;
             if (candidate.Right > work.Right || candidate.Bottom > work.Bottom) continue;
             if (candidate.IntersectsWith(_region)) continue;
+            if (!Avoid.IsEmpty && candidate.IntersectsWith(Avoid)) continue;
 
             ScrollChrome.PlacePixels(this, candidate, activate: true);
             Opacity = 1;
             return;
         }
 
+        // 实在无处可去：先试右下，预览在那边就让到左下
         var fallback = new PixelRect(work.Right - w - GapPx, work.Bottom - h - GapPx, w, h);
+        if (!Avoid.IsEmpty && fallback.IntersectsWith(Avoid))
+            fallback = new PixelRect(work.X + GapPx, work.Bottom - h - GapPx, w, h);
+
         ScrollChrome.PlacePixels(this, fallback, activate: true);
         Opacity = 1;
     }
@@ -337,9 +344,13 @@ internal sealed class ScrollPanelWindow : Window
 
     // ---------------- 输入 ----------------
 
-    protected override void OnKeyDown(KeyEventArgs e)
+    /// <summary>
+    /// 用 Preview 而不是 OnKeyDown：焦点可能停在自动/手动胶囊或某个按钮上，
+    /// 那样 Enter 会被控件先吃掉（切成另一枚胶囊），「回车完成」就时灵时不灵。
+    /// </summary>
+    protected override void OnPreviewKeyDown(KeyEventArgs e)
     {
-        base.OnKeyDown(e);
+        base.OnPreviewKeyDown(e);
 
         switch (e.Key)
         {
@@ -366,46 +377,5 @@ internal sealed class ScrollPanelWindow : Window
         base.OnMouseLeftButtonDown(e);
         try { DragMove(); }
         catch (InvalidOperationException) { /* 按键已经松开了，没什么可拖的 */ }
-    }
-
-    /// <summary>
-    /// 长图的缩略图。
-    ///
-    /// 缩略图纵向是抽过行的（见 PreviewStrip），像素高度和真实高度没有关系，
-    /// 所以按**真实**宽高比去铺，而不是按位图自己的宽高比 —— 否则拼得越长，
-    /// 画出来的比例越离谱。
-    /// </summary>
-    private sealed class PreviewBox : FrameworkElement
-    {
-        private static readonly Brush Back = Freeze(new SolidColorBrush(Color.FromArgb(0x22, 0x00, 0x00, 0x00)));
-        private static readonly Pen Border = Freeze(new Pen(new SolidColorBrush(Color.FromArgb(0x24, 0xFF, 0xFF, 0xFF)), 1));
-
-        public BitmapSource? Image { get; set; }
-        public int SourceWidth { get; set; }
-        public int SourceRows { get; set; }
-
-        protected override void OnRender(DrawingContext dc)
-        {
-            var box = new Rect(0.5, 0.5, Math.Max(0, ActualWidth - 1), Math.Max(0, ActualHeight - 1));
-            dc.DrawRoundedRectangle(Back, Border, box, 5, 5);
-
-            if (Image is null || SourceWidth <= 0 || SourceRows <= 0) return;
-
-            var inner = new Rect(box.X + 3, box.Y + 3, Math.Max(0, box.Width - 6), Math.Max(0, box.Height - 6));
-            if (inner.Width <= 0 || inner.Height <= 0) return;
-
-            double scale = Math.Min(inner.Width / SourceWidth, inner.Height / SourceRows);
-            double w = Math.Max(1, SourceWidth * scale);
-            double h = Math.Max(1, SourceRows * scale);
-            var dest = new Rect(inner.X + (inner.Width - w) / 2, inner.Y + (inner.Height - h) / 2, w, h);
-
-            dc.DrawImage(Image, dest);
-        }
-
-        private static T Freeze<T>(T freezable) where T : Freezable
-        {
-            freezable.Freeze();
-            return freezable;
-        }
     }
 }

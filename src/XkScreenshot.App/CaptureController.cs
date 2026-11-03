@@ -224,7 +224,7 @@ public sealed class CaptureController
 
         _scrollSnapshot = _session.Snapshot;
         Teardown();
-        _scroll.Start(region, ScrollOptions, Defaults.Action);
+        _scroll.Start(region, ScrollOptions, Defaults.Action, XkScreenshot.App.Ui.Theme.IsDark(Defaults.Theme));
     }
 
     /// <summary>长截图引擎收工了。记历史、当普通截图一样往外发。</summary>

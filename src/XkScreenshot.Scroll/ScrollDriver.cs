@@ -4,7 +4,7 @@ using XkScreenshot.Core.Native;
 namespace XkScreenshot.Scroll;
 
 /// <summary>
-/// 自动模式下替用户滚那一下。
+/// 自动模式下替用户滚。
 ///
 /// 用 <c>SendInput</c> 而不是给目标窗口发 <c>WM_MOUSEWHEEL</c>：后者绕开了真正的输入栈，
 /// 遇上自己处理原始输入、或者把滚轮转发给内部控件的应用（浏览器、Electron、各种自绘列表）
@@ -16,10 +16,20 @@ namespace XkScreenshot.Scroll;
 /// </summary>
 public static class ScrollDriver
 {
-    /// <summary>往下滚 <paramref name="notches"/> 格。滚轮事件落在光标当前所在的窗口上。</summary>
-    public static void WheelDown(int notches)
+    /// <summary>一格滚轮的量。<see cref="Wheel"/> 的单位就是它的 1/120。</summary>
+    public const int UnitsPerNotch = NativeMethods.WHEEL_DELTA;
+
+    /// <summary>
+    /// 往下滚 <paramref name="units"/>（单位见 <see cref="UnitsPerNotch"/>）。
+    ///
+    /// 允许发不满一格：连续慢速滚动全靠这一点。精确式触控板就是这么干的 —— 一次滑动拆成
+    /// 几十个小量喂给系统，浏览器、Electron、UWP 都按比例滚，看起来就是匀速滑。
+    /// 只认整格的老式控件会把零头攒起来，攒够一格滚一次，于是变成「三行一跳」；
+    /// 速度和方向仍然是对的，只是没那么顺。
+    /// </summary>
+    public static void Wheel(int units)
     {
-        if (notches <= 0) return;
+        if (units <= 0) return;
 
         var input = new INPUT
         {
@@ -27,7 +37,7 @@ public static class ScrollDriver
             mi = new MOUSEINPUT
             {
                 // 正数是往上（远离用户），往下要取负；uint 字段按补码塞进去
-                mouseData = unchecked((uint)(-notches * NativeMethods.WHEEL_DELTA)),
+                mouseData = unchecked((uint)-units),
                 dwFlags = NativeMethods.MOUSEEVENTF_WHEEL,
             },
         };
@@ -37,6 +47,29 @@ public static class ScrollDriver
 
     public static void MoveCursor(PixelPoint point)
         => NativeMethods.SetCursorPos(point.X, point.Y);
+
+    /// <summary>
+    /// 有没有鼠标键按着（左、右、中、两个侧键）。
+    ///
+    /// 自动模式用它判断「用户想自己来」。**不能拿光标位置判断**：刚框完选区手还在鼠标上，
+    /// 人一边看一边微调位置，指针都会动 —— 那不是要接手，只是手没离开。
+    /// 按键没有这种含糊：按下去一定是在操作。而程序自己只发滚轮，从不发按键。
+    /// </summary>
+    public static bool AnyButtonDown()
+    {
+        ReadOnlySpan<int> buttons = [NativeMethods.VK_LBUTTON, NativeMethods.VK_RBUTTON,
+            NativeMethods.VK_MBUTTON, NativeMethods.VK_XBUTTON1, NativeMethods.VK_XBUTTON2];
+
+        // 五个键都要读一遍，不能提前 return：这一读同时把「上次之后按过没有」那一位清掉，
+        // 只读到一半就返回的话，剩下那几个键的陈年旧账会一直留着（见引擎 EnterAuto 的预读）
+        bool down = false;
+        foreach (int button in buttons)
+        {
+            // 最低位是「上次调用之后按过」，高位是「此刻按着」，两个都算
+            if ((NativeMethods.GetAsyncKeyState(button) & 0x8001) != 0) down = true;
+        }
+        return down;
+    }
 
     /// <summary>
     /// 滚轮该落在哪儿：区域正中。

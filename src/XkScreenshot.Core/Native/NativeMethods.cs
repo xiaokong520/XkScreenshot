@@ -23,6 +23,21 @@ public static class NativeMethods
     public static extern bool SetCursorPos(int x, int y);
 
     /// <summary>
+    /// 某个鼠标键/键此刻按着没有（低 15 位），以及「上次问过之后按过没有」（最低位）。
+    ///
+    /// 用它判断「用户是不是在自己操作」而不是看光标位置：触控板、手搭在鼠标上都会让
+    /// 指针持续小幅漂移，位置判据在这种机器上全是误判，而按键没有这个问题。
+    /// </summary>
+    [DllImport("user32.dll")]
+    public static extern short GetAsyncKeyState(int vKey);
+
+    public const int VK_LBUTTON = 0x01;
+    public const int VK_RBUTTON = 0x02;
+    public const int VK_MBUTTON = 0x04;
+    public const int VK_XBUTTON1 = 0x05;
+    public const int VK_XBUTTON2 = 0x06;
+
+    /// <summary>
     /// 立刻换掉当前光标。贴图鼠标悬停在角上时用它换成旋转光标 —— 走 WM_SETCURSOR
     /// 自己设，而不是给窗口挂 Control.Cursor（分层窗口没有子控件，那条路依赖
     /// WinForms 自己维护的几何，见 PinForm._menu 的注释）。

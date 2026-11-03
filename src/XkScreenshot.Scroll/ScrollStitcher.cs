@@ -69,6 +69,12 @@ public sealed class ScrollStitcher
     /// <summary>连着这么多行都不同，才算走出了吸顶/吸底栏。</summary>
     private const int StickyBreakRows = 8;
 
+    /// <summary>
+    /// 「变了但没滚」的判定：变化像素数是平时的这么多倍以内，就算界面自己动的，
+    /// 不是画面滚了。见 <see cref="ClassifyMiss"/>。
+    /// </summary>
+    private const int StaticChangeFactor = 20;
+
     /// <summary>吸顶/吸底各自最多占到整帧的这个比例。防止内容稀疏的页面被整帧判成「都不动」。</summary>
     private const double MaxStickyRatio = 0.4;
 
@@ -88,6 +94,17 @@ public sealed class ScrollStitcher
     /// <summary>精修：差得离谱的采样点占比上限，以及「差得离谱」的门槛。</summary>
     private const double FineBadRatio = 0.02;
     private const int FineBadDiff = 28;
+
+    /// <summary>
+    /// 放宽验证的判据。块平均之后差值本来就小，阈值按同样的量纲给。
+    /// 松是松在「对重采样不敏感」，不是松在「什么都认」—— 见 <see cref="SoftPick"/>。
+    /// </summary>
+    private const double SoftMeanDiff = 6.0;
+    private const double SoftBadRatio = 0.04;
+    private const int SoftBadDiff = 24;
+
+    /// <summary>第一名要像到第二名的这个比例以内才算「说得清」。</summary>
+    private const double SoftMargin = 0.65;
 
     private readonly int _w;
     private readonly int _h;
@@ -173,7 +190,7 @@ public sealed class ScrollStitcher
         ComputeSignature(frame, _sigCur);
 
         int d = FindOffset(frame, top, bottom);
-        if (d <= 0) return new StitchResult(StitchStatus.Unmatched, 0);
+        if (d <= 0) return new StitchResult(ClassifyMiss(frame), 0);
 
         // 画布收到 _prev 的 _lastBottom 行，换算到这一帧的坐标系就是 _lastBottom - d。
         // 首次接上时画布还是空的，先把整个首帧（含吸顶栏）铺进去。
@@ -198,21 +215,21 @@ public sealed class ScrollStitcher
     }
 
     /// <summary>
-    /// 连不上了，认栽换锚：把这一帧立为新参考，之前没贴完的旧参考先封口。
+    /// 求不出位移时，这一帧到底算「没滚」还是「接不上」。
     ///
-    /// 长图里会留一道不连续的缝 —— 那几行内容丢了 —— 但总比整个会话报废、
-    /// 连已经拼好的几十帧一起作废强。
+    /// 界面里总有东西在动：鼠标底下的链接亮起来、右下角转个圈、某个图标刚加载完。
+    /// 这些改动面积很小、也不会把内容推走，所以怎么都求不出一个正向位移 ——
+    /// 但它们同样不该算「接不上」：真把它们算进去，滚轮就会为了等画面停稳而停发，
+    /// 画面于是永远不动，几帧之后整趟会话就没了。
+    ///
+    /// 判据就是「变了的面积小不小」。真滚动了的话几乎整帧都会变，差着两个数量级。
     /// </summary>
-    public void ResetAnchor(byte[] frame)
+    private StitchStatus ClassifyMiss(byte[] frame)
     {
-        if (_prev is not null && _lastBottom >= 0 && _lastBottom < _h)
-        {
-            Append(_prev, _lastBottom, _h - _lastBottom);
-        }
-
-        _prev = (byte[])frame.Clone();
-        ComputeSignature(frame, _sigPrev);
-        _lastBottom = -1;
+        int loose = FrameCompare.PixelBudget(_w, _h) * StaticChangeFactor;
+        return FrameCompare.NearlyEqual(_prev!, frame, _stride, _h, loose)
+            ? StitchStatus.NoChange
+            : StitchStatus.Unmatched;
     }
 
     /// <summary>把这一帧收作新的参考帧。签名两块缓冲轮着用，免得每帧重新分配。</summary>
@@ -284,6 +301,9 @@ public sealed class ScrollStitcher
     /// 粗筛给出若干候选，逐个拿原分辨率像素验证，第一个过关的就是答案。
     /// 只取粗筛冠军是不够的：纯色和重复纹理会让某个错误的 d 分数最低，
     /// 而正确的那个排第二 —— 多留两个名额基本上就把这种情况兜住了。
+    ///
+    /// 全都不合格时还有一道放宽的验证（<see cref="VerifySoft"/>），专门对付
+    /// 「画面在平滑滚动动画里被重采样过」这种帧。
     /// </summary>
     private int FindOffset(byte[] frame, int top, int bottom)
     {
@@ -292,7 +312,11 @@ public sealed class ScrollStitcher
         if (band < MinBandRows) return 0;
 
         int bandTop = ChooseBandTop(top, bottom, band);
-        int maxD = bottom - bandTop - band;
+
+        // 位移上限取视口的三分之一。技术上还能更大（band 塞得下就行），但那样两帧之间
+        // 只剩很小的重叠，剩下的候选全是「碰巧有几行长得像」，接上去就是错位。
+        // 正常情况下一次抓帧只走几十像素，够用；真跳了 800 像素那种，宁可判「对不上」
+        int maxD = Math.Min(bottom - bandTop - band, _h / 3);
         if (maxD < 1) return 0;
 
         Span<int> bestD = stackalloc int[CandidateCount];
@@ -309,7 +333,26 @@ public sealed class ScrollStitcher
         for (int i = 0; i < found; i++)
             if (Verify(frame, bandTop, band, bestD[i])) return bestD[i];
 
-        return 0;
+        return SoftPick(frame, bandTop, band, bestD, found);
+    }
+
+    /// <summary>
+    /// 放宽验证只是重新判一次分，真正做决定的是「说不说得清」。
+    ///
+    /// 重采样把每一帧都抹了一次，所有候选都变得更像了 —— 阈值一放宽，第二名和第一名
+    /// 就分不开。所以这里除了要求第一名过线，还要求它明显比第二名像（<see cref="SoftMargin"/>）。
+    /// 分不清的时候宁可返回「对不上」：不拼接只是少一段，接错一段是整张图错位。
+    /// </summary>
+    private int SoftPick(byte[] frame, int bandTop, int band, Span<int> bestD, int found)
+    {
+        if (found == 0) return 0;
+
+        var first = VerifySoft(frame, bandTop, band, bestD[0]);
+        if (!first.Ok) return 0;
+        if (found == 1) return bestD[0];
+
+        var second = VerifySoft(frame, bandTop, band, bestD[1]);
+        return first.Mean <= second.Mean * SoftMargin ? bestD[0] : 0;
     }
 
     /// <summary>
@@ -441,6 +484,53 @@ public sealed class ScrollStitcher
 
         if (samples == 0) return false;
         return sum / (double)samples <= FineMeanDiff && bad / (double)samples <= FineBadRatio;
+    }
+
+    /// <summary>
+    /// 放宽的验证：先把 2×2 个像素合成一块再比。
+    ///
+    /// 应用做平滑滚动动画时，每一帧都是把内容重采样到小数位置画出来的：同一行文字的边缘
+    /// 会在两个灰阶之间摆，逐像素看就是对不上 —— 哪怕位移完全求对了。块平均把这点抖动抹平，
+    /// 而「接错了位置」造成的差别（整块文字挪了位）抹不平。
+    ///
+    /// 判据比 <see cref="Verify"/> 松，所以只拿粗筛前两名来试，见 <see cref="FindOffset"/>。
+    /// </summary>
+    private (bool Ok, double Mean, int Bad, int Samples) VerifySoft(byte[] frame, int bandTop, int band, int d)
+    {
+        byte[] prev = _prev!;
+        long sum = 0;
+        int bad = 0;
+        int samples = 0;
+
+        for (int i = 0; i < band - 1; i += 2)
+        {
+            int a = (bandTop + i) * _stride;
+            int b = (bandTop + d + i) * _stride;
+
+            for (int x = 0; x + 1 < _w; x += 2)
+            {
+                // 2×2 块、三个通道各求和后相减，再按「每像素」折算
+                int diff = Math.Abs(Block4(frame, a, x, 0) - Block4(prev, b, x, 0))
+                           + Math.Abs(Block4(frame, a, x, 1) - Block4(prev, b, x, 1))
+                           + Math.Abs(Block4(frame, a, x, 2) - Block4(prev, b, x, 2));
+                diff /= 12;
+
+                sum += diff;
+                if (diff > SoftBadDiff) bad++;
+                samples++;
+            }
+        }
+
+        if (samples == 0) return (false, 0, 0, 0);
+        double mean = sum / (double)samples;
+        return (mean <= SoftMeanDiff && bad / (double)samples <= SoftBadRatio, mean, bad, samples);
+    }
+
+    /// <summary>2×2 块里某个通道的和。</summary>
+    private int Block4(byte[] buffer, int row, int x, int channel)
+    {
+        int at = row + x * 4 + channel;
+        return buffer[at] + buffer[at + 4] + buffer[at + _stride] + buffer[at + _stride + 4];
     }
 
     // ---------------- 行签名 ----------------

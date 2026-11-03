@@ -161,7 +161,7 @@ public sealed class AppSettings
     public CaptureDefaults ToCaptureDefaults() => new(DefaultAction, ShowHints, ElementMode, Theme);
 
     /// <summary>长截图起手用的参数。Sanitized 会把越界的值拉回来。</summary>
-    public ScrollOptions ToScrollOptions() => new(ScrollMode, 1, ScrollMaxHeight);
+    public ScrollOptions ToScrollOptions() => new(ScrollMode, ScrollMaxHeight);
 
     /// <summary>
     /// 程序根目录。跟着程序走、又不该塞进 %APPDATA% 的东西都放它下面：
