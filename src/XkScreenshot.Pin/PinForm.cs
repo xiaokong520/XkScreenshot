@@ -41,6 +41,11 @@ namespace XkScreenshot.Pin;
 /// 不碰 WPF 那套 DIP。锚点缩放用双精度 _left/_top 直接算、只在下发时取整，误差不累积，
 /// 贴图放大碰到屏幕边界时位置不会乱跑。
 ///
+/// 帧位图只覆盖**图片和桌面的交集**，不是整张图（见 RenderFrame）。贴图放大到超过屏幕以后，
+/// 屏幕外那块照样要按面积付重采样的代价 —— 不裁的话每格缩放就是几百毫秒，滚起来一顿一顿。
+/// 代价是几何多了一层「裁剪偏移」：窗口位置取自交集，内容按 offset 往里挪，
+/// 角区命中和光标位置也都换算到这个更小的坐标系里。
+///
 /// 贴图可以存档：位置、倍率、角度、透明度和画面一起落在程序目录下的 pins\ 里，
 /// 下次打开程序按原样摆回来（见 PinStore、PinManager.Restore）。存不存由设置里
 /// 「重启后恢复贴图」决定 —— 一件事要跨会话活下去，就得有个地方把它写下来。
@@ -192,14 +197,62 @@ public sealed class PinForm : Form
     /// </summary>
     private readonly ContextMenuStrip _menu;
 
-    /// <summary>当前倍率下渲染好的整帧位图 + 它的 HBITMAP。拖动复用，缩放重画。</summary>
-    private Bitmap? _frame;
+    /// <summary>
+    /// 当前这帧的位图 —— 一块自己管的 DIBSection，不是 <see cref="Bitmap"/>。
+    ///
+    /// 早先是 new Bitmap + GetHbitmap：每次缩放都要分配一块、画出内容，再整幅拷进
+    /// HBITMAP 才能交给 ULW。那份拷贝在屏幕大小下就是十几毫秒，是每格缩放的主要开销之一。
+    /// 换成 DIBSection 之后画的就是 ULW 要读的那块内存，一次拷贝都省了，还能反复复用
+    /// （尺寸变化在容量以内就不重新分配）。
+    /// </summary>
+    private IntPtr _frameDc;
     private IntPtr _frameHBitmap;
+
+    /// <summary>DC 原来选着的那个占位位图。释放时要先把它选回去，否则 DeleteObject 删不掉我们的 DIB。</summary>
+    private IntPtr _frameOldBitmap;
+    private int _frameCapacityW;
+    private int _frameCapacityH;
+
+    /// <summary>画过帧没有。判断「有没有内容可提交」用，比看句柄是否为空更清楚。</summary>
+    private bool _frameReady;
+
+    /// <summary>当前这帧是不是「交互中的快速帧」（最近邻重采样）。停手后要换回高质量。</summary>
+    private bool _frameFast;
+
+    /// <summary>
+    /// 停手补细节的延时器。快速帧送上去之后启动，用户再滚一格就重置 ——
+    /// 所以它只在真正停下来之后响一次，把最近邻那张换成高质量那张。
+    /// </summary>
+    private readonly System.Windows.Forms.Timer _refine = new() { Interval = RefineDelayMs };
+
+    /// <summary>手停多久算「停」了。太短会在滚轮间隔里插慢活，太长用户会盯着糊的那一帧。</summary>
+    private const int RefineDelayMs = 140;
+
     private int _frameW;
     private int _frameH;
 
     /// <summary>画 _frame 时用的角度。角度变了哪怕尺寸没变也得重画（见 <see cref="RenderFrame"/>）。</summary>
     private double _frameAngle;
+
+    /// <summary>
+    /// 位图左上角相对「逻辑帧」（图片×倍率的外接矩形）左上角的偏移，恒为 0 或负数。
+    ///
+    /// 贴图比屏幕大的时候，位图里装的是屏幕上那一段，所以内容要往左上挪这么多才对齐。
+    /// 它和尺寸一起进帧缓存的比较键：拖动一张超出屏幕的贴图会改变裁剪位置，
+    /// 尺寸可能没变、内容却变了。
+    /// </summary>
+    private int _frameOffsetX;
+    private int _frameOffsetY;
+
+    /// <summary>
+    /// 这一帧在屏幕上实际占的矩形（虚拟屏幕物理像素）。位图尺寸和 ULW 的 size 都取自它。
+    ///
+    /// 为什么要裁：绘制耗时几乎只跟**目标位图的面积**成正比，实测 2880×1620 约 28ms、
+    /// 倍到 18.7M 像素 160ms、74M 像素 564ms。贴图一旦放大到超过屏幕，每格滚轮都要重采样
+    /// 一张屏幕放不下的位图，滚起来就是一顿一顿的。而屏幕上根本显示不出那部分 ——
+    /// 裁掉之后每帧的代价恒定在「一屏」这个量级，与倍率无关。
+    /// </summary>
+    private Rectangle _view;
 
     /// <summary>用户请求复制这张贴图。</summary>
     public event Action<BitmapSource>? CopyRequested;
@@ -279,6 +332,14 @@ public sealed class PinForm : Form
         SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint, true);
 
         _menu = BuildContextMenu();
+
+        // 手一停就把细节补回来：把交互期间那张最近邻的粗帧换成高质量帧
+        _refine.Tick += (_, _) =>
+        {
+            _refine.Stop();
+            if (!_frameFast) return;
+            RenderFrame();
+        };
     }
 
     /// <summary>
@@ -376,17 +437,27 @@ public sealed class PinForm : Form
         _top = anchor.Y - (anchor.Y - _top) * k;
         _scale = next;
 
-        RenderFrame();
+        // 滚轮是高频动作：先用最近邻出一帧（10ms），停手后自动补一帧高质量的
+        RenderFrame(fast: true);
         // 滚轮一格算一次，不是每帧一次，直接落盘
         NotifyChanged();
     }
 
     /// <summary>
-    /// 当前帧的中心（虚拟屏幕物理像素）。帧就是图片旋转后的外接矩形，矩形中心和
+    /// 当前内容的中心（虚拟屏幕物理像素）。帧就是图片旋转后的外接矩形，矩形中心和
     /// 图片内容的中心是同一个点，所以缩放、旋转、摆菜单都拿它当锚。
+    ///
+    /// 按**逻辑帧**算，不用 <see cref="_frameW"/>：那是裁剪后的位图尺寸，只有屏幕那么大，
+    /// 拿它求中心会让一张超出屏幕的贴图转到屏幕角落里去。
     /// </summary>
     private (double x, double y) ContentCenter
-        => (_left + _frameW / 2.0, _top + _frameH / 2.0);
+    {
+        get
+        {
+            var (fw, fh) = FrameSize(_scale);
+            return (_left + fw / 2.0, _top + fh / 2.0);
+        }
+    }
 
     /// <summary>
     /// 图片四角在本窗口客户区里的位置。
@@ -399,9 +470,12 @@ public sealed class PinForm : Form
     private PointF[] ContentCorners()
     {
         var (iw, ih) = ScaledSize(_scale);
+        var (fw, fh) = FrameSize(_scale);
         var (cos, sin) = RotationTerms();
 
-        double cx = _frameW / 2.0, cy = _frameH / 2.0;
+        // 画布是裁剪后的那块（屏幕上看得见的），它在逻辑帧里的左上角就是 _frameOffset。
+        // 图片中心 ↦ 画布里的 (逻辑帧中心 + 偏移)，其余跟原来一样
+        double cx = fw / 2.0 + _frameOffsetX, cy = fh / 2.0 + _frameOffsetY;
         double hx = iw / 2.0, hy = ih / 2.0;
 
         PointF Map(double x, double y) => new(
@@ -421,7 +495,9 @@ public sealed class PinForm : Form
     private PointF MouseInWindow()
     {
         var p = Cursor.Position;
-        return new PointF(p.X - (float)Math.Round(_left), p.Y - (float)Math.Round(_top));
+        // 减的是「这一帧在屏幕上的位置」，不是逻辑帧的 _left/_top —— 贴图超出屏幕时
+        // 两者差着裁掉的那一截，用 _left 算会让角区整体偏移到图外去
+        return new PointF(p.X - _view.X, p.Y - _view.Y);
     }
 
     private bool IsNearContentCorner() => IsNearContentCorner(MouseInWindow());
@@ -429,7 +505,7 @@ public sealed class PinForm : Form
     /// <param name="p">窗口客户区坐标。单独开这个重载是为了不依赖真实光标位置，好单独验证。</param>
     private bool IsNearContentCorner(PointF p)
     {
-        if (_frame is null || _frameW <= 0 || _frameH <= 0) return false;
+        if (!_frameReady || _frameW <= 0 || _frameH <= 0) return false;
 
         double r2 = RotateGrabRadius * RotateGrabRadius;
         foreach (var c in ContentCorners())
@@ -543,7 +619,8 @@ public sealed class PinForm : Form
         _left = cx - w / 2.0;
         _top = cy - h / 2.0;
 
-        RenderFrame();
+        // 拖拽旋转时也是连续动作，同样走快速帧；离散旋转（菜单、Ctrl+R）要一次到位的高质量
+        RenderFrame(fast: _rotating);
 
         // 拖拽旋转期间这条路上每帧都会走一遍，落盘得等松手那一下（见 OnMouseUp）。
         // 滚轮、菜单、Ctrl+R 那几条是离散动作，各转一次写一次
@@ -647,95 +724,244 @@ public sealed class PinForm : Form
     }
 
     /// <summary>
-    /// 几何变了（缩放或旋转）：重画整帧，然后原子送上去。帧按「尺寸 + 角度」缓存 ——
-    /// 拖动只改位置，直接复用这一帧，不重画。
+    /// 几何变了（缩放、旋转、拖动）或者裁剪位置变了：重画这一帧，然后原子送上去。
     ///
-    /// 角度必须一起比：转过一点点角度时外接矩形的取整结果常常没变（尺寸一样），
-    /// 只比尺寸就会拿一张旧朝向的帧继续显示。
+    /// **位图只覆盖「图片和桌面的交集」**，不是整张图。贴图超过屏幕时，屏幕外那部分
+    /// 无论如何都显示不出来，却要按面积付重采样的代价 —— 不裁的话每格滚轮就要重画一张
+    /// 几十 MB 的位图，滚起来一顿一顿的（见 <see cref="_view"/>）。
+    ///
+    /// 缓存键是「裁剪矩形 + 角度 + 质量档」：只比尺寸不够 —— 拖动一张超出屏幕的贴图时，
+    /// 裁剪窗口在整图上的位置变了，尺寸可能一模一样、内容却完全不同；质量档不进键的话，
+    /// 停手后补高质量帧会被缓存挡掉，画面就一直停在粗帧上。
     /// </summary>
-    private void RenderFrame()
+    /// <param name="fast">
+    /// 交互中的快速帧：用最近邻重采样，一屏面积下 31ms → 10ms，滚轮才跟得上手。
+    /// 由 <see cref="_refine"/> 在停手后换回高质量帧。
+    /// </param>
+    private void RenderFrame(bool fast = false)
     {
-        var (w, h) = FrameSize(_scale);
-        if (_frame is null || _frameW != w || _frameH != h || _frameAngle != _angle)
-        {
-            DrawFrame(w, h);
-            _frameW = w;
-            _frameH = h;
-            _frameAngle = _angle;
-        }
+        var (fw, fh) = FrameSize(_scale);
+        int x = (int)Math.Round(_left), y = (int)Math.Round(_top);
+
+        var view = Rectangle.Intersect(new Rectangle(x, y, fw, fh), VirtualDesktopBounds());
+
+        // 整张贴图都在屏幕外（拖出去了，或者那块屏拔了）：窗口退成 1×1 的占位，
+        // ULW 不接受零尺寸。用户挪回来的时候会重新画
+        if (view.Width <= 0 || view.Height <= 0) view = new Rectangle(x, y, 1, 1);
+
+        // 逻辑帧左上角落在位图里的位置，恒为 0 或负数（裁剪掉了左边/上边那截）
+        int offsetX = x - view.X, offsetY = y - view.Y;
+
+        bool stale = !_frameReady
+                     || _frameW != view.Width || _frameH != view.Height
+                     || _frameOffsetX != offsetX || _frameOffsetY != offsetY
+                     || _frameAngle != _angle
+                     || _frameFast != fast;
+
+        if (stale) DrawFrame(view.Width, view.Height, offsetX, offsetY, fw, fh, fast);
+
+        _frameW = view.Width;
+        _frameH = view.Height;
+        _frameOffsetX = offsetX;
+        _frameOffsetY = offsetY;
+        _frameAngle = _angle;
+        _frameFast = fast;
+        _view = view;
+
         UploadFrame();
+
+        // 快速帧只是过渡：手一停就把细节补回来。反复滚动的过程中定时器一直被重置，
+        // 所以不会在滚动中途插一帧 31ms 的慢活
+        _refine.Stop();
+        if (fast) _refine.Start();
     }
 
-    private void DrawFrame(int w, int h)
+    /// <summary>所有显示器拼起来的外接矩形（虚拟屏幕物理像素）。贴图只在这块里面才画得出来。</summary>
+    private static Rectangle VirtualDesktopBounds()
     {
+        var monitors = MonitorEnumerator.Enumerate();
+        if (monitors.Count == 0) return SystemInformation.VirtualScreen;
+
+        var first = monitors[0].Bounds;
+        int left = first.X, top = first.Y, right = first.Right, bottom = first.Bottom;
+
+        for (int i = 1; i < monitors.Count; i++)
+        {
+            var b = monitors[i].Bounds;
+            left = Math.Min(left, b.X);
+            top = Math.Min(top, b.Y);
+            right = Math.Max(right, b.Right);
+            bottom = Math.Max(bottom, b.Bottom);
+        }
+
+        return new Rectangle(left, top, right - left, bottom - top);
+    }
+
+    /// <param name="w">位图宽（裁剪后，≤ 逻辑帧宽）。</param>
+    /// <param name="h">位图高。</param>
+    /// <param name="offsetX">位图左上角相对逻辑帧左上角的偏移，≤ 0。</param>
+    /// <param name="offsetY">同上。</param>
+    /// <param name="frameW">逻辑帧宽（图片×倍率），用来定位内容中心。</param>
+    /// <param name="frameH">逻辑帧高。</param>
+    /// <param name="fast">交互中的快速帧：最近邻重采样，不管标称质量档。</param>
+    private void DrawFrame(int w, int h, int offsetX, int offsetY, int frameW, int frameH, bool fast)
+    {
+        EnsureFrameSurface(w, h);
+
+        var (iw, ih) = ScaledSize(_scale);
+
+        // 直接画进 DIBSection 的像素内存：ULW 待会儿读的就是这一块，中间没有第二次拷贝
+        using var g = Graphics.FromHdc(_frameDc);
+
+        // 容量通常比这帧大，先圈出真正要用的区域
+        g.SetClip(new Rectangle(0, 0, w, h));
+        g.CompositingMode = CompositingMode.SourceCopy;
+
+        // 判断「转没转」不能看矩阵是不是单位阵：裁剪之后哪怕角度是 0，
+        // 矩阵里也带着 offset，IsIdentity 必然是 false —— 那样 1:1 的最近邻分支
+        // 就再也走不到了
+        var (cos, sin) = RotationTerms();
+        float fc = (float)cos, fs = (float)sin;
+        bool rotated = _angle != 0;
+
+        // 只有转过角度才要清：那时候四个角不画，复用缓冲会留下上一帧的脏东西。
+        // 没转的时候整块都会被这一帧盖满（裁剪区一定落在图片内部），清一遍纯属白送
+        // 一次 16MB 的写入
+        if (rotated) g.Clear(Color.Transparent);
+
+        // 图片自己的中心 ↦ 帧画布中心，也就是 p' = R·(p - 图片中心) + 画布中心。
+        //
+        // GDI+ 的仿射矩阵把 (x,y) 映射到 (x·m11 + y·m21 + dx, x·m12 + y·m22 + dy)，
+        // 顺时针转 θ 就是 m11 = cos、m12 = sin、m21 = -sin、m22 = cos；dx/dy 直接填
+        // 上面那条式子化简完的平移量，省一次 Translate 调用。
+        //
+        // 不走 Matrix.Rotate()：它内部自己算 sin/cos，90° 拿到的是 6.1e-17 那种残渣，
+        // 整张图会被平移半个像素再插值一遍（见 RotationTerms）。
+        if (rotated)
+        {
+            // 图片中心 ↦ 画布里的「逻辑帧中心 + 裁剪偏移」
+            float cx = frameW / 2f + offsetX, cy = frameH / 2f + offsetY;
+            float halfIW = iw / 2f, halfIH = ih / 2f;
+            g.Transform = new Matrix(
+                fc, fs, -fs, fc,
+                cx - (fc * halfIW - fs * halfIH),
+                cy - (fs * halfIW + fc * halfIH));
+        }
+
+        // 交互中的快速帧一律走最近邻：一屏面积下 31ms → 10ms，滚轮才跟得上手。
+        // 手上停住 140ms 后由 _refine 换回下面这套高质量档（见 RenderFrame）
+        g.InterpolationMode = fast
+            ? InterpolationMode.NearestNeighbor
+            : FrameResampleMode(rotated);
+        g.PixelOffsetMode = fast || _scale >= CrispThreshold
+            ? PixelOffsetMode.Half
+            : PixelOffsetMode.HighQuality;
+
+        // 转过角度时坐标走变换（原点在图片自己的左上角），没转时直接落在裁剪后的位置上。
+        // 后者绕开变换管线，1:1 那一档的像素级锐利才保得住
+        g.DrawImage(_bitmap, rotated
+            ? new Rectangle(0, 0, iw, ih)
+            : new Rectangle(offsetX, offsetY, iw, ih));
+
+        // 一圈实色细边把贴图跟桌面内容分开。
+        //
+        // 1px 的笔是居中对齐的：按整数坐标画时，上/左沿的笔有一半探到画布外
+        // （y/x = 0 之外），那一半被 GDI 裁掉，于是只剩右/下沿有边。
+        // 把矩形按半像素内移，笔正好铺满最外圈的那行/那列像素，四条边都在。
+        // （唯一例外是左上角 (0,0) 那一个像素：非抗锯齿下 GDI+ 描闭合矩形会跳掉起笔
+        // 那个点，实测就是这么漏一个像素。这一点在加旋转之前就存在，没跟着改。）
+        // 图片此时已画完，这里把像素偏移切到不偏移的 None，保证半像素内移
+        // 在任何倍率下都按原样生效，不受上面缩放用的偏移模式影响。
+        //
+        // 转过角度时边框是斜的，得开抗锯齿，否则 1px 的斜线是一格一格的台阶；
+        // 不转时保持默认的 None —— 抗锯齿会把 1px 实线摊虚，那种锐利细边就没了。
+        // 边框画在图片自己的矩形上（变换会跟着转），所以它始终贴着图的边；裁剪掉的部分
+        // 落在画布外，GDI 自然不给画。
+        if (rotated && !IsQuarterTurn) g.SmoothingMode = SmoothingMode.AntiAlias;
+        g.PixelOffsetMode = PixelOffsetMode.None;
+        using var pen = new Pen(BorderColor);
+        if (rotated) g.DrawRectangle(pen, 0.5f, 0.5f, iw - 1, ih - 1);
+        else g.DrawRectangle(pen, offsetX + 0.5f, offsetY + 0.5f, iw - 1, ih - 1);
+    }
+
+    /// <summary>
+    /// 准备一块够大的 DIBSection。容量足够就原样复用 —— 缩放时每格的尺寸变化通常
+    /// 只有几个像素，重建一次要分配+删除整块内存，那才是「一气滚好几格」时的主要卡顿来源。
+    ///
+    /// 尺寸一次到位不够用，所以新分配时留 1.25 倍余量：往上放大的过程会连着几格都落在
+    /// 余量里，之后到顶了就一直是复用。位图比实际帧大没关系，ULW 只读左上角 size 那块。
+    /// </summary>
+    private void EnsureFrameSurface(int w, int h)
+    {
+        if (_frameDc != IntPtr.Zero && _frameCapacityW >= w && _frameCapacityH >= h) return;
+
+        ReleaseFrameSurface();
+
+        int cw = Math.Max(w, (int)(w * 1.25) + 1);
+        int ch = Math.Max(h, (int)(h * 1.25) + 1);
+
+        var bmi = new BITMAPINFO
+        {
+            bmiHeader = new BITMAPINFOHEADER
+            {
+                biSize = (uint)Marshal.SizeOf<BITMAPINFOHEADER>(),
+                biWidth = cw,
+                // 负数 = top-down，扫描线顺序和 GDI+ 的坐标方向一致
+                biHeight = -ch,
+                biPlanes = 1,
+                biBitCount = 32,
+                biCompression = NativeMethods.BI_RGB,
+            },
+        };
+
+        IntPtr screen = NativeMethods.GetDC(IntPtr.Zero);
+        try
+        {
+            _frameHBitmap = NativeMethods.CreateDIBSection(screen, ref bmi,
+                NativeMethods.DIB_RGB_COLORS, out _, IntPtr.Zero, 0);
+
+            if (_frameHBitmap == IntPtr.Zero)
+                throw new InvalidOperationException("CreateDIBSection 失败");
+
+            _frameDc = NativeMethods.CreateCompatibleDC(screen);
+            if (_frameDc == IntPtr.Zero)
+                throw new InvalidOperationException("CreateCompatibleDC 失败");
+
+            _frameOldBitmap = NativeMethods.SelectObject(_frameDc, _frameHBitmap);
+        }
+        catch
+        {
+            ReleaseFrameSurface();
+            throw;
+        }
+        finally
+        {
+            NativeMethods.ReleaseDC(IntPtr.Zero, screen);
+        }
+
+        _frameCapacityW = cw;
+        _frameCapacityH = ch;
+        _frameReady = true;
+    }
+
+    private void ReleaseFrameSurface()
+    {
+        if (_frameDc != IntPtr.Zero)
+        {
+            // 先把 DC 的原始位图选回去：还挂着的位图 DeleteObject 是删不掉的，会一直漏
+            if (_frameOldBitmap != IntPtr.Zero) NativeMethods.SelectObject(_frameDc, _frameOldBitmap);
+            NativeMethods.DeleteDC(_frameDc);
+            _frameDc = IntPtr.Zero;
+        }
         if (_frameHBitmap != IntPtr.Zero)
         {
             NativeMethods.DeleteObject(_frameHBitmap);
             _frameHBitmap = IntPtr.Zero;
         }
-        _frame?.Dispose();
-
-        var (iw, ih) = ScaledSize(_scale);
-
-        var frame = new Bitmap(w, h, PixelFormat.Format32bppArgb);
-        using (var g = Graphics.FromImage(frame))
-        {
-            // 图片自己的中心 ↦ 帧画布中心，也就是 p' = R·(p - 图片中心) + 画布中心。
-            //
-            // GDI+ 的仿射矩阵把 (x,y) 映射到 (x·m11 + y·m21 + dx, x·m12 + y·m22 + dy)，
-            // 顺时针转 θ 就是 m11 = cos、m12 = sin、m21 = -sin、m22 = cos；dx/dy 直接填
-            // 上面那条式子化简完的平移量，省一次 Translate 调用。
-            //
-            // 不走 Matrix.Rotate()：它内部自己算 sin/cos，90° 拿到的是 6.1e-17 那种残渣，
-            // 整张图会被平移半个像素再插值一遍（见 RotationTerms）。
-            var (cos, sin) = RotationTerms();
-            float fc = (float)cos, fs = (float)sin;
-            float halfW = w / 2f, halfH = h / 2f;
-            float halfIW = iw / 2f, halfIH = ih / 2f;
-            var transform = new Matrix(
-                fc, fs, -fs, fc,
-                halfW - (fc * halfIW - fs * halfIH),
-                halfH - (fs * halfIW + fc * halfIH));
-
-            // 没转角度时矩阵正好是单位阵（w == iw、h == ih，两个半宽相减是 0），
-            // 不进变换分支，绘制路径跟加旋转之前一模一样。
-            bool rotated = !transform.IsIdentity;
-            if (rotated) g.Transform = transform;
-
-            g.InterpolationMode = FrameResampleMode(rotated);
-            g.PixelOffsetMode = _scale >= CrispThreshold
-                ? PixelOffsetMode.Half
-                : PixelOffsetMode.HighQuality;
-
-            g.DrawImage(_bitmap, new Rectangle(0, 0, iw, ih));
-
-            // 一圈实色细边把贴图跟桌面内容分开。
-            //
-            // 1px 的笔是居中对齐的：按整数坐标画时，上/左沿的笔有一半探到画布外
-            // （y/x = 0 之外），那一半被 GDI 裁掉，于是只剩右/下沿有边。
-            // 把矩形按半像素内移，笔正好铺满最外圈的那行/那列像素，四条边都在。
-            // （唯一例外是左上角 (0,0) 那一个像素：非抗锯齿下 GDI+ 描闭合矩形会跳掉起笔
-            // 那个点，实测就是这么漏一个像素。这一点在加旋转之前就存在，没跟着改。）
-            // 图片此时已画完，这里把像素偏移切到不偏移的 None，保证半像素内移
-            // 在任何倍率下都按原样生效，不受上面缩放用的偏移模式影响。
-            //
-            // 转过角度时边框是斜的，得开抗锯齿，否则 1px 的斜线是一格一格的台阶；
-            // 不转时保持默认的 None —— 抗锯齿会把 1px 实线摊虚，那种锐利细边就没了。
-            // 边框画在图片自己的矩形上（变换会跟着转），所以它始终贴着图的边。
-            if (rotated && !IsQuarterTurn) g.SmoothingMode = SmoothingMode.AntiAlias;
-            g.PixelOffsetMode = PixelOffsetMode.None;
-            using var pen = new Pen(BorderColor);
-            g.DrawRectangle(pen, 0.5f, 0.5f, iw - 1, ih - 1);
-        }
-
-        _frame = frame;
-        // HBITMAP 缓存下来反复用：拖动时每次 ULW 不必重新 GetHbitmap 拷一遍整帧。
-        //
-        // 这个 Color.Black 现在是**要紧**的：转过角度后帧的四角是透明像素，而无参的
-        // GetHbitmap() 会给透明像素填上垃圾 RGB（实测 A=0 但 RGB=211）。ULW 收的是
-        // 预乘 alpha，A=0 而 RGB 不为 0 的像素合成时等于「把 RGB 加到底下的画面上」，
-        // 于是四角会浮出一层灰白色块。传了黑底就没有这回事（透明像素是干净的 0,0,0,0）。
-        _frameHBitmap = frame.GetHbitmap(Color.Black);
+        _frameOldBitmap = IntPtr.Zero;
+        _frameCapacityW = 0;
+        _frameCapacityH = 0;
+        _frameReady = false;
     }
 
     /// <summary>
@@ -744,9 +970,13 @@ public sealed class PinForm : Form
     /// </summary>
     private void UploadFrame()
     {
-        if (_frame is null || _frameHBitmap == IntPtr.Zero) return;
+        if (!_frameReady || _frameDc == IntPtr.Zero) return;
 
-        var dst = new POINT { X = (int)Math.Round(_left), Y = (int)Math.Round(_top) };
+        // GDI+ 和 GDI 是两条管线：先把 GDI+ 攒着的绘制刷下去，
+        // ULW 才不会读到还没画完的那块内存
+        NativeMethods.GdiFlush();
+
+        var dst = new POINT { X = _view.X, Y = _view.Y };
         var size = new SIZE { cx = _frameW, cy = _frameH };
         var src = new POINT { X = 0, Y = 0 };
         var blend = new BLENDFUNCTION
@@ -758,19 +988,15 @@ public sealed class PinForm : Form
         };
 
         IntPtr screenDc = NativeMethods.GetDC(IntPtr.Zero);
-        IntPtr memDc = IntPtr.Zero;
-        IntPtr oldBitmap = IntPtr.Zero;
         try
         {
-            memDc = NativeMethods.CreateCompatibleDC(screenDc);
-            oldBitmap = NativeMethods.SelectObject(memDc, _frameHBitmap);
+            // 直接用帧自己的 DC（上面选着的就是那块 DIB），不再另建一个再选一次 ——
+            // 少一次 DC 创建和一次对象选择，拖动这种高频路径上省的是实打实的时间
             NativeMethods.UpdateLayeredWindow(Handle, screenDc,
-                ref dst, ref size, memDc, ref src, 0, ref blend, NativeMethods.ULW_ALPHA);
+                ref dst, ref size, _frameDc, ref src, 0, ref blend, NativeMethods.ULW_ALPHA);
         }
         finally
         {
-            if (oldBitmap != IntPtr.Zero) NativeMethods.SelectObject(memDc, oldBitmap);
-            if (memDc != IntPtr.Zero) NativeMethods.DeleteDC(memDc);
             if (screenDc != IntPtr.Zero) NativeMethods.ReleaseDC(IntPtr.Zero, screenDc);
         }
     }
@@ -825,7 +1051,12 @@ public sealed class PinForm : Form
             var now = Cursor.Position;
             _left = _dragStartLeft + (now.X - _dragOrigin.X);
             _top = _dragStartTop + (now.Y - _dragOrigin.Y);
-            UploadFrame();
+
+            // 走 RenderFrame 而不是只 UploadFrame：贴图超出屏幕时窗口只是屏幕上的那一块，
+            // 拖动会让裁剪窗口在整图上滑动 —— 尺寸可能没变，内容却变了，必须重画。
+            // 完全在屏幕内时缓存命中，实际仍然只是把同一张位图挪个位置。
+            // 拖拽是每秒几十次的连续动作，用快速帧；松手后 _refine 会补高质量
+            RenderFrame(fast: true);
             return;
         }
 
@@ -1228,13 +1459,10 @@ public sealed class PinForm : Form
     {
         if (disposing)
         {
+            _refine.Stop();
+            _refine.Dispose();
             _bitmap.Dispose();
-            if (_frameHBitmap != IntPtr.Zero)
-            {
-                NativeMethods.DeleteObject(_frameHBitmap);
-                _frameHBitmap = IntPtr.Zero;
-            }
-            _frame?.Dispose();
+            ReleaseFrameSurface();
         }
         base.Dispose(disposing);
     }

@@ -189,6 +189,15 @@ public static class NativeMethods
     public static extern IntPtr CreateDIBSection(IntPtr hdc, ref BITMAPINFO bmi, uint usage,
         out IntPtr ppvBits, IntPtr hSection, uint offset);
 
+    /// <summary>
+    /// 把 GDI+ 攒在批处理里还没下发的绘制指令立刻执行掉。
+    ///
+    /// 画进 DIBSection 之后要把它交给 UpdateLayeredWindow 读 —— GDI+ 和 GDI 是两条
+    /// 独立的管线，不刷的话 ULW 有可能读到还没画完的那块内存。
+    /// </summary>
+    [DllImport("gdi32.dll")]
+    public static extern bool GdiFlush();
+
     [DllImport("gdi32.dll", SetLastError = true)]
     public static extern bool BitBlt(IntPtr hdcDest, int xDest, int yDest, int w, int h,
         IntPtr hdcSrc, int xSrc, int ySrc, uint rop);
