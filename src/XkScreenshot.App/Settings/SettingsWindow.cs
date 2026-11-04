@@ -82,8 +82,10 @@ public sealed class SettingsWindow : Window
 
     private readonly HotkeyBox _captureHotkey = new() { Width = 132 };
     private readonly HotkeyBox _pinHotkey = new() { Width = 132 };
+    private readonly HotkeyBox _showPinsHotkey = new() { Width = 132 };
     private readonly TextBlock _captureStatus = new();
     private readonly TextBlock _pinStatus = new();
+    private readonly TextBlock _showPinsStatus = new();
 
     /// <summary>探热键占用的那个探针。窗口一关就撤，别一直占着一个消息窗口。</summary>
     private readonly HotkeyProbe _probe = new();
@@ -373,7 +375,7 @@ public sealed class SettingsWindow : Window
             RefreshLangPairs();
         };
 
-        foreach (var box in new[] { _captureHotkey, _pinHotkey })
+        foreach (var box in new[] { _captureHotkey, _pinHotkey, _showPinsHotkey })
         {
             box.ValueChanged += RefreshHotkeyStatus;
             box.GotKeyboardFocus += (_, _) => UpdateRecording();
@@ -390,7 +392,8 @@ public sealed class SettingsWindow : Window
         PreviewMouseDown += (_, e) =>
         {
             if (e.OriginalSource is DependencyObject source && InsideHotkeyBox(source)) return;
-            if (_captureHotkey.IsKeyboardFocusWithin || _pinHotkey.IsKeyboardFocusWithin)
+            if (_captureHotkey.IsKeyboardFocusWithin || _pinHotkey.IsKeyboardFocusWithin
+                || _showPinsHotkey.IsKeyboardFocusWithin)
                 Keyboard.ClearFocus();
         };
 
@@ -493,7 +496,9 @@ public sealed class SettingsWindow : Window
             HotkeyCard(Icons.Camera, "开始截图",
                 _captureHotkey, _captureStatus, HotkeySpec.CaptureDefault),
             HotkeyCard(Icons.Pin, "贴图",
-                _pinHotkey, _pinStatus, HotkeySpec.PinDefault));
+                _pinHotkey, _pinStatus, HotkeySpec.PinDefault),
+            HotkeyCard(Icons.Eye, "显示所有贴图",
+                _showPinsHotkey, _showPinsStatus, HotkeySpec.ShowPinsDefault));
 
         AddPage(Icons.Crop, "截图",
             Card(Icons.CornerDownLeft, "确认截图后", null, _defaultAction),
@@ -1146,7 +1151,8 @@ public sealed class SettingsWindow : Window
     private void UpdateRecording()
     {
         bool recording = IsActive
-                         && (_captureHotkey.IsKeyboardFocusWithin || _pinHotkey.IsKeyboardFocusWithin);
+                         && (_captureHotkey.IsKeyboardFocusWithin || _pinHotkey.IsKeyboardFocusWithin
+                             || _showPinsHotkey.IsKeyboardFocusWithin);
         if (recording == _recording) return;
 
         _recording = recording;
@@ -1165,25 +1171,43 @@ public sealed class SettingsWindow : Window
         return false;
     }
 
+    /// <summary>热键页上的全部条目，按界面上出现的顺序排（报冲突时按这个顺序读起来最自然）。</summary>
+    private HotkeySlot[] HotkeySlots() =>
+    [
+        new("开始截图", _captureHotkey, _captureStatus),
+        new("贴图", _pinHotkey, _pinStatus),
+        new("显示所有贴图", _showPinsHotkey, _showPinsStatus),
+    ];
+
+    /// <summary>一张热键卡片上跟冲突有关的三样东西。</summary>
+    private sealed record HotkeySlot(string Name, HotkeyBox Box, TextBlock Status);
+
     private void RefreshHotkeyStatus()
     {
-        Describe(_captureHotkey.Value, _pinHotkey.Value, _captureStatus);
-        Describe(_pinHotkey.Value, _captureHotkey.Value, _pinStatus);
+        var slots = HotkeySlots();
+        foreach (var slot in slots) Describe(slot, slots);
     }
 
-    private void Describe(HotkeySpec spec, HotkeySpec other, TextBlock status)
+    /// <summary>
+    /// 一个槽自己那一行提示。遍历所有槽来找撞车的那个，而不是只跟「另一项」比 ——
+    /// 热键已经不止两项，写死一对的话第三项跟谁撞都看不出来。
+    /// </summary>
+    private void Describe(HotkeySlot slot, HotkeySlot[] slots)
     {
+        HotkeySpec spec = slot.Box.Value;
         string? message = null;
 
-        if (!spec.IsSet)
-            message = null;
-        else if (spec == other)
-            message = "和另一个热键设成了同一个组合键。";
-        else if (IsTakenByOthers(spec))
-            message = "已被其他程序占用，这样保存不会生效。";
+        if (spec.IsSet)
+        {
+            var clash = slots.FirstOrDefault(s => !ReferenceEquals(s, slot) && s.Box.Value == spec);
+            if (clash is not null)
+                message = $"和「{clash.Name}」设成了同一个组合键。";
+            else if (IsTakenByOthers(spec))
+                message = "已被其他程序占用，这样保存不会生效。";
+        }
 
-        status.Text = message ?? string.Empty;
-        status.Visibility = message is null ? Visibility.Collapsed : Visibility.Visible;
+        slot.Status.Text = message ?? string.Empty;
+        slot.Status.Visibility = message is null ? Visibility.Collapsed : Visibility.Visible;
     }
 
     /// <summary>
@@ -1202,6 +1226,7 @@ public sealed class SettingsWindow : Window
     {
         _captureHotkey.Value = s.CaptureHotkey;
         _pinHotkey.Value = s.PinHotkey;
+        _showPinsHotkey.Value = s.ShowPinsHotkey;
         _directory.Text = s.SaveDirectory;
         _historyDir.Text = s.HistoryDirectory;
         _prefix.Text = s.FileNamePrefix;
@@ -1835,6 +1860,7 @@ public sealed class SettingsWindow : Window
 
         _draft.CaptureHotkey = _captureHotkey.Value;
         _draft.PinHotkey = _pinHotkey.Value;
+        _draft.ShowPinsHotkey = _showPinsHotkey.Value;
         _draft.SaveDirectory = directory;
         _draft.HistoryDirectory = historyDir;
         _draft.FileNamePrefix = _prefix.Text.Trim();
@@ -1914,17 +1940,30 @@ public sealed class SettingsWindow : Window
     /// </summary>
     private bool CheckHotkeys()
     {
-        if (_captureHotkey.Value.IsSet && _captureHotkey.Value == _pinHotkey.Value)
+        var slots = HotkeySlots();
+
+        var clashes = new List<string>();
+        for (int i = 0; i < slots.Length; i++)
+        for (int j = i + 1; j < slots.Length; j++)
+        {
+            var a = slots[i];
+            var b = slots[j];
+            if (a.Box.Value.IsSet && a.Box.Value == b.Box.Value)
+                clashes.Add($"「{a.Name}」和「{b.Name}」都设成了 {a.Box.Value}");
+        }
+
+        if (clashes.Count > 0)
         {
             Dialog.Notify(this, _dark,
-                $"「开始截图」和「贴图」都设成了 {_captureHotkey.Value}，请给其中一个换一个组合键。",
+                string.Join(Environment.NewLine, clashes) + "，请给其中一个换一个组合键。",
                 DialogKind.Warning);
             return false;
         }
 
-        var taken = new List<string>();
-        if (IsTakenByOthers(_captureHotkey.Value)) taken.Add($"开始截图（{_captureHotkey.Value}）");
-        if (IsTakenByOthers(_pinHotkey.Value)) taken.Add($"贴图（{_pinHotkey.Value}）");
+        var taken = slots
+            .Where(s => IsTakenByOthers(s.Box.Value))
+            .Select(s => $"{s.Name}（{s.Box.Value}）")
+            .ToList();
         if (taken.Count == 0) return true;
 
         return Dialog.Confirm(this, _dark,

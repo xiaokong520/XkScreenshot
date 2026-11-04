@@ -24,6 +24,10 @@ public sealed record HotkeySpec(HotkeyModifiers Modifiers, uint VirtualKey)
     /// <summary>0x72 = VK_F3。</summary>
     public static readonly HotkeySpec PinDefault = new(HotkeyModifiers.None, 0x72);
 
+    /// <summary>把收起来的贴图重新摆出来。0x48 = VK_H，Ctrl+Shift+H。</summary>
+    public static readonly HotkeySpec ShowPinsDefault
+        = new(HotkeyModifiers.Control | HotkeyModifiers.Shift, 0x48);
+
     public bool IsSet => VirtualKey != 0;
 
     public HotkeyBinding ToBinding(string name) => new(name, Modifiers, VirtualKey);
@@ -39,6 +43,14 @@ public sealed class AppSettings
 
     /// <summary>把剪贴板里的图钉到屏幕上。</summary>
     public HotkeySpec PinHotkey { get; set; } = HotkeySpec.PinDefault;
+
+    /// <summary>
+    /// 把「隐藏贴图 / 隐藏全部贴图」收起来的那批重新摆到屏幕上。
+    ///
+    /// 只有「显示」这一个方向：收起是随时可以做的动作（右键某张、托盘一次全收），
+    /// 而收起来之后屏幕上就没有任何东西能点了 —— 必须留一条不依赖鼠标的路把它们叫回来。
+    /// </summary>
+    public HotkeySpec ShowPinsHotkey { get; set; } = HotkeySpec.ShowPinsDefault;
 
     /// <summary>留空 = 系统「图片」文件夹。存空串而不是当场解析，换了机器/换了用户配置才不会带着旧路径走。</summary>
     public string SaveDirectory { get; set; } = string.Empty;

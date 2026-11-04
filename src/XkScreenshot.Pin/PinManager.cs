@@ -36,6 +36,12 @@ public sealed class PinManager
 
     public int Count => _pins.Count;
 
+    /// <summary>此刻摆在屏幕上的贴图张数。托盘的「隐藏全部贴图」按它决定灰不灰。</summary>
+    public int VisibleCount => _pins.Count(p => !p.IsHidden);
+
+    /// <summary>被收起来的贴图张数。托盘的「显示所有贴图」按它决定灰不灰。</summary>
+    public int HiddenCount => _pins.Count(p => p.IsHidden);
+
     /// <summary>贴图请求复制到剪贴板。</summary>
     public event Action<BitmapSource>? CopyRequested;
     /// <summary>贴图请求另存为文件。</summary>
@@ -135,6 +141,27 @@ public sealed class PinManager
 
         // 上面每关一张都会走一次 Save（见 Attach），这里只剩兜底
         Save();
+    }
+
+    /// <summary>
+    /// 把屏幕上所有贴图收起来（不关闭）。图还在名册里，位置、倍率、角度也都留着，
+    /// <see cref="ShowAll"/> 能原样摆回来。
+    ///
+    /// 收起状态**不落盘**：藏起来是「先让开一下」的临时动作，而存档是给重启用的。
+    /// 要是也存，用户重启后会看到一片空桌面，还得自己想起托盘的「显示所有贴图」——
+    /// 那比「重启后又冒出来」更像丢东西。真不要了就用 <see cref="CloseAll"/>。
+    /// </summary>
+    public void HideAll()
+    {
+        foreach (var pin in _pins.ToArray())
+            pin.HidePin();
+    }
+
+    /// <summary>把收起来的贴图全部摆回来。本来就摆着的原样不动，不会重排前后的层序。</summary>
+    public void ShowAll()
+    {
+        foreach (var pin in _pins.ToArray())
+            pin.ShowPin();
     }
 
     /// <summary>

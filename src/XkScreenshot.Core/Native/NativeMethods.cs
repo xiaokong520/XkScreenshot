@@ -162,6 +162,8 @@ public static class NativeMethods
     public static readonly IntPtr HWND_TOPMOST = new(-1);
     public const uint SWP_NOACTIVATE = 0x0010;
     public const uint SWP_SHOWWINDOW = 0x0040;
+    /// <summary>收起来。贴图用它显隐：ShowWindow 那一套会被 WinForms 补成「激活」，见 PinForm.HidePin。</summary>
+    public const uint SWP_HIDEWINDOW = 0x0080;
     public const uint SWP_NOZORDER = 0x0004;
     public const uint SWP_NOMOVE = 0x0002;
     public const uint SWP_NOSIZE = 0x0001;

@@ -49,6 +49,9 @@ namespace XkScreenshot.Pin;
 /// 贴图可以存档：位置、倍率、角度、透明度和画面一起落在程序目录下的 pins\ 里，
 /// 下次打开程序按原样摆回来（见 PinStore、PinManager.Restore）。存不存由设置里
 /// 「重启后恢复贴图」决定 —— 一件事要跨会话活下去，就得有个地方把它写下来。
+///
+/// 贴图还能「收起来」而不关闭：右键 → 隐藏贴图，或者托盘 → 隐藏全部贴图。窗口只是从屏幕上
+/// 收走，对象、几何、存档都照旧，再由托盘 → 显示所有贴图（有热键）原样摆回来。
 /// </summary>
 public sealed class PinForm : Form
 {
@@ -372,6 +375,56 @@ public sealed class PinForm : Form
         _left = Math.Clamp(_left, bounds.X, Math.Max(bounds.X, bounds.Right - w));
         _top = Math.Clamp(_top, bounds.Y, Math.Max(bounds.Y, bounds.Bottom - h));
     }
+
+    /// <summary>
+    /// 把这张贴图从屏幕上收起来，但不关闭 —— 它还在名册里，位置、倍率、角度都留着，
+    /// <see cref="ShowPin"/> 能原样摆回来。
+    ///
+    /// 不用把不透明度调到 0：透明窗口照样占着鼠标命中区，底下的东西还是点不到，
+    /// 那只是「看不见」，不是「收起来了」。也不走最小化 —— 最小化的窗口会跑到屏幕外，
+    /// 而这里要的是「原地收发」。
+    ///
+    /// **也不用 Form.Hide()/Show()，更不用 Form.Visible 判断显隐**（2026-11-04 实测）：
+    /// WinForms 的 Show() 会把**置顶**窗口激到前台 —— 一张最普通的 Form 只要 TopMost 为 true，
+    /// Show() 之后 GetForegroundWindow 就变成它、Activated 也照发；把 ShowWithoutActivation
+    /// 置成 true 也拦不住（WinForms 补置顶那一步的 SetWindowPos 没带 SWP_NOACTIVATE）。
+    /// 而「显示所有贴图」是用户按热键叫回来的，焦点必须留在他正在打字的窗口里：抢过来之后
+    /// 一个 Esc 就会顺手关掉一张（贴图的 Esc 是关闭）。所以这里直接下发 SetWindowPos，
+    /// 两个方向都带 SWP_NOACTIVATE。代价是 Form.Visible 不再反映真实状态，
+    /// 显隐一律认 <see cref="IsHidden"/>。
+    /// </summary>
+    internal void HidePin()
+    {
+        if (_hidden) return;
+        _hidden = true;
+
+        NativeMethods.SetWindowPos(Handle, IntPtr.Zero, 0, 0, 0, 0,
+            NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOZORDER
+            | NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_HIDEWINDOW);
+    }
+
+    /// <summary>
+    /// 把收起来的贴图重新摆出来（不激活、不抢焦点，理由见 <see cref="HidePin"/>）。
+    ///
+    /// 显出来之后再送一帧：窗口的内容虽然还在这块分层表面上，但位置和尺寸是每次 ULW 提交时
+    /// 一起给的 —— 收起来这段时间里几何若被谁动过，重交一遍才回得到原位。
+    /// </summary>
+    internal void ShowPin()
+    {
+        if (!_hidden) return;
+        _hidden = false;
+
+        NativeMethods.SetWindowPos(Handle, IntPtr.Zero, 0, 0, 0, 0,
+            NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOZORDER
+            | NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_SHOWWINDOW);
+
+        RenderFrame();
+    }
+
+    /// <summary>是不是被 <see cref="HidePin"/> 收起来了。显隐的**唯一**判据，别改看 Visible。</summary>
+    internal bool IsHidden => _hidden;
+
+    private bool _hidden;
 
     protected override CreateParams CreateParams
     {
@@ -1255,6 +1308,11 @@ public sealed class PinForm : Form
         };
         menu.Items.Add(topmostItem);
 
+        menu.Items.Add(new ToolStripSeparator());
+
+        // 「隐藏」不是「关闭」：图还留在名册里，托盘的「显示所有贴图」能原样叫回来。
+        // 它和「关闭」紧挨着，所以必须隔一条线 —— 想收起来的人手一滑点到关闭，那张图就真没了
+        menu.Items.Add("隐藏贴图", null, (_, _) => HidePin());
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("关闭 (Esc / Del)", null, (_, _) => Close());
 

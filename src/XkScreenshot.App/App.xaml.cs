@@ -31,6 +31,7 @@ public partial class App : Application
     // 热键靠名字分发。HotkeyManager 只管注册，按下之后干什么是这一层的事
     private const string CaptureHotkeyName = "Capture";
     private const string PinHotkeyName = "Pin";
+    private const string ShowPinsHotkeyName = "ShowPins";
 
     /// <summary>提权重启时，新实例最多等老实例腾出单实例名额多久。</summary>
     private static readonly TimeSpan RestartHandoverTimeout = TimeSpan.FromSeconds(10);
@@ -42,6 +43,8 @@ public partial class App : Application
     private CaptureController? _controller;
     private WinForms.NotifyIcon? _trayIcon;
     private WinForms.ToolStripItem? _captureMenuItem;
+    private WinForms.ToolStripItem? _hideAllPinsMenuItem;
+    private WinForms.ToolStripItem? _showAllPinsMenuItem;
     private SettingsWindow? _settingsWindow;
     private AppSettings _settings = new();
     private BitmapSource? _lastCapture;
@@ -230,6 +233,12 @@ public partial class App : Application
             case PinHotkeyName:
                 PinFromClipboard();
                 break;
+
+            case ShowPinsHotkeyName:
+                // 只把收起来的那些摆回来，不动本来就摆着的 —— 免得按一下把用户刚理好的
+                // 前后层序整个洗一遍
+                _pins.ShowAll();
+                break;
         }
     }
 
@@ -263,6 +272,10 @@ public partial class App : Application
         string capture = _settings.CaptureHotkey.ToString();
         if (_captureMenuItem is not null)
             _captureMenuItem.Text = _settings.CaptureHotkey.IsSet ? $"截图 ({capture})" : "截图";
+        if (_showAllPinsMenuItem is not null)
+            _showAllPinsMenuItem.Text = _settings.ShowPinsHotkey.IsSet
+                ? $"显示所有贴图 ({_settings.ShowPinsHotkey})"
+                : "显示所有贴图";
         if (_trayIcon is not null)
             _trayIcon.Text = _settings.CaptureHotkey.IsSet
                 ? $"XkScreenshot — 按 {capture} 截图"
@@ -277,6 +290,8 @@ public partial class App : Application
             bindings.Add(_settings.CaptureHotkey.ToBinding(CaptureHotkeyName));
         if (_settings.PinHotkey.IsSet)
             bindings.Add(_settings.PinHotkey.ToBinding(PinHotkeyName));
+        if (_settings.ShowPinsHotkey.IsSet)
+            bindings.Add(_settings.ShowPinsHotkey.ToBinding(ShowPinsHotkeyName));
 
         return _hotkeys!.Reset(bindings);
     }
@@ -374,10 +389,25 @@ public partial class App : Application
     {
         var menu = new WinForms.ContextMenuStrip();
         _captureMenuItem = menu.Items.Add("截图", null, (_, _) => StartCapture());
+        _hideAllPinsMenuItem = menu.Items.Add("隐藏全部贴图", null, (_, _) => _pins.HideAll());
+        _showAllPinsMenuItem = menu.Items.Add("显示所有贴图", null, (_, _) => _pins.ShowAll());
+
+        // 「关闭全部」和上面两项隔一条线：那是唯一不可撤销的一项（图真的没了），
+        // 而「隐藏」是随时能叫回来的。挨着摆，想收起来的人手一滑就点没了
+        menu.Items.Add(new WinForms.ToolStripSeparator());
         menu.Items.Add("关闭全部贴图", null, (_, _) => _pins.CloseAll());
         menu.Items.Add(new WinForms.ToolStripSeparator());
         menu.Items.Add("设置…", null, (_, _) => ShowSettings());
         menu.Items.Add("退出", null, (_, _) => Shutdown());
+
+        // 两项按当下有没有贴图决定能不能点：一张都没摆着时「隐藏全部」什么也不会发生，
+        // 一张都没藏着时「显示所有」同样。留着能点，用户只会觉得按了没反应。
+        // 每次弹出时现算，不在增删贴图时维护 —— 贴图还会被 Esc、双击、关闭全部带走
+        menu.Opening += (_, _) =>
+        {
+            if (_hideAllPinsMenuItem is not null) _hideAllPinsMenuItem.Enabled = _pins.VisibleCount > 0;
+            if (_showAllPinsMenuItem is not null) _showAllPinsMenuItem.Enabled = _pins.HiddenCount > 0;
+        };
 
         _trayIcon = new WinForms.NotifyIcon
         {
