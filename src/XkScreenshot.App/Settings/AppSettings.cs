@@ -24,9 +24,23 @@ public sealed record HotkeySpec(HotkeyModifiers Modifiers, uint VirtualKey)
     /// <summary>0x72 = VK_F3。</summary>
     public static readonly HotkeySpec PinDefault = new(HotkeyModifiers.None, 0x72);
 
-    /// <summary>把收起来的贴图重新摆出来。0x48 = VK_H，Ctrl+Shift+H。</summary>
-    public static readonly HotkeySpec ShowPinsDefault
-        = new(HotkeyModifiers.Control | HotkeyModifiers.Shift, 0x48);
+    /// <summary>
+    /// 把收起来的贴图重新摆出来。0x52 = VK_R，「Restore」。
+    ///
+    /// 本来和「隐藏」凑成一对 H（Ctrl+Shift+H），实测这台机器上它**已经被别的程序占着** ——
+    /// RegisterHotKey 是先到先得，抢不到就等于这一项根本没有热键（只会弹一句失败提示）。
+    /// 换成 Ctrl+Alt+R：和「隐藏」同一个 Ctrl+Alt 手势，两个键都好按。别改成
+    /// Ctrl+Shift+S / Ctrl+Alt+V 这类：那是全局的「另存为」「选择性粘贴」，抢走之后
+    /// 别的程序就按不动了，而这两个键在本程序里一点也不比 H 更好记。
+    /// </summary>
+    public static readonly HotkeySpec ShowAllPinsDefault
+        = new(HotkeyModifiers.Control | HotkeyModifiers.Alt, 0x52);
+
+    /// <summary>
+    /// 一次收起屏幕上所有贴图。0x48 = VK_H，「Hide」，和「显示」共用 Ctrl+Alt 这个手势。
+    /// </summary>
+    public static readonly HotkeySpec HideAllPinsDefault
+        = new(HotkeyModifiers.Control | HotkeyModifiers.Alt, 0x48);
 
     public bool IsSet => VirtualKey != 0;
 
@@ -47,10 +61,20 @@ public sealed class AppSettings
     /// <summary>
     /// 把「隐藏贴图 / 隐藏全部贴图」收起来的那批重新摆到屏幕上。
     ///
-    /// 只有「显示」这一个方向：收起是随时可以做的动作（右键某张、托盘一次全收），
-    /// 而收起来之后屏幕上就没有任何东西能点了 —— 必须留一条不依赖鼠标的路把它们叫回来。
+    /// 收起来之后屏幕上就没有任何东西能点了 —— 那些贴图右键够不着、托盘菜单也只在鼠标那边，
+    /// 所以必须留一条纯键盘的回路把它们叫回来。它和「隐藏全部贴图」是一对：收起来容易，
+    /// 叫回来才是不能失手的那一步。
     /// </summary>
-    public HotkeySpec ShowPinsHotkey { get; set; } = HotkeySpec.ShowPinsDefault;
+    public HotkeySpec ShowAllPinsHotkey { get; set; } = HotkeySpec.ShowAllPinsDefault;
+
+    /// <summary>
+    /// 一次收起屏幕上所有贴图，和托盘菜单里那一项是同一个动作。
+    ///
+    /// 和「显示所有贴图」分成两项、而不是合成一个切换键：屏上常常是「一部分收着、一部分摆着」
+    /// （谁都可以单独收起来一张），这时候「切换」到底该收还是该显示没有正确答案。
+    /// 两个键各干各的，按下去的结果永远确定，也和托盘那两条命令一一对应。
+    /// </summary>
+    public HotkeySpec HideAllPinsHotkey { get; set; } = HotkeySpec.HideAllPinsDefault;
 
     /// <summary>留空 = 系统「图片」文件夹。存空串而不是当场解析，换了机器/换了用户配置才不会带着旧路径走。</summary>
     public string SaveDirectory { get; set; } = string.Empty;

@@ -31,7 +31,8 @@ public partial class App : Application
     // 热键靠名字分发。HotkeyManager 只管注册，按下之后干什么是这一层的事
     private const string CaptureHotkeyName = "Capture";
     private const string PinHotkeyName = "Pin";
-    private const string ShowPinsHotkeyName = "ShowPins";
+    private const string ShowAllPinsHotkeyName = "ShowAllPins";
+    private const string HideAllPinsHotkeyName = "HideAllPins";
 
     /// <summary>提权重启时，新实例最多等老实例腾出单实例名额多久。</summary>
     private static readonly TimeSpan RestartHandoverTimeout = TimeSpan.FromSeconds(10);
@@ -234,10 +235,16 @@ public partial class App : Application
                 PinFromClipboard();
                 break;
 
-            case ShowPinsHotkeyName:
+            case ShowAllPinsHotkeyName:
                 // 只把收起来的那些摆回来，不动本来就摆着的 —— 免得按一下把用户刚理好的
                 // 前后层序整个洗一遍
                 _pins.ShowAll();
+                break;
+
+            case HideAllPinsHotkeyName:
+                // 热键没有「灰掉」这一说：一张都没摆着时按了就什么也不做，
+                // 比弹一句「没有可以收起的贴图」干净
+                _pins.HideAll();
                 break;
         }
     }
@@ -272,9 +279,13 @@ public partial class App : Application
         string capture = _settings.CaptureHotkey.ToString();
         if (_captureMenuItem is not null)
             _captureMenuItem.Text = _settings.CaptureHotkey.IsSet ? $"截图 ({capture})" : "截图";
+        if (_hideAllPinsMenuItem is not null)
+            _hideAllPinsMenuItem.Text = _settings.HideAllPinsHotkey.IsSet
+                ? $"隐藏全部贴图 ({_settings.HideAllPinsHotkey})"
+                : "隐藏全部贴图";
         if (_showAllPinsMenuItem is not null)
-            _showAllPinsMenuItem.Text = _settings.ShowPinsHotkey.IsSet
-                ? $"显示所有贴图 ({_settings.ShowPinsHotkey})"
+            _showAllPinsMenuItem.Text = _settings.ShowAllPinsHotkey.IsSet
+                ? $"显示所有贴图 ({_settings.ShowAllPinsHotkey})"
                 : "显示所有贴图";
         if (_trayIcon is not null)
             _trayIcon.Text = _settings.CaptureHotkey.IsSet
@@ -290,8 +301,10 @@ public partial class App : Application
             bindings.Add(_settings.CaptureHotkey.ToBinding(CaptureHotkeyName));
         if (_settings.PinHotkey.IsSet)
             bindings.Add(_settings.PinHotkey.ToBinding(PinHotkeyName));
-        if (_settings.ShowPinsHotkey.IsSet)
-            bindings.Add(_settings.ShowPinsHotkey.ToBinding(ShowPinsHotkeyName));
+        if (_settings.ShowAllPinsHotkey.IsSet)
+            bindings.Add(_settings.ShowAllPinsHotkey.ToBinding(ShowAllPinsHotkeyName));
+        if (_settings.HideAllPinsHotkey.IsSet)
+            bindings.Add(_settings.HideAllPinsHotkey.ToBinding(HideAllPinsHotkeyName));
 
         return _hotkeys!.Reset(bindings);
     }

@@ -82,10 +82,12 @@ public sealed class SettingsWindow : Window
 
     private readonly HotkeyBox _captureHotkey = new() { Width = 132 };
     private readonly HotkeyBox _pinHotkey = new() { Width = 132 };
-    private readonly HotkeyBox _showPinsHotkey = new() { Width = 132 };
+    private readonly HotkeyBox _hideAllPinsHotkey = new() { Width = 132 };
+    private readonly HotkeyBox _showAllPinsHotkey = new() { Width = 132 };
     private readonly TextBlock _captureStatus = new();
     private readonly TextBlock _pinStatus = new();
-    private readonly TextBlock _showPinsStatus = new();
+    private readonly TextBlock _hideAllPinsStatus = new();
+    private readonly TextBlock _showAllPinsStatus = new();
 
     /// <summary>探热键占用的那个探针。窗口一关就撤，别一直占着一个消息窗口。</summary>
     private readonly HotkeyProbe _probe = new();
@@ -375,11 +377,11 @@ public sealed class SettingsWindow : Window
             RefreshLangPairs();
         };
 
-        foreach (var box in new[] { _captureHotkey, _pinHotkey, _showPinsHotkey })
+        foreach (var slot in HotkeySlots())
         {
-            box.ValueChanged += RefreshHotkeyStatus;
-            box.GotKeyboardFocus += (_, _) => UpdateRecording();
-            box.LostKeyboardFocus += (_, _) => UpdateRecording();
+            slot.Box.ValueChanged += RefreshHotkeyStatus;
+            slot.Box.GotKeyboardFocus += (_, _) => UpdateRecording();
+            slot.Box.LostKeyboardFocus += (_, _) => UpdateRecording();
         }
 
         // 窗口切走切回也要重算：人都去用别的程序了，热键就该是活的
@@ -392,8 +394,7 @@ public sealed class SettingsWindow : Window
         PreviewMouseDown += (_, e) =>
         {
             if (e.OriginalSource is DependencyObject source && InsideHotkeyBox(source)) return;
-            if (_captureHotkey.IsKeyboardFocusWithin || _pinHotkey.IsKeyboardFocusWithin
-                || _showPinsHotkey.IsKeyboardFocusWithin)
+            if (HotkeySlots().Any(s => s.Box.IsKeyboardFocusWithin))
                 Keyboard.ClearFocus();
         };
 
@@ -497,8 +498,11 @@ public sealed class SettingsWindow : Window
                 _captureHotkey, _captureStatus, HotkeySpec.CaptureDefault),
             HotkeyCard(Icons.Pin, "贴图",
                 _pinHotkey, _pinStatus, HotkeySpec.PinDefault),
+            // 顺序跟着托盘菜单走：先收起来、再叫回来
+            HotkeyCard(Icons.EyeOff, "隐藏全部贴图",
+                _hideAllPinsHotkey, _hideAllPinsStatus, HotkeySpec.HideAllPinsDefault),
             HotkeyCard(Icons.Eye, "显示所有贴图",
-                _showPinsHotkey, _showPinsStatus, HotkeySpec.ShowPinsDefault));
+                _showAllPinsHotkey, _showAllPinsStatus, HotkeySpec.ShowAllPinsDefault));
 
         AddPage(Icons.Crop, "截图",
             Card(Icons.CornerDownLeft, "确认截图后", null, _defaultAction),
@@ -1150,9 +1154,7 @@ public sealed class SettingsWindow : Window
     /// </summary>
     private void UpdateRecording()
     {
-        bool recording = IsActive
-                         && (_captureHotkey.IsKeyboardFocusWithin || _pinHotkey.IsKeyboardFocusWithin
-                             || _showPinsHotkey.IsKeyboardFocusWithin);
+        bool recording = IsActive && HotkeySlots().Any(s => s.Box.IsKeyboardFocusWithin);
         if (recording == _recording) return;
 
         _recording = recording;
@@ -1176,7 +1178,8 @@ public sealed class SettingsWindow : Window
     [
         new("开始截图", _captureHotkey, _captureStatus),
         new("贴图", _pinHotkey, _pinStatus),
-        new("显示所有贴图", _showPinsHotkey, _showPinsStatus),
+        new("隐藏全部贴图", _hideAllPinsHotkey, _hideAllPinsStatus),
+        new("显示所有贴图", _showAllPinsHotkey, _showAllPinsStatus),
     ];
 
     /// <summary>一张热键卡片上跟冲突有关的三样东西。</summary>
@@ -1226,7 +1229,8 @@ public sealed class SettingsWindow : Window
     {
         _captureHotkey.Value = s.CaptureHotkey;
         _pinHotkey.Value = s.PinHotkey;
-        _showPinsHotkey.Value = s.ShowPinsHotkey;
+        _hideAllPinsHotkey.Value = s.HideAllPinsHotkey;
+        _showAllPinsHotkey.Value = s.ShowAllPinsHotkey;
         _directory.Text = s.SaveDirectory;
         _historyDir.Text = s.HistoryDirectory;
         _prefix.Text = s.FileNamePrefix;
@@ -1860,7 +1864,8 @@ public sealed class SettingsWindow : Window
 
         _draft.CaptureHotkey = _captureHotkey.Value;
         _draft.PinHotkey = _pinHotkey.Value;
-        _draft.ShowPinsHotkey = _showPinsHotkey.Value;
+        _draft.HideAllPinsHotkey = _hideAllPinsHotkey.Value;
+        _draft.ShowAllPinsHotkey = _showAllPinsHotkey.Value;
         _draft.SaveDirectory = directory;
         _draft.HistoryDirectory = historyDir;
         _draft.FileNamePrefix = _prefix.Text.Trim();
