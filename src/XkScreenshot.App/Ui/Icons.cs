@@ -193,6 +193,22 @@ public static class Icons
     public static readonly Geometry Scroll = Build(
         paths: ["M12 2v14", "m7 11 5 5 5-5", "M5 21h14"]);
 
+    /// <summary>
+    /// 自动滚动 —— 两枚下箭头。长截图控制条上表示「不用你管，它自己往下走」。
+    ///
+    /// 和 <see cref="Scroll"/> 区别开：那个是「进长截图」的入口，只有一枚箭头加底边，
+    /// 两者摆在相邻的位置上，形状必须一眼能分开。
+    /// </summary>
+    public static readonly Geometry ChevronsDown = Build(
+        paths: ["m7 6 5 5 5-5", "m7 13 5 5 5-5"]);
+
+    /// <summary>手动滚动 —— 一只手。和自动那两枚箭头是一对：一个它来，一个你来。</summary>
+    public static readonly Geometry Hand = Build(
+        paths: ["M18 11V6a2 2 0 0 0-4 0v5",
+                "M14 10V4a2 2 0 0 0-4 0v2",
+                "M10 10.5V6a2 2 0 0 0-4 0v8",
+                "M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"]);
+
     /// <summary>文字识别 —— 扫描线 + 文本。</summary>
     public static readonly Geometry ScanLine = Build(
         paths: ["M3 7V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v2",

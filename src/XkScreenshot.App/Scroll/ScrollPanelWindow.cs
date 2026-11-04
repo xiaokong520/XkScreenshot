@@ -1,13 +1,10 @@
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.Linq;
 using System.Windows;
-using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
-using System.Windows.Media.Effects;
 using XkScreenshot.App.Overlay;
 using XkScreenshot.Core.Geometry;
 using XkScreenshot.Core.Monitors;
@@ -17,44 +14,30 @@ using XkScreenshot.Scroll;
 namespace XkScreenshot.App.Scroll;
 
 /// <summary>
-/// 长截图的控制条：拼到多大了、谁在滚、拼完往哪儿去。
+/// 长截图的控制条窗口：只负责「在哪儿」和「收哪几个键」，长相全交给 <see cref="ScrollPanelView"/>。
 ///
-/// 形态是**一行**贴边的窄条，而不是一张占了小半屏的卡片 ——
-/// 长截图期间用户要盯着的是**正在滚动的目标窗口**，任何压在旁边的厚面板都在抢视线。
-/// 缩略图从这条里搬了出去（见 <see cref="ScrollPreviewWindow"/>）。
+/// 为什么拆成两半：窗口这一层要处理的是物理像素落位、排除截屏、键盘；面板那层要处理的是
+/// 圆角、按钮、图标、投影。混在一起时，为了迁就 WPF 的布局，面板的每个尺寸都只能写成
+/// 「大概是这个数」；拆开之后面板按工具条那套自绘，窗口这边只管给它一块正好大的地方。
 ///
-/// 排版从左到右就四样：尺寸 → 自动/手动 → 完成/编辑/取消。
-/// 原来是两行（上面尺寸+模式、下面提示+按钮），第一行只有两个元素、中间空出一大片，
-/// 看着像两块不相干的东西凑在一起；两行的高度也让这条压在画面上更碍事。
-///
-/// **不挂状态句子**（"正在慢速滚动…"、"这一帧接不上…"）：滚动期间它一直在变，
-/// 挂在这条窄条上只是噪声。**也不挂快捷键提示**：那几个键本来就和右边三个按钮一一对应，
-/// 同一件事说两遍，还会把按钮挤出卡片 —— 真忘了 Esc 取消也不致命。
-///
-/// 落位优先摆在目标区域**外面**（下、上、右、左依次试）。这不是审美问题：抓帧走的是
-/// 屏幕 DC，压在区域上的东西会被原样拍进长图。区域占满整屏时确实无处可躲，
-/// 那时只能靠 <see cref="ScrollChrome.ExcludeFromCapture"/>。
-///
-/// 三个去向：完成（走设置里的默认动作）、编辑（进长图编辑器）、取消。
-/// 「完成」不写成「复制/保存/贴图」：按钮上写动作名，用户得先看懂那个动作是不是自己要的；
-/// 写「完成」则一眼就是「我拼够了」，具体是复制还是保存，本来就是设置里定好的。
+/// **不挂状态句子、不显示尺寸、不写快捷键**：尺寸在选区左上角（<see cref="ScrollSizeTagWindow"/>），
+/// 状态句子在滚动期间一直在变、挂在这条窄条上只是噪声，快捷键又和右边三个按钮一一对应。
 /// </summary>
 internal sealed class ScrollPanelWindow : Window
 {
-    private const double PanelWidth = 412;
-
-    /// <summary>控制条和目标区域之间的空隙，物理像素。</summary>
-    private const int GapPx = 14;
+    /// <summary>
+    /// 面板边缘和目标区域之间的空隙，DIP —— 与覆盖层工具条的 <c>GapToSelection</c> 取同一个值。
+    ///
+    /// 注意这是**面板**到选区的距离，不是窗口到选区的距离：窗口四周还各留了
+    /// <see cref="ScrollPanelView.ShadowPad"/> 给投影。早先按窗口算，于是屏幕上看到的面板
+    /// 比工具条远出整整一个 ShadowPad，两个面板的间距一眼就不一样。
+    /// </summary>
+    private const double GapToSelection = 12;
 
     private readonly PixelRect _region;
     private readonly CaptureAction _defaultAction;
-
-    private readonly RadioButton _autoChip;
-    private readonly RadioButton _manualChip;
-    private readonly TextBlock _metrics = new();
-
-    /// <summary>正在按引擎的状态回填模式开关，这期间的 Checked 不该再发回引擎。</summary>
-    private bool _syncing;
+    private readonly ScrollPanelView _view;
+    private readonly ScrollTipWindow _tip;
 
     private bool _placed;
 
@@ -84,207 +67,80 @@ internal sealed class ScrollPanelWindow : Window
         WindowStyle = WindowStyle.None;
         ResizeMode = ResizeMode.NoResize;
         ShowInTaskbar = false;
+        ShowActivated = false;
         Topmost = true;
         AllowsTransparency = true;
         Background = Brushes.Transparent;
         WindowStartupLocation = WindowStartupLocation.Manual;
-        SizeToContent = SizeToContent.Height;
-        Width = PanelWidth;
-        FontFamily = new FontFamily("Segoe UI, Microsoft YaHei UI");
-        FontSize = 13;
-        TextOptions.SetTextFormattingMode(this, TextFormattingMode.Display);
+        SizeToContent = SizeToContent.Manual;
 
-        // 摆到正确位置之前先透明：SizeToContent 要等内容量完才知道尺寸，
-        // 而尺寸不知道就算不出位置 —— 中间那一帧会让面板在屏幕上闪一下
+        // 尺寸是常数（五个等宽按钮算出来的），直接给定，不依赖布局结果 ——
+        // 落位要用它算坐标，等布局算出来会多一帧错位
+        var size = ScrollPanelView.OuterSize;
+        Width = size.Width;
+        Height = size.Height;
+
+        // 摆到正确位置之前先透明：否则面板会先在窗口默认位置闪一下
         Opacity = 0;
 
-        Resources.MergedDictionaries.Add(new ResourceDictionary
-        {
-            Source = new Uri("pack://application:,,,/XkScreenshot;component/Scroll/ScrollPanelTheme.xaml"),
-        });
+        _view = new ScrollPanelView(OverlayPalette.For(dark));
+        _view.ShowMode(mode);
+        _view.ModeChanged += m => ModeChanged?.Invoke(m);
+        _view.Accepted += () => Accepted?.Invoke(_defaultAction);
+        _view.EditRequested += () => EditRequested?.Invoke();
+        _view.Cancelled += () => Cancelled?.Invoke();
+        Content = _view;
 
-        // 必须在建控件之前注入：主题里的颜色全是 DynamicResource，控件一建就从这儿找
-        ApplyPalette(OverlayPalette.For(dark));
+        // 悬停说明用独立的小窗：气泡超出这条窄条的范围，塞不进面板那块地方
+        _tip = new ScrollTipWindow(OverlayPalette.For(dark));
+        _view.TipChanged += OnTipChanged;
 
-        _autoChip = ModeChip("自动", ScrollMode.Auto);
-        _manualChip = ModeChip("手动", ScrollMode.Manual);
-        Content = BuildLayout();
-        SetMode(mode);
+        // 面板关掉的时候气泡也得跟着走，否则会留一枚孤零零的气泡在屏幕上
+        Closed += (_, _) => _tip.CloseTip();
 
         SourceInitialized += (_, _) => ScrollChrome.ExcludeFromCapture(this);
         ContentRendered += (_, _) => Place();
     }
 
     /// <summary>
-    /// 把覆盖层那套配色搬进来。
-    ///
-    /// 面板和工具条会同时出现在屏幕上（选区框、工具条、这条控制条），差一档色就看得出来
-    /// 是两个程序。所以颜色一律取自 <see cref="OverlayPalette"/> —— 深浅主题也跟着它走，
-    /// 早先这里写死过一套深色，浅色主题下就它一个黑的。
-    ///
-    /// 底色用 <see cref="OverlayPalette.PanelOpaque"/> 而不是工具条那层半透明：
-    /// 工具条底下是冻住的截图，能先模糊再压色；这条面板压在**实时**画面上，没有可模糊的底，
-    /// 半透明叠上去遇到深色内容字就看不见了。
+    /// 面板报的是局部 DIP 矩形，气泡要的是屏幕物理像素 —— 这一步换算放在窗口这层做，
+    /// 因为只有这里同时知道窗口在屏幕上的位置和当前 DPI。
     /// </summary>
-    private void ApplyPalette(OverlayPalette palette)
+    private void OnTipChanged(Rect local, string text)
     {
-        Resources["PanelBg"] = palette.PanelOpaque;
-        Resources["PanelBorder"] = palette.PanelBorder.Brush;
-        Resources["PanelTopHighlight"] = palette.PanelTopHighlight.Brush;
-        Resources["PanelText"] = palette.Text;
-        Resources["PanelTextSecondary"] = palette.TextSecondary;
-        Resources["PanelTextMuted"] = palette.TextMuted;
-        Resources["PanelAccent"] = palette.Accent;
-        Resources["PanelAccentText"] = palette.IconActive;
-        Resources["PanelAccentFill"] = palette.AccentFill;
-        Resources["PanelAccentBorder"] = palette.AccentBorder.Brush;
-        Resources["PanelControlHover"] = palette.Hover;
-        Resources["PanelControlPressed"] = palette.ChipFill;
+        if (string.IsNullOrEmpty(text))
+        {
+            _tip.HideTip();
+            return;
+        }
 
-        // 「完成」悬停时底色要再亮一档，调色板里没有现成的那一档，从强调色算出来
-        if (palette.Accent is SolidColorBrush accent)
-        {
-            var hover = new SolidColorBrush(Color.FromArgb(0x66, accent.Color.R, accent.Color.G, accent.Color.B));
-            hover.Freeze();
-            Resources["PanelAccentHover"] = hover;
-        }
-        else
-        {
-            Resources["PanelAccentHover"] = palette.AccentFill;
-        }
+        var hwnd = new WindowInteropHelper(this).Handle;
+        if (hwnd == IntPtr.Zero || !NativeMethods.GetWindowRect(hwnd, out var rect)) return;
+
+        double scale = VisualTreeHelper.GetDpi(this).DpiScaleX;
+        if (scale <= 0) scale = 1;
+
+        _tip.ShowTip(text, new PixelRect(
+            rect.Left + (int)Math.Round(local.X * scale),
+            rect.Top + (int)Math.Round(local.Y * scale),
+            (int)Math.Round(local.Width * scale),
+            (int)Math.Round(local.Height * scale)));
     }
-
-    // ---------------- 界面 ----------------
 
     /// <summary>
-    /// 一行装完：`1325 × 5354` ｜ 自动 手动 ｜ 完成 编辑 取消。
-    ///
-    /// 用 DockPanel 从右往左钉：按钮最先钉（贴最右），模式胶囊钉在它左边，
-    /// 尺寸吃剩下的空间。这样右半边永远不会被挤走 —— 尺寸再长也只是自己被省略号截短，
-    /// 而答案按钮（完成/取消）不能挪位、不能缩，否则用户点空一次就够烦的。
+    /// 只跟状态走。尺寸不在这儿显示了 —— 它搬到了选区左上角那枚标签上
+    /// （<see cref="ScrollSizeTagWindow"/>），和普通截图同一个位置。
     /// </summary>
-    private UIElement BuildLayout()
-    {
-        _metrics.FontSize = 12.5;
-        _metrics.Foreground = Brush("PanelText");
-        _metrics.TextTrimming = TextTrimming.CharacterEllipsis;
-        _metrics.VerticalAlignment = VerticalAlignment.Center;
-        // 右边留出间距，尺寸和胶囊之间才有一条明确的空气缝，而不是两个东西挨着
-        _metrics.Margin = new Thickness(2, 0, 16, 0);
-
-        var chips = new StackPanel
-        {
-            Orientation = Orientation.Horizontal,
-            VerticalAlignment = VerticalAlignment.Center,
-            Children = { _autoChip, _manualChip },
-        };
-        DockPanel.SetDock(chips, Dock.Right);
-
-        var actions = new StackPanel
-        {
-            Orientation = Orientation.Horizontal,
-            VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(12, 0, 0, 0),
-        };
-        actions.Children.Add(ActionButton("完成", isDefault: true, () => Accepted?.Invoke(_defaultAction)));
-        actions.Children.Add(ActionButton("编辑", isDefault: false, () => EditRequested?.Invoke()));
-        actions.Children.Add(ActionButton("取消", isDefault: false, () => Cancelled?.Invoke()));
-        DockPanel.SetDock(actions, Dock.Right);
-
-        // 顺序就是钉的顺序：actions 先在，贴最右；chips 后钉，落在它左边；尺寸填剩下的
-        var row = new DockPanel { LastChildFill = true, Children = { actions, chips, _metrics } };
-
-        // 沿顶边的一道内高光：工具条的玻璃感基本全靠它，这条面板跟着一起走，
-        // 两块面板摆在同一片画面上才像一套东西（见 PanelChrome.DrawGlassPanel）
-        var highlight = new System.Windows.Shapes.Rectangle
-        {
-            Height = 1,
-            Margin = new Thickness(11, 1, 11, 0),
-            VerticalAlignment = VerticalAlignment.Top,
-            RadiusX = 0.5,
-            RadiusY = 0.5,
-            Fill = Brush("PanelTopHighlight"),
-            IsHitTestVisible = false,
-        };
-
-        // 单行不需要上下两层留白：高度由 30 高（按钮）决定，左右只留够呼吸的量
-        var body = new Grid
-        {
-            Margin = new Thickness(14, 9, 10, 9),
-            Children = { row, highlight },
-        };
-
-        var card = new Border
-        {
-            Background = Brush("PanelBg"),
-            BorderBrush = Brush("PanelBorder"),
-            BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(10),
-            Child = body,
-            // 面板浮在实时画面上，没有投影就像是被贴进了别人的界面里
-            Effect = new DropShadowEffect { BlurRadius = 22, ShadowDepth = 4, Opacity = 0.42, Color = Colors.Black },
-        };
-
-        // 投影要有地方落，四周留白就是给它的
-        return new Grid { Margin = new Thickness(14), Children = { card } };
-    }
-
-    private RadioButton ModeChip(string text, ScrollMode mode)
-    {
-        var chip = new RadioButton
-        {
-            Content = text,
-            GroupName = "ScrollMode",
-            Style = (Style)FindResource("ModeChip"),
-        };
-        chip.Checked += (_, _) =>
-        {
-            if (_syncing) return;
-            ModeChanged?.Invoke(mode);
-        };
-        return chip;
-    }
-
-    private Button ActionButton(string text, bool isDefault, Action action)
-    {
-        var button = new Button
-        {
-            Content = text,
-            Style = (Style)FindResource(isDefault ? "PanelAccentButton" : "PanelButton"),
-        };
-        button.Click += (_, _) => action();
-        return button;
-    }
-
-    private Brush Brush(string key) => (Brush)FindResource(key);
-
-    // ---------------- 状态 ----------------
-
-    public void UpdateProgress(ScrollProgress progress)
-    {
-        SetMode(progress.Mode);
-
-        _metrics.Text = string.Format(CultureInfo.InvariantCulture,
-            "{0} × {1}", progress.Width, progress.Height);
-    }
-
-    private void SetMode(ScrollMode mode)
-    {
-        var chip = mode == ScrollMode.Auto ? _autoChip : _manualChip;
-        if (chip.IsChecked == true) return;
-
-        // 引擎那边会自己让位到手动（用户按了鼠标键），回填这个状态不能再当成
-        // 用户点了开关，否则两边来回发通知
-        _syncing = true;
-        chip.IsChecked = true;
-        _syncing = false;
-    }
+    public void UpdateProgress(ScrollProgress progress) => _view.ShowMode(progress.Mode);
 
     // ---------------- 落位 ----------------
 
     /// <summary>
     /// 摆到目标区域外面。依次试下、上、右、左，都塞不下才退到工作区右下角 ——
     /// 那时候面板会压在区域上，只能指望「排除截屏」兜着。
+    ///
+    /// 全程按**面板**矩形算（不含四周的投影留白），算出面板在哪儿之后再外扩 ShadowPad
+    /// 得到窗口矩形。这样「面板离选区多远」是一个能直接对照工具条的量。
     /// </summary>
     private void Place()
     {
@@ -294,42 +150,61 @@ internal sealed class ScrollPanelWindow : Window
         var hwnd = new WindowInteropHelper(this).Handle;
         if (hwnd == IntPtr.Zero || !NativeMethods.GetWindowRect(hwnd, out var rect)) return;
 
-        int w = rect.Width;
-        int h = rect.Height;
+        double scale = VisualTreeHelper.GetDpi(this).DpiScaleX;
+        if (scale <= 0) scale = 1;
+
+        int pad = (int)Math.Round(ScrollPanelView.ShadowPad * scale);
+        int gap = (int)Math.Round(GapToSelection * scale);
+
+        // 窗口带着一圈投影留白，别让这圈压到选区上：压在选区上的那几行会截走滚轮消息，
+        // 手动模式下用户在选区底部滚不动就是这么来的
+        gap = Math.Max(gap, pad);
+
+        int panelW = Math.Max(1, rect.Right - rect.Left - pad * 2);
+        int panelH = Math.Max(1, rect.Bottom - rect.Top - pad * 2);
+
         var work = WorkArea();
 
-        foreach (var candidate in Candidates(w, h, work))
+        foreach (var panel in Candidates(panelW, panelH, work, gap))
         {
-            if (candidate.X < work.X || candidate.Y < work.Y) continue;
-            if (candidate.Right > work.Right || candidate.Bottom > work.Bottom) continue;
-            if (candidate.IntersectsWith(_region)) continue;
-            if (!Avoid.IsEmpty && candidate.IntersectsWith(Avoid)) continue;
+            if (panel.X < work.X || panel.Y < work.Y) continue;
+            if (panel.Right > work.Right || panel.Bottom > work.Bottom) continue;
+            if (panel.IntersectsWith(_region)) continue;
+            if (!Avoid.IsEmpty && panel.IntersectsWith(Avoid)) continue;
 
-            ScrollChrome.PlacePixels(this, candidate, activate: true);
-            Opacity = 1;
+            ShowAt(panel, pad);
             return;
         }
 
         // 实在无处可去：先试右下，预览在那边就让到左下
-        var fallback = new PixelRect(work.Right - w - GapPx, work.Bottom - h - GapPx, w, h);
+        var fallback = new PixelRect(work.Right - panelW - gap, work.Bottom - panelH - gap, panelW, panelH);
         if (!Avoid.IsEmpty && fallback.IntersectsWith(Avoid))
-            fallback = new PixelRect(work.X + GapPx, work.Bottom - h - GapPx, w, h);
+            fallback = new PixelRect(work.X + gap, work.Bottom - panelH - gap, panelW, panelH);
 
-        ScrollChrome.PlacePixels(this, fallback, activate: true);
+        ShowAt(fallback, pad);
+    }
+
+    /// <summary>按面板矩形摆窗口：窗口 = 面板外扩一圈投影留白。</summary>
+    private void ShowAt(PixelRect panel, int pad)
+    {
+        ScrollChrome.PlacePixels(this, new PixelRect(
+            panel.X - pad, panel.Y - pad,
+            panel.Width + pad * 2, panel.Height + pad * 2), activate: true);
+
         Opacity = 1;
     }
 
-    private IEnumerable<PixelRect> Candidates(int w, int h, PixelRect work)
+    private IEnumerable<PixelRect> Candidates(int w, int h, PixelRect work, int gap)
     {
         int centerX = Math.Clamp(
             _region.X + (_region.Width - w) / 2, work.X, Math.Max(work.X, work.Right - w));
         int centerY = Math.Clamp(
             _region.Y + (_region.Height - h) / 2, work.Y, Math.Max(work.Y, work.Bottom - h));
 
-        yield return new PixelRect(centerX, _region.Bottom + GapPx, w, h);
-        yield return new PixelRect(centerX, _region.Y - GapPx - h, w, h);
-        yield return new PixelRect(_region.Right + GapPx, centerY, w, h);
-        yield return new PixelRect(_region.X - GapPx - w, centerY, w, h);
+        yield return new PixelRect(centerX, _region.Bottom + gap, w, h);
+        yield return new PixelRect(centerX, _region.Y - gap - h, w, h);
+        yield return new PixelRect(_region.Right + gap, centerY, w, h);
+        yield return new PixelRect(_region.X - gap - w, centerY, w, h);
     }
 
     private PixelRect WorkArea()
@@ -345,8 +220,8 @@ internal sealed class ScrollPanelWindow : Window
     // ---------------- 输入 ----------------
 
     /// <summary>
-    /// 用 Preview 而不是 OnKeyDown：焦点可能停在自动/手动胶囊或某个按钮上，
-    /// 那样 Enter 会被控件先吃掉（切成另一枚胶囊），「回车完成」就时灵时不灵。
+    /// 用 Preview 而不是 OnKeyDown：焦点可能停在面板上，
+    /// 那样 Enter 会被控件先吃掉，「回车完成」就时灵时不灵。
     /// </summary>
     protected override void OnPreviewKeyDown(KeyEventArgs e)
     {
@@ -366,16 +241,5 @@ internal sealed class ScrollPanelWindow : Window
                 return;
         }
         e.Handled = true;
-    }
-
-    /// <summary>
-    /// 面板可以拖走。区域外面塞不下的时候它会压在画面上，
-    /// 而用户往往正需要看清底下那一块才好决定滚到哪儿。
-    /// </summary>
-    protected override void OnMouseLeftButtonDown(MouseButtonEventArgs e)
-    {
-        base.OnMouseLeftButtonDown(e);
-        try { DragMove(); }
-        catch (InvalidOperationException) { /* 按键已经松开了，没什么可拖的 */ }
     }
 }

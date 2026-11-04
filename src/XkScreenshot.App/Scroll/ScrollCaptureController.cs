@@ -27,6 +27,7 @@ public sealed class ScrollCaptureController
     private ScrollPanelWindow? _panel;
     private ScrollPreviewWindow? _preview;
     private ScrollFrameWindow? _frame;
+    private ScrollSizeTagWindow? _sizeTag;
     private LongImageEditorWindow? _editor;
     private PixelRect _region;
     private CaptureAction _action;
@@ -71,6 +72,11 @@ public sealed class ScrollCaptureController
 
         _frame = new ScrollFrameWindow(region, palette);
         _frame.Show();
+
+        // 尺寸标签贴在选区左上角，和普通截图同一个位置 —— 用户看尺寸时眼睛在那一角
+        var sizeTag = new ScrollSizeTagWindow(region);
+        _sizeTag = sizeTag;
+        sizeTag.Show();
 
         // 预览贴在选区右侧，面板优先摆在选区外面。两扇窗都不吃鼠标，
         // 面板是唯一能点的那一扇 —— 顺序上先铺预览，面板就不会被它盖住
@@ -154,6 +160,7 @@ public sealed class ScrollCaptureController
         {
             _panel?.UpdateProgress(progress);
             _preview?.UpdatePreview(progress);
+            _sizeTag?.Update(progress.Width, progress.Height);
         });
 
     private void OnFinished(ScrollCaptureResult result)
@@ -264,7 +271,16 @@ public sealed class ScrollCaptureController
             preview.Close();
         }
 
-        _frame?.Close();
-        _frame = null;
+        if (_frame is { } frame)
+        {
+            _frame = null;
+            frame.Close();
+        }
+
+        if (_sizeTag is { } tag)
+        {
+            _sizeTag = null;
+            tag.Close();
+        }
     }
 }
