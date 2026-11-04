@@ -209,6 +209,23 @@ public static class Icons
                 "M10 10.5V6a2 2 0 0 0-4 0v8",
                 "M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"]);
 
+    /// <summary>最小化 —— 一条横线。系统标题栏上那个形状，只是这里自己画。</summary>
+    public static readonly Geometry Minimize = Build(
+        paths: ["M5 12h14"]);
+
+    /// <summary>加 —— 一横一竖。缩放按钮用。</summary>
+    public static readonly Geometry Plus = Build(
+        paths: ["M12 5v14", "M5 12h14"]);
+
+    /// <summary>
+    /// 减 —— 一笔横线，和 <see cref="Minimize"/> 形状相同。
+    ///
+    /// 仍然单列一个：这两个图标在各自的语境里语义完全不同（缩小 vs 最小化窗口），
+    /// 共用同一个名字，读代码的人得先猜「这里到底是哪个意思」。
+    /// </summary>
+    public static readonly Geometry Minus = Build(
+        paths: ["M5 12h14"]);
+
     /// <summary>文字识别 —— 扫描线 + 文本。</summary>
     public static readonly Geometry ScanLine = Build(
         paths: ["M3 7V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v2",
