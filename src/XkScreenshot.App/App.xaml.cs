@@ -33,6 +33,7 @@ public partial class App : Application
     private const string PinHotkeyName = "Pin";
     private const string ShowAllPinsHotkeyName = "ShowAllPins";
     private const string HideAllPinsHotkeyName = "HideAllPins";
+    private const string CloseAllPinsHotkeyName = "CloseAllPins";
 
     /// <summary>提权重启时，新实例最多等老实例腾出单实例名额多久。</summary>
     private static readonly TimeSpan RestartHandoverTimeout = TimeSpan.FromSeconds(10);
@@ -46,6 +47,7 @@ public partial class App : Application
     private WinForms.ToolStripItem? _captureMenuItem;
     private WinForms.ToolStripItem? _hideAllPinsMenuItem;
     private WinForms.ToolStripItem? _showAllPinsMenuItem;
+    private WinForms.ToolStripItem? _closeAllPinsMenuItem;
     private SettingsWindow? _settingsWindow;
     private AppSettings _settings = new();
     private BitmapSource? _lastCapture;
@@ -246,6 +248,12 @@ public partial class App : Application
                 // 比弹一句「没有可以收起的贴图」干净
                 _pins.HideAll();
                 break;
+
+            case CloseAllPinsHotkeyName:
+                // 没有二次确认，和托盘那一项保持一致。这一步是不可撤销的（连存档一起清），
+                // 但用户是专门按了「关闭」这个组合键才走到这儿的，再拦一道只会让热键变难用
+                _pins.CloseAll();
+                break;
         }
     }
 
@@ -287,6 +295,10 @@ public partial class App : Application
             _showAllPinsMenuItem.Text = _settings.ShowAllPinsHotkey.IsSet
                 ? $"显示所有贴图 ({_settings.ShowAllPinsHotkey})"
                 : "显示所有贴图";
+        if (_closeAllPinsMenuItem is not null)
+            _closeAllPinsMenuItem.Text = _settings.CloseAllPinsHotkey.IsSet
+                ? $"关闭全部贴图 ({_settings.CloseAllPinsHotkey})"
+                : "关闭全部贴图";
         if (_trayIcon is not null)
             _trayIcon.Text = _settings.CaptureHotkey.IsSet
                 ? $"XkScreenshot — 按 {capture} 截图"
@@ -305,6 +317,8 @@ public partial class App : Application
             bindings.Add(_settings.ShowAllPinsHotkey.ToBinding(ShowAllPinsHotkeyName));
         if (_settings.HideAllPinsHotkey.IsSet)
             bindings.Add(_settings.HideAllPinsHotkey.ToBinding(HideAllPinsHotkeyName));
+        if (_settings.CloseAllPinsHotkey.IsSet)
+            bindings.Add(_settings.CloseAllPinsHotkey.ToBinding(CloseAllPinsHotkeyName));
 
         return _hotkeys!.Reset(bindings);
     }
@@ -408,7 +422,7 @@ public partial class App : Application
         // 「关闭全部」和上面两项隔一条线：那是唯一不可撤销的一项（图真的没了），
         // 而「隐藏」是随时能叫回来的。挨着摆，想收起来的人手一滑就点没了
         menu.Items.Add(new WinForms.ToolStripSeparator());
-        menu.Items.Add("关闭全部贴图", null, (_, _) => _pins.CloseAll());
+        _closeAllPinsMenuItem = menu.Items.Add("关闭全部贴图", null, (_, _) => _pins.CloseAll());
         menu.Items.Add(new WinForms.ToolStripSeparator());
         menu.Items.Add("设置…", null, (_, _) => ShowSettings());
         menu.Items.Add("退出", null, (_, _) => Shutdown());
@@ -420,6 +434,8 @@ public partial class App : Application
         {
             if (_hideAllPinsMenuItem is not null) _hideAllPinsMenuItem.Enabled = _pins.VisibleCount > 0;
             if (_showAllPinsMenuItem is not null) _showAllPinsMenuItem.Enabled = _pins.HiddenCount > 0;
+            // 「关闭全部」连藏起来的一起关，所以按总数算
+            if (_closeAllPinsMenuItem is not null) _closeAllPinsMenuItem.Enabled = _pins.Count > 0;
         };
 
         _trayIcon = new WinForms.NotifyIcon

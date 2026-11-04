@@ -42,6 +42,16 @@ public sealed record HotkeySpec(HotkeyModifiers Modifiers, uint VirtualKey)
     public static readonly HotkeySpec HideAllPinsDefault
         = new(HotkeyModifiers.Control | HotkeyModifiers.Alt, 0x48);
 
+    /// <summary>
+    /// 一次关掉屏幕上所有贴图。0x43 = VK_C，「Close」。
+    ///
+    /// 三个贴图动作共用 Ctrl+Alt 这一个手势（H 收、R 放、C 关），记的是一个动作而不是一个键位。
+    /// 按错的代价不一样：H 收起来还能 R 回来，C 是按真删除走的 —— 所以刻意让它们不同字母，
+    /// 别为了「一排好看」改成 H / H+Shift / H+Shift+Alt 那种一字之差。
+    /// </summary>
+    public static readonly HotkeySpec CloseAllPinsDefault
+        = new(HotkeyModifiers.Control | HotkeyModifiers.Alt, 0x43);
+
     public bool IsSet => VirtualKey != 0;
 
     public HotkeyBinding ToBinding(string name) => new(name, Modifiers, VirtualKey);
@@ -75,6 +85,15 @@ public sealed class AppSettings
     /// 两个键各干各的，按下去的结果永远确定，也和托盘那两条命令一一对应。
     /// </summary>
     public HotkeySpec HideAllPinsHotkey { get; set; } = HotkeySpec.HideAllPinsDefault;
+
+    /// <summary>
+    /// 一次关掉屏幕上所有贴图，和托盘菜单里那一项是同一个动作。
+    ///
+    /// 它不像「隐藏」那样能反悔：关掉的贴图连存档里那份画面一起清掉，
+    /// 「显示所有贴图」也叫不回来。所以它虽然也有默认热键（用户要的就是纯键盘能走完整套），
+    /// 但主键故意和「隐藏」差一个字母 —— 手滑按错时，「收起来」和「删干净」的后果差得远。
+    /// </summary>
+    public HotkeySpec CloseAllPinsHotkey { get; set; } = HotkeySpec.CloseAllPinsDefault;
 
     /// <summary>留空 = 系统「图片」文件夹。存空串而不是当场解析，换了机器/换了用户配置才不会带着旧路径走。</summary>
     public string SaveDirectory { get; set; } = string.Empty;

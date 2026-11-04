@@ -84,10 +84,12 @@ public sealed class SettingsWindow : Window
     private readonly HotkeyBox _pinHotkey = new() { Width = 132 };
     private readonly HotkeyBox _hideAllPinsHotkey = new() { Width = 132 };
     private readonly HotkeyBox _showAllPinsHotkey = new() { Width = 132 };
+    private readonly HotkeyBox _closeAllPinsHotkey = new() { Width = 132 };
     private readonly TextBlock _captureStatus = new();
     private readonly TextBlock _pinStatus = new();
     private readonly TextBlock _hideAllPinsStatus = new();
     private readonly TextBlock _showAllPinsStatus = new();
+    private readonly TextBlock _closeAllPinsStatus = new();
 
     /// <summary>探热键占用的那个探针。窗口一关就撤，别一直占着一个消息窗口。</summary>
     private readonly HotkeyProbe _probe = new();
@@ -498,11 +500,13 @@ public sealed class SettingsWindow : Window
                 _captureHotkey, _captureStatus, HotkeySpec.CaptureDefault),
             HotkeyCard(Icons.Pin, "贴图",
                 _pinHotkey, _pinStatus, HotkeySpec.PinDefault),
-            // 顺序跟着托盘菜单走：先收起来、再叫回来
+            // 顺序跟着托盘菜单走：先收起来、再叫回来、最后才是真关掉
             HotkeyCard(Icons.EyeOff, "隐藏全部贴图",
                 _hideAllPinsHotkey, _hideAllPinsStatus, HotkeySpec.HideAllPinsDefault),
             HotkeyCard(Icons.Eye, "显示所有贴图",
-                _showAllPinsHotkey, _showAllPinsStatus, HotkeySpec.ShowAllPinsDefault));
+                _showAllPinsHotkey, _showAllPinsStatus, HotkeySpec.ShowAllPinsDefault),
+            HotkeyCard(Icons.Close, "关闭全部贴图",
+                _closeAllPinsHotkey, _closeAllPinsStatus, HotkeySpec.CloseAllPinsDefault));
 
         AddPage(Icons.Crop, "截图",
             Card(Icons.CornerDownLeft, "确认截图后", null, _defaultAction),
@@ -1180,6 +1184,7 @@ public sealed class SettingsWindow : Window
         new("贴图", _pinHotkey, _pinStatus),
         new("隐藏全部贴图", _hideAllPinsHotkey, _hideAllPinsStatus),
         new("显示所有贴图", _showAllPinsHotkey, _showAllPinsStatus),
+        new("关闭全部贴图", _closeAllPinsHotkey, _closeAllPinsStatus),
     ];
 
     /// <summary>一张热键卡片上跟冲突有关的三样东西。</summary>
@@ -1231,6 +1236,7 @@ public sealed class SettingsWindow : Window
         _pinHotkey.Value = s.PinHotkey;
         _hideAllPinsHotkey.Value = s.HideAllPinsHotkey;
         _showAllPinsHotkey.Value = s.ShowAllPinsHotkey;
+        _closeAllPinsHotkey.Value = s.CloseAllPinsHotkey;
         _directory.Text = s.SaveDirectory;
         _historyDir.Text = s.HistoryDirectory;
         _prefix.Text = s.FileNamePrefix;
@@ -1866,6 +1872,7 @@ public sealed class SettingsWindow : Window
         _draft.PinHotkey = _pinHotkey.Value;
         _draft.HideAllPinsHotkey = _hideAllPinsHotkey.Value;
         _draft.ShowAllPinsHotkey = _showAllPinsHotkey.Value;
+        _draft.CloseAllPinsHotkey = _closeAllPinsHotkey.Value;
         _draft.SaveDirectory = directory;
         _draft.HistoryDirectory = historyDir;
         _draft.FileNamePrefix = _prefix.Text.Trim();
