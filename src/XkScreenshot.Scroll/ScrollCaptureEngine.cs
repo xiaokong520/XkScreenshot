@@ -129,6 +129,12 @@ public sealed class ScrollCaptureEngine : IDisposable
     /// <summary>连续几帧没对上。接上或者判定没变化就清零 —— 只有**连续**失败才算接不上。</summary>
     private int _missed;
 
+    /// <summary>
+    /// 连着换了几次锚还没接上。拼上一帧就清零 —— 偶发的一两次换锚不算数，
+    /// 只有一路都接不上（页面在播视频、内容一直在重排）才会攒到上限。
+    /// </summary>
+    private int _reanchorStreak;
+
     private long _previewAt;
     private BitmapSource? _preview;
 
@@ -328,6 +334,7 @@ public sealed class ScrollCaptureEngine : IDisposable
 
         // 手动模式里攒下的「对不上」不能带过来，否则一按自动就直接判接不上
         _missed = 0;
+        _reanchorStreak = 0;
         _settling = false;
         _handedOver = false;
         _paused = false;
@@ -461,6 +468,7 @@ public sealed class ScrollCaptureEngine : IDisposable
         {
             case StitchStatus.Advanced:
                 _missed = 0;
+                _reanchorStreak = 0;
                 _lastAdvanceAt = now;
                 _speedRows += result.Rows;
 
@@ -490,7 +498,21 @@ public sealed class ScrollCaptureEngine : IDisposable
                     break;
                 }
 
-                if (_missed >= ScrollTiming.MatchLostLimit) return ScrollFinishReason.MatchLost;
+                if (_missed >= ScrollTiming.ReanchorAfterMisses)
+                {
+                    // 等停稳也救不回来了：参考帧落后得太多，重叠区已经不存在，
+                    // 再拿它去比只会一路失败。认栽换锚，从当前画面接着往下拼
+                    _stitcher.Reanchor(_current);
+                    _missed = 0;
+                    _settling = false;
+                    _lastAdvanceAt = now;
+
+                    if (++_reanchorStreak > ScrollTiming.ReanchorLimit)
+                        return ScrollFinishReason.MatchLost;
+
+                    Report(ScrollState.Scrolling);
+                    break;
+                }
 
                 StartSettling(now);
                 break;

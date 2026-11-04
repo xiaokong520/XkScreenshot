@@ -239,6 +239,31 @@ public sealed class ScrollStitcher
         (_sigPrev, _sigCur) = (_sigCur, _sigPrev);
     }
 
+    /// <summary>
+    /// 认栽换锚：把这一帧当作新的起点，画布从这里接着往下长。
+    ///
+    /// 走到这里说明**参考帧已经追不上了** —— 中间那些帧对不上，画面却一直在往前滚，
+    /// 重叠区早就没了，继续拿旧参考帧去比只会一路失败到会话结束。换锚的代价是长图里
+    /// 少掉一截（<see cref="_lastBottom"/> 归零后，下一次成功会把整帧铺进去），
+    /// 但那总比「拼到一半突然停住、前面几十帧白费」强。
+    ///
+    /// 为什么不顺手把旧参考帧剩下的部分补齐（<c>Append(prev, _lastBottom, ...)</c>）：
+    /// 那几行正是「对不上」的那一段，补进去也是错的；留着空，用户至少知道这里断过。
+    /// </summary>
+    public void Reanchor(byte[] frame)
+    {
+        _prev ??= new byte[_stride * _h];
+        Buffer.BlockCopy(frame, 0, _prev, 0, _stride * _h);
+        ComputeSignature(frame, _sigPrev);
+
+        // 画布底部 = 新参考帧的第 0 行：下一帧拼上时从 0 开始补，画布接着往下长。
+        //
+        // 这里**不能写 -1**。那是「还没接过任何帧」的意思，TotalRows 会按「只有一屏」报，
+        // 前面拼好的几百行还在画布里、高度却报成 300 —— 引擎按这个数判上限、显示进度，
+        // 全都会错。
+        _lastBottom = 0;
+    }
+
     // ---------------- 吸顶 / 吸底 ----------------
 
     /// <summary>

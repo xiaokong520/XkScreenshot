@@ -131,8 +131,23 @@ public static class ScrollTiming
     /// </summary>
     public const int BottomIdleMs = 2000;
 
-    /// <summary>连着几帧对不上就停手（只对自动模式；手动模式由用户决定滚到哪儿）。</summary>
-    public const int MatchLostLimit = 4;
+    /// <summary>
+    /// 连着几帧对不上就**换锚**（认栽丢一小段，从当前画面接着往下拼）。
+    ///
+    /// 早先这里是「连不上 4 帧就整场结束」，结果一次偶发失配几乎必然升级成结束：
+    /// 失配时参考帧不更新，而滚轮还在往前走 —— 参考帧一落后，重叠区就没了，
+    /// 后面每一帧都必然对不上，凑满 4 次是时间问题。等停稳那条支路也救不回来，
+    /// 因为它同样拿着那张已经落后的参考帧去比。
+    /// </summary>
+    public const int ReanchorAfterMisses = 2;
+
+    /// <summary>
+    /// 连着换锚这么多次还是接不上，才判定这一趟没法继续（比如页面在播视频）。
+    ///
+    /// 计的是「连续」：中间只要有一帧拼上了就清零。所以偶发的一两次换锚不会把会话拖垮，
+    /// 真正一路都接不上的时候也不会无限换锚空转。
+    /// </summary>
+    public const int ReanchorLimit = 3;
 
     /// <summary>
     /// 「等画面停稳」的超时。有这条兜底是因为稳定在有些页面上永远等不到：
