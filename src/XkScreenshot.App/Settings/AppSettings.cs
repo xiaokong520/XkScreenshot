@@ -172,7 +172,7 @@ public sealed class AppSettings
     public RecognitionSettings Recognition { get; set; } = new();
     public TranslationSettings Translation { get; set; } = new();
 
-    /// <summary>智能打码（选区工具条上的盾牌、快捷键 P）找哪几类。</summary>
+    /// <summary>智能打码（马赛克选项行里那个盾牌、快捷键 P）找哪几类。</summary>
     public PrivacySettings Privacy { get; set; } = new();
 
     /// <summary>

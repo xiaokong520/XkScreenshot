@@ -27,8 +27,6 @@ public enum ToolbarCommand
     Ocr,
     /// <summary>识别并翻译选区内的文字。</summary>
     Translate,
-    /// <summary>自动找出选区里的隐私信息并打码。</summary>
-    AutoMosaic,
 }
 
 /// <summary>工具条上的一个按钮：要么切换标注工具，要么触发一次命令。</summary>
@@ -81,7 +79,6 @@ public sealed class ToolbarLayer : FrameworkElement
         new(Icons.Scroll, "长截图  L", ToolKind.None, ToolbarCommand.Scroll),
         new(Icons.ScanLine, "文字识别  O", ToolKind.None, ToolbarCommand.Ocr),
         new(Icons.Languages, "翻译  G", ToolKind.None, ToolbarCommand.Translate),
-        new(Icons.ShieldCheck, "智能打码  P", ToolKind.None, ToolbarCommand.AutoMosaic),
         new(Icons.Pin, "贴图  Ctrl+T", ToolKind.None, ToolbarCommand.Pin),
         new(Icons.Close, "取消  Esc", ToolKind.None, ToolbarCommand.Cancel),
         // 保存和复制这两个「拿走成品」的动作排在最右：一条工具条从左看到右，
@@ -106,11 +103,8 @@ public sealed class ToolbarLayer : FrameworkElement
     /// <summary>有没有选中的标注可删。</summary>
     public bool CanDelete { get; set; }
 
-    /// <summary>检测时点亮按钮；再次点击取消当前检测，不排队。</summary>
-    public bool Busy { get; set; }
-    public string? BusyText { get; set; }
-    private Rect _autoMosaicRect;
-    public Rect PanelRect { get; private set; }
+    /// <summary>工具条面板。初值是 <see cref="Rect.Empty"/>，理由同 ToolOptionsLayer.PanelRect —— OnRender 靠 IsEmpty 判断「还没摆过」。</summary>
+    public Rect PanelRect { get; private set; } = Rect.Empty;
 
     /// <summary>工具条是不是翻到了选区上方。子工具栏据此决定往哪一侧叠。</summary>
     public bool PlacedAbove { get; private set; }
@@ -198,19 +192,15 @@ public sealed class ToolbarLayer : FrameworkElement
                 ToolbarCommand.Redo => CanRedo,
                 _ => true,
             };
-            bool active = item.Command == ToolbarCommand.AutoMosaic && Busy;
 
             var rect = new Rect(x, y, ButtonSize, ButtonSize);
-            if (item.Command == ToolbarCommand.AutoMosaic) _autoMosaicRect = rect;
-            DrawButton(dc, rect, item, active, enabled || active);
+            DrawButton(dc, rect, item, active: false, enabled);
             if (enabled) _hitBoxes.Add((rect, item));
             x += ButtonSize + ButtonGap;
         }
 
         if (_hovered is not null)
             DrawTip(dc, _hovered);
-        else if (Busy)
-            DrawTip(dc, Array.Find(Commands, c => c.Command == ToolbarCommand.AutoMosaic)!);
     }
 
     private void DrawSeparator(DrawingContext dc, double x)
@@ -239,9 +229,8 @@ public sealed class ToolbarLayer : FrameworkElement
     private void DrawTip(DrawingContext dc, ToolbarItem item)
     {
         double ppd = VisualTreeHelper.GetDpi(this).PixelsPerDip;
-        bool detecting = Busy && item.Command == ToolbarCommand.AutoMosaic;
-        string tip = detecting ? (BusyText ?? "正在识别隐私") + " · 点击或 P 取消" : item.Tip;
-        var anchor = detecting ? _autoMosaicRect : _hoveredRect;
+        string tip = item.Tip;
+        var anchor = _hoveredRect;
         var text = new FormattedText(tip, CultureInfo.CurrentCulture, FlowDirection.LeftToRight,
             TipFace, TipFontSize, Palette.TipText, ppd);
 

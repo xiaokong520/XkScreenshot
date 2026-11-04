@@ -16,6 +16,8 @@ public enum ToolOptionKind
     Color,
     /// <summary>展开/收起色盘。</summary>
     ColorPicker,
+    /// <summary>智能打码：自动找出选区里的隐私信息并打码。忙的时候再点一次是取消。</summary>
+    SmartMosaic,
 }
 
 /// <summary>点中了子工具栏上的哪一格。</summary>
@@ -52,6 +54,12 @@ public sealed class ToolOptionsLayer : FrameworkElement
     private const double GapToToolbar = 6;
     private const double LabelFontSize = 11;
     private const double LabelGap = 7;
+
+    /// <summary>悬停说明的字号，跟主工具条那些气泡一致。</summary>
+    private const double TipFontSize = 11.5;
+
+    /// <summary>智能打码那一格的悬停说明。带上快捷键 —— 提示面板收着的时候，用户只能从这儿知道 P。</summary>
+    private const string SmartMosaicTip = "智能打码  P";
 
     // 大小滑块
     private const double TrackWidth = 104;
@@ -92,12 +100,22 @@ public sealed class ToolOptionsLayer : FrameworkElement
     private static readonly Brush BlackFade = Freeze(new LinearGradientBrush(
         Color.FromArgb(0, 0, 0, 0), Colors.Black, 90));
 
-    /// <summary>一组参数：一个标签，后面跟若干格子；Kind 为 null 表示跟的是一个滑块。</summary>
-    private sealed record Group(string Label, ToolOptionKind? Kind, int Count);
+    /// <summary>
+    /// 一组参数：一个标签，后面跟若干格子；Kind 为 null 表示跟的是一个滑块。
+    ///
+    /// Label 可以为 null —— 那表示「挂在上一组后面、不另起一段的格子」。
+    /// 目前只有智能打码用它：它紧挨着「方式」那两个格子摆，但又不是同一类东西
+    /// （那两个是选中状态，它是一次动作），单起一个标签又太长。
+    /// </summary>
+    private sealed record Group(string? Label, ToolOptionKind? Kind, int Count);
 
     private readonly List<(Rect Rect, ToolOptionHit Hit)> _hitBoxes = [];
     private readonly Dictionary<string, FormattedText> _labels = [];
     private double _labelPpd;
+
+    /// <summary>光标停在哪个格子上（只有带说明的格子会进来），以及那一格的矩形。</summary>
+    private ToolOptionHit? _hovered;
+    private Rect _hoveredRect;
 
     public ToolOptionsLayer() => IsHitTestVisible = false;
 
@@ -131,14 +149,29 @@ public sealed class ToolOptionsLayer : FrameworkElement
     public Hsv Hsv { get; set; }
     public bool PickerOpen { get; set; }
 
-    public Rect PanelRect { get; private set; }
-    public Rect PickerRect { get; private set; }
+    /// <summary>
+    /// 智能打码正在跑。这时候整条子工具栏换成「识别中 · 点击取消」那一行 ——
+    /// 它是这套操作里唯一要等好几秒的动作，进度和取消都得有个地方放。
+    /// </summary>
+    public bool Busy { get; set; }
+    public string? BusyText { get; set; }
+
+    /// <summary>
+    /// 子工具栏和色盘弹层的位置。初值写 <see cref="Rect.Empty"/>（而不是让它停在 default）——
+    /// 第一道闸是 OnRender 里的「PanelRect.IsEmpty 就直接返回」，而 default(Rect) 的 IsEmpty
+    /// 是 false，拦不住；Layout 还没跑过就画的话，算出来的宽高会是负数，new Rect 当场抛。
+    /// </summary>
+    public Rect PanelRect { get; private set; } = Rect.Empty;
+    public Rect PickerRect { get; private set; } = Rect.Empty;
     private Rect _squareRect;
     private Rect _hueRect;
     private Rect _trackRect;
 
-    /// <summary>当前工具有没有参数可调。没有的话整条栏都不出现。</summary>
-    public bool HasOptions => GroupsFor(ActiveTool).Length > 0;
+    /// <summary>
+    /// 当前工具有没有参数可调。没有的话整条栏都不出现。
+    /// 智能打码在跑时**任何工具**下都要出现：进度和取消不能因为「此刻没选马赛克」就没地方放。
+    /// </summary>
+    public bool HasOptions => Busy || GroupsFor(ActiveTool).Length > 0;
 
     public void Refresh() => InvalidateVisual();
 
@@ -196,6 +229,32 @@ public sealed class ToolOptionsLayer : FrameworkElement
     /// <summary>点是否落在子工具栏或色盘上。落在上面的鼠标操作不能当成框选。</summary>
     public bool Contains(Point local)
         => Visible && (PanelRect.Contains(local) || (PickerOpen && PickerRect.Contains(local)));
+
+    /// <summary>
+    /// 更新悬停状态；有变化时返回 true，调用方据此决定要不要重绘。
+    ///
+    /// 只认「带说明的格子」（目前就是智能打码那一格）—— 别处的格子靠图形本身就看得懂，
+    /// 浮一个气泡过去只会挡住刚画的东西。识别中也不认：那一行整行都是取消按钮，
+    /// 气泡会压住「点击取消」这几个字。
+    /// </summary>
+    public bool UpdateHover(Point local)
+    {
+        ToolOptionHit? hit = null;
+        if (Visible && !Busy && PanelRect.Contains(local))
+        {
+            foreach (var (rect, candidate) in _hitBoxes)
+            {
+                if (candidate.Kind != ToolOptionKind.SmartMosaic || !rect.Contains(local)) continue;
+                hit = candidate;
+                _hoveredRect = rect;
+                break;
+            }
+        }
+
+        if (hit == _hovered) return false;
+        _hovered = hit;
+        return true;
+    }
 
     public ToolOptionHit? HitTest(Point local)
     {
@@ -258,8 +317,12 @@ public sealed class ToolOptionsLayer : FrameworkElement
     {
         ToolKind.Rectangle or ToolKind.Ellipse or ToolKind.Arrow or ToolKind.Ink or ToolKind.Text =>
             [SizeGroup, ColorGroup],
-        // 马赛克没有颜色可言 —— 它取的就是画面本身的颜色
-        ToolKind.Mosaic => [new("方式", ToolOptionKind.MosaicStyle, 2), SizeGroup],
+        // 马赛克没有颜色可言 —— 它取的就是画面本身的颜色。
+        // 「智能打码」紧跟在「方式」后面、不另起一组：它产出的就是一串马赛克块，
+        // 属于马赛克的用法；单独给它一个标签（「智能打码」四个字）会把这一行撑得太长。
+        // 没有标签就靠悬停说明：鼠标移上去会浮出「智能打码  P」。
+        ToolKind.Mosaic =>
+            [new("方式", ToolOptionKind.MosaicStyle, 2), new(null, ToolOptionKind.SmartMosaic, 1), SizeGroup],
         _ => [],
     };
 
@@ -271,19 +334,26 @@ public sealed class ToolOptionsLayer : FrameworkElement
 
     private double MeasureWidth()
     {
+        if (Busy) return PadX * 2 + ChipSize + ChipGap + Label(BusyLine).Width;
+
         var groups = GroupsFor(ActiveTool);
         double w = PadX * 2;
 
         for (int i = 0; i < groups.Length; i++)
         {
-            if (i > 0) w += GroupGap;
-            w += Label(groups[i].Label).Width + LabelGap;
-            w += groups[i].Kind is null
+            var group = groups[i];
+            if (i > 0) w += group.Label is null ? ChipGap : GroupGap;
+            if (group.Label is { } label) w += Label(label).Width + LabelGap;
+            w += group.Kind is null
                 ? TrackWidth + ReadoutGap + ReadoutWidth
-                : groups[i].Count * ChipSize + (groups[i].Count - 1) * ChipGap;
+                : group.Count * ChipSize + (group.Count - 1) * ChipGap;
         }
         return w;
     }
+
+    /// <summary>识别中那一行的话。后半句必须留着 —— 不说「点击取消」的话，用户只能干等。</summary>
+    private string BusyLine
+        => (string.IsNullOrWhiteSpace(BusyText) ? "正在识别隐私" : BusyText) + " · 点击取消";
 
     private FormattedText Label(string text)
     {
@@ -310,6 +380,14 @@ public sealed class ToolOptionsLayer : FrameworkElement
 
         PanelChrome.DrawGlassPanel(dc, PanelRect, CornerRadius, Backdrop, new Size(ActualWidth, ActualHeight), _palette);
 
+        // 识别中整条栏只画这一行：参数这会儿改不了（改了也不会算进正在跑的那一次），
+        // 留着它们只会让人以为点了会有效果
+        if (Busy)
+        {
+            DrawBusyRow(dc);
+            return;
+        }
+
         double x = PanelRect.X + PadX;
         double y = PanelRect.Y + PadY;
         var groups = GroupsFor(ActiveTool);
@@ -319,13 +397,21 @@ public sealed class ToolOptionsLayer : FrameworkElement
             var group = groups[gi];
             if (gi > 0)
             {
-                DrawSeparator(dc, x + GroupGap / 2 - ChipGap);
-                x += GroupGap;
+                // 没有标签的那一组是「接着上一组排」的额外一格：只留普通格子间距，不画分隔线
+                if (group.Label is null) x += ChipGap;
+                else
+                {
+                    DrawSeparator(dc, x + GroupGap / 2 - ChipGap);
+                    x += GroupGap;
+                }
             }
 
-            var label = Label(group.Label);
-            dc.DrawText(label, new Point(x, PanelRect.Y + (PanelRect.Height - label.Height) / 2));
-            x += label.Width + LabelGap;
+            if (group.Label is { } labelText)
+            {
+                var label = Label(labelText);
+                dc.DrawText(label, new Point(x, PanelRect.Y + (PanelRect.Height - label.Height) / 2));
+                x += label.Width + LabelGap;
+            }
 
             if (group.Kind is not { } kind)
             {
@@ -343,7 +429,35 @@ public sealed class ToolOptionsLayer : FrameworkElement
             x -= ChipGap;
         }
 
+        // 换了工具时 _hitBoxes 里已经没有那一格了，但 _hovered 还停在旧值上 ——
+        // 不拦一下，气泡会浮在一排跟它没关系的参数上面
+        if (_hovered is not null && _hitBoxes.Exists(b => b.Hit.Kind == ToolOptionKind.SmartMosaic))
+            DrawTip(dc);
+
         if (PickerOpen) DrawPicker(dc);
+    }
+
+    /// <summary>
+    /// 悬停说明。位置口径跟主工具条上那些气泡一致：默认浮在面板上方，上面放不下就翻到下方。
+    /// </summary>
+    private void DrawTip(DrawingContext dc)
+    {
+        double ppd = VisualTreeHelper.GetDpi(this).PixelsPerDip;
+        var text = new FormattedText(SmartMosaicTip, CultureInfo.CurrentCulture, FlowDirection.LeftToRight,
+            Face, TipFontSize, _palette.TipText, ppd);
+
+        double w = text.Width + 16;
+        double h = text.Height + 9;
+        double x = Math.Clamp(_hoveredRect.X + (_hoveredRect.Width - w) / 2, 0, Math.Max(0, ActualWidth - w));
+
+        double y = PanelRect.Y - h - 7;
+        if (y < 0) y = Math.Min(PanelRect.Bottom + 7, Math.Max(0, ActualHeight - h));
+
+        // 描一圈边：浅色主题下气泡近乎全白，压在同样浅的截图上光靠投影分不出边界
+        var bubble = new Rect(x, y, w, h);
+        PanelChrome.DrawShadow(dc, bubble, 6, _palette);
+        dc.DrawRoundedRectangle(_palette.TipFill, _palette.PanelBorder, bubble, 6, 6);
+        dc.DrawText(text, new Point(x + 8, y + 4.5));
     }
 
     /// <summary>
@@ -378,6 +492,29 @@ public sealed class ToolOptionsLayer : FrameworkElement
             cy - readout.Height / 2));
     }
 
+    /// <summary>
+    /// 识别中的那一行：一个点亮的盾牌 + 当前阶段 + 「点击取消」。
+    ///
+    /// 整行都算命中区：等着的时候没人愿意去瞄准一格 26 像素的图标，
+    /// 而这一行上除了取消也没有别的可点。
+    /// </summary>
+    private void DrawBusyRow(DrawingContext dc)
+    {
+        double x = PanelRect.X + PadX;
+        double y = PanelRect.Y + PadY;
+
+        var chip = new Rect(x, y, ChipSize, ChipSize);
+        dc.DrawRoundedRectangle(_palette.AccentFill, _palette.AccentBorder, chip, 7, 7);
+        Icons.Draw(dc, Icons.ShieldCheck, chip, _palette.IconActive, 18);
+
+        var text = Label(BusyLine);
+        dc.DrawText(text, new Point(x + ChipSize + ChipGap,
+            PanelRect.Y + (PanelRect.Height - text.Height) / 2));
+
+        _hitBoxes.Add((new Rect(x, y, PanelRect.Width - PadX * 2, ChipSize),
+            new ToolOptionHit(ToolOptionKind.SmartMosaic, 0)));
+    }
+
     private void DrawSeparator(DrawingContext dc, double x)
         => dc.DrawRectangle(_palette.Separator, null,
             new Rect(Math.Round(x) + 0.5, PanelRect.Y + PadY + 4, 1, ChipSize - 8));
@@ -405,6 +542,12 @@ public sealed class ToolOptionsLayer : FrameworkElement
 
             case ToolOptionKind.Color when isPicker:
                 DrawPickerChip(dc, rect, active);
+                break;
+
+            case ToolOptionKind.SmartMosaic:
+                // 这一格不是「选中」而是「执行」，所以没有高亮态；悬停时给个底色，表示它能点
+                if (_hovered == hit) dc.DrawRoundedRectangle(_palette.Hover, null, rect, 7, 7);
+                Icons.Draw(dc, Icons.ShieldCheck, rect, ink, 18);
                 break;
 
             default:

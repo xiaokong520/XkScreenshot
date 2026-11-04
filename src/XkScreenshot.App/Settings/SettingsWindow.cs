@@ -551,7 +551,8 @@ public sealed class SettingsWindow : Window
             Card(Icons.Sliders, "识别方式",
                 "离线：文字、头像、名字全部本地识别。在线：把整张截图交给在线模型识别隐私区域"
                 + "（会发送图片，不需要本地模型），坐标由模型估算。", _privacyMode),
-            Card(Icons.Info, "邮箱", "截图时按 P 或点工具条上的盾牌，自动给下面打开的几类打上马赛克。"
+            Card(Icons.Info, "邮箱", "截图时按 P，或选中马赛克工具后点选项行里的盾牌，"
+                + "自动给下面打开的几类打上马赛克。"
                 + "文字识别用本地 PaddleOCR，要先在「识别 / 翻译」页下载模型。", _privacyEmail),
             Card(Icons.Info, "手机号", null, _privacyPhone),
             Card(Icons.Info, "身份证号", "只认校验码对得上的，订单号之类的长数字不会被误伤。", _privacyIdCard),

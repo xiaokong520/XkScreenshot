@@ -266,8 +266,6 @@ public sealed class OverlayWindow : Window
         _toolbarLayer.CanUndo = _session.Annotations.CanUndo;
         _toolbarLayer.CanRedo = _session.Annotations.CanRedo;
         _toolbarLayer.CanDelete = _session.SelectedAnnotation >= 0;
-        _toolbarLayer.Busy = _session.AutoMosaicBusy;
-        _toolbarLayer.BusyText = _session.AutoMosaicStatus;
 
         // 子工具栏跟着「选中的标注 / 当前工具」走，不是跟着工具走：
         // 选中一个画好的图形，调的就该是它的参数
@@ -280,6 +278,8 @@ public sealed class OverlayWindow : Window
         _toolOptionsLayer.Color = _session.Style.Stroke;
         _toolOptionsLayer.Hsv = _session.PickerHsv;
         _toolOptionsLayer.PickerOpen = _session.ColorPickerOpen;
+        _toolOptionsLayer.Busy = _session.AutoMosaicBusy;
+        _toolOptionsLayer.BusyText = _session.AutoMosaicStatus;
 
         if (visible)
         {
@@ -434,6 +434,10 @@ public sealed class OverlayWindow : Window
         UpdateCursorShape(pt);
         if (_toolbarLayer.UpdateHover(ToWindowDip(pt)))
             _toolbarLayer.Refresh();
+        // 子工具栏上只有智能打码那一格带悬停说明，但也要跟着光标收起 ——
+        // 否则鼠标移开之后气泡会一直挂在屏幕上
+        if (_toolOptionsLayer.UpdateHover(ToWindowDip(pt)))
+            _toolOptionsLayer.Refresh();
     }
 
     /// <summary>
@@ -592,6 +596,11 @@ public sealed class OverlayWindow : Window
             case ToolOptionKind.ColorPicker:
                 _session.ToggleColorPicker();
                 break;
+
+            case ToolOptionKind.SmartMosaic:
+                // 忙着的时候再点一次是取消，这条判断在 Session 里（和 P 走同一条路）
+                _session.AutoMosaic();
+                break;
         }
     }
 
@@ -626,7 +635,6 @@ public sealed class OverlayWindow : Window
             case ToolbarCommand.Scroll: _session.RequestScroll(); break;
             case ToolbarCommand.Ocr: _session.Confirm(CaptureAction.Ocr); break;
             case ToolbarCommand.Translate: _session.Confirm(CaptureAction.Translate); break;
-            case ToolbarCommand.AutoMosaic: _session.AutoMosaic(); break;
             case ToolbarCommand.Cancel: _session.Escape(); break;
         }
     }
