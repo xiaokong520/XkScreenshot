@@ -89,7 +89,7 @@ internal sealed class GifCaptureController
         };
         ticker.Tick += (_, _) =>
         {
-            _panel?.UpdateRecording(recorder.Elapsed, recorder.CapturedFrames);
+            _panel?.UpdateRecording(recorder.Elapsed);
 
             // 撞到时长/内存上限时抓帧线程会自己收工，没有人按停止 ——
             // 这里替它补上收尾，否则控制条会永远停在最后一帧上

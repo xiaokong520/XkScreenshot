@@ -174,9 +174,9 @@ public sealed class AppSettings
     public bool GifCaptureCursor { get; set; } = true;
 
     /// <summary>
-    /// 画质档位：原始尺寸/256 色、1024/64 色、720/32 色。
+    /// 画质档位：高质量（原尺寸/256 色）、标准（1024/64 色）、低质量（720/32 色）。
     ///
-    /// 默认「标准」而不是「原始」：GIF 的 LZW 对视频、照片几乎压不动，1080p 十秒就能到
+    /// 默认「标准」而不是「高质量」：GIF 的 LZW 对视频、照片几乎压不动，1080p 十秒就能到
     /// 十几兆，默认档先把尺寸和颜色各收一档，界面演示基本看不出差别。
     /// </summary>
     public GifQuality GifQuality { get; set; } = GifQuality.Balanced;

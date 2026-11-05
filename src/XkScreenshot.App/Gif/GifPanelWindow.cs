@@ -70,7 +70,7 @@ internal sealed class GifPanelWindow : Window
         ContentRendered += (_, _) => Place();
     }
 
-    public void UpdateRecording(TimeSpan elapsed, int frames) => _view.UpdateRecording(elapsed, frames);
+    public void UpdateRecording(TimeSpan elapsed) => _view.UpdateRecording(elapsed);
 
     public void ShowEncoding() => _view.ShowEncoding();
 

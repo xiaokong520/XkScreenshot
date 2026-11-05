@@ -80,14 +80,15 @@ public sealed class SettingsWindow : Window
     private static readonly int[] GifFpsChoices = [5, 8, 10, 15, 20, 25, 30];
 
     /// <summary>
-    /// 画质档位的显示名。括号里写清楚代价：用户选「小文件」时应该知道字会变糊、
-    /// 颜色会变少，而不是录完才发现看不清。
+    /// 画质档位的显示名。只留档名，不把尺寸和色数塞进下拉框 —— 那三个数念起来像参数表，
+    /// 真正需要比较的时候看下面的说明即可。代价是「低质量」听起来比实际更糟：它是 720 宽、
+    /// 32 色，发给聊天窗口够用，只是照片会有明显色带。
     /// </summary>
     private static readonly (GifQuality Quality, string Label)[] GifQualities =
     [
-        (GifQuality.Original, "原尺寸 · 256 色（质量优先）"),
-        (GifQuality.Balanced, "标准（最长边 1024 · 64 色）"),
-        (GifQuality.Small, "小文件（最长边 720 · 32 色）"),
+        (GifQuality.Original, "高质量"),
+        (GifQuality.Balanced, "标准"),
+        (GifQuality.Small, "低质量"),
     ];
 
     private readonly AppSettings _draft;
@@ -131,7 +132,7 @@ public sealed class SettingsWindow : Window
     private readonly ToggleButton _restorePins = new();
 
     // GIF 录制
-    private readonly ComboBox _gifQuality = new() { Width = 220 };
+    private readonly ComboBox _gifQuality = new() { Width = 168 };
     private readonly ComboBox _gifFps = new() { Width = 168 };
     private readonly TextBox _gifMaxSeconds = new() { Width = 96, MaxLength = 3 };
     private readonly ToggleButton _gifCursor = new();

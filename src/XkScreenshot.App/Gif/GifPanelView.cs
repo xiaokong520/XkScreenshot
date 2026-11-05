@@ -12,7 +12,7 @@ namespace XkScreenshot.App.Gif;
 /// <summary>
 /// 录制控制条的面板本体：**自绘**，和长截图控制条（<c>ScrollPanelView</c>）同一套画法。
 ///
-/// 内容从左到右是一块「状态」和一组「收工」：状态是呼吸的红点、已录时长、抓到多少帧；
+/// 内容从左到右是一块「状态」和一组「收工」：状态是呼吸的红点和已录时长；
 /// 收工是停止和取消。编码期间整条换成进度，只留一个取消 —— 那会儿已经停不下来了，
 /// 再摆一个停止按钮只会让人以为还能「提前收工」。
 ///
@@ -31,13 +31,16 @@ internal sealed class GifPanelView : FrameworkElement
     private const double ButtonRadius = 7;
 
     private const double TimeFontSize = 13.5;
-    private const double FramesFontSize = 11.5;
     private const double ProgressFontSize = 12.5;
 
     /// <summary>面板四周给投影留的空白，与 <see cref="PanelChrome.DrawShadow"/> 的最大扩张一致。</summary>
     public const double ShadowPad = 12;
 
-    private const double PanelWidth = 236;
+    /// <summary>
+    /// 只装得下「红点 + 00:00.0」和两个按钮：帧数是过程指标，录的时候没人盯着它数，
+    /// 倒让这条栏一直占着画面。宽度按最长的时间串（02:00.0）算，不随文字伸缩。
+    /// </summary>
+    private const double PanelWidth = 176;
     private const double PanelHeight = ButtonSize + PadY * 2;
 
     public static Size OuterSize => new(PanelWidth + ShadowPad * 2, PanelHeight + ShadowPad * 2);
@@ -57,7 +60,6 @@ internal sealed class GifPanelView : FrameworkElement
     private Item? _pressed;
 
     private TimeSpan _elapsed;
-    private int _frames;
     private bool _encoding;
     private double _progress;
 
@@ -73,10 +75,9 @@ internal sealed class GifPanelView : FrameworkElement
     /// <summary>悬停说明（局部 DIP 矩形 + 文字）。气泡塞不进这条窄条，由窗口另开一扇。</summary>
     public event Action<Rect, string>? TipChanged;
 
-    public void UpdateRecording(TimeSpan elapsed, int frames)
+    public void UpdateRecording(TimeSpan elapsed)
     {
         _elapsed = elapsed;
-        _frames = frames;
         InvalidateVisual();
     }
 
@@ -136,9 +137,6 @@ internal sealed class GifPanelView : FrameworkElement
 
         var time = Text(FormatTime(_elapsed), TimeFontSize, FontWeights.SemiBold, _palette.Text);
         dc.DrawText(time, new Point(left + 17, centerY - time.Height / 2));
-
-        var frames = Text($"· {_frames} 帧", FramesFontSize, FontWeights.Normal, _palette.TextMuted);
-        dc.DrawText(frames, new Point(left + 72, centerY - frames.Height / 2));
 
         // 分隔线落在「状态」和「收工」之间，与工具条那套分组画法一致
         double separatorX = panel.Right - PadX - ButtonSize * 2 - ButtonGap - GroupGap / 2;

@@ -878,9 +878,9 @@ public partial class App : Application
                 _ => string.Empty,
             };
 
-            string detail = $"{note}{result.Duration.TotalSeconds:0.0} 秒 · {result.Frames} 帧 · "
+            string detail = $"{note}{result.Duration.TotalSeconds:0.0} 秒 · "
                             + $"{result.Width}×{result.Height} · "
-                            + $"{result.Data.Length / 1024.0 / 1024.0:0.0} MB";
+                            + FormatSize(result.Data.Length);
 
             // 点一下就能在资源管理器里看到它 —— 文件名只有时间戳，不点到跟前很难找
             Toast.Show(_settings.ResolveDark(), "GIF 已保存", detail, result.Bounds,
@@ -890,6 +890,18 @@ public partial class App : Application
         {
             ShowWarning("GIF 保存失败：" + ex.Message);
         }
+    }
+
+    /// <summary>
+    /// 文件大小。不足 1 MB 时换 KB：一段几帧的小 GIF 写成「0.0 MB」等于没说，
+    /// 而「42 KB」一眼就知道它有多小。KB 也四舍五入到整千位，不会出现「1024 KB」。
+    /// </summary>
+    private static string FormatSize(long bytes)
+    {
+        if (bytes < 1024) return $"{bytes} B";
+
+        long kb = (long)Math.Round(bytes / 1024.0);
+        return kb < 1024 ? $"{kb} KB" : $"{kb / 1024.0:0.0} MB";
     }
 
     /// <summary>
