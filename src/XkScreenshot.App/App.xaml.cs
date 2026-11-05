@@ -728,6 +728,10 @@ public partial class App : Application
             var lines = await _ocrEngine.RecognizeAsync(image);
             var sourceText = string.Join(Environment.NewLine, lines.Select(l => l.Text));
 
+            // 认出来就先把原文摆上去：后面判语种、翻译还要一会儿，
+            // 这段时间窗口上只有一句「翻译中...」，而原文其实已经拿到了
+            window.ShowSource(sourceText);
+
             // 第二阶段：定语种。先判原文是什么，再据此列出翻得到的目标。
             // 在线引擎不报语种 —— 翻译那件事它整个交给了大模型 —— 但判语种本来就不依赖引擎，
             // 离线引擎多做的只是拿「装了哪些模型」在同种文字的几个候选之间消歧。
@@ -744,8 +748,7 @@ public partial class App : Application
             {
                 window.ShowResult(
                     $"检测到{catalog!.DisplayName(source)}，但没有装它的离线翻译模型。\n"
-                    + $"到「设置 → 识别 / 翻译 → 离线翻译语言」里下载{catalog.DisplayName(source)}即可。\n\n"
-                    + "───────── 识别到的原文 ─────────\n" + sourceText);
+                    + $"到「设置 → 识别 / 翻译 → 离线翻译语言」里下载{catalog.DisplayName(source)}即可。");
                 return;
             }
 

@@ -21,6 +21,7 @@ namespace XkScreenshot.App;
 /// 等异步处理完后调用 ShowResult() 填入文字。
 ///
 /// 翻译比识别多一步选目标语种，那部分挂在 SetupTargetLanguage() 里，不调就不显示。
+/// 翻译还会多一块「原文」：识别出来的文字单独摆在译文上面，由 ShowSource() 挂出来。
 /// </summary>
 public sealed class TextResultWindow : Window
 {
@@ -31,6 +32,18 @@ public sealed class TextResultWindow : Window
     private readonly Grid _loadingPanel;
     private readonly TextBlock _loadingLabel;
 
+    /// <summary>原文那一块：小标题 + 只读文本框。纯识别模式整个不显示。</summary>
+    private readonly Grid _sourcePane;
+    private readonly TextBox _sourceBox;
+    private readonly RowDefinition _sourceRow;
+
+    /// <summary>译文那块的小标题。挂了原文之后才露出来 —— 只有一栏时它只是废话。</summary>
+    private readonly TextBlock _resultHeader;
+
+    /// <summary>原文与译文之间的分隔条和那条细线（一起显隐）。</summary>
+    private readonly Border _splitterLine;
+    private readonly GridSplitter _rowSplitter;
+
     private readonly StackPanel _targetPanel;
     private readonly TextBlock _detectedLabel;
     private readonly ComboBox _targetBox;
@@ -38,7 +51,13 @@ public sealed class TextResultWindow : Window
     private readonly ToggleButton _pinBtn;
     private readonly Path _pinIcon;
 
-    private const string CopyLabel = "复制";
+    /// <summary>原文那一行占的高度权重：译文仍是 1.2，默认四六开，偏向要读的那一侧。</summary>
+    private const double SourceWeight = 0.8;
+
+    private const string DefaultCopyLabel = "复制";
+
+    /// <summary>复制按钮平时写什么。挂了原文之后变成「复制译文」——</summary>
+    private string _copyLabel = DefaultCopyLabel;
 
     /// <summary>「已复制」显示多久变回「复制」。</summary>
     private static readonly TimeSpan CopyFlash = TimeSpan.FromSeconds(1.5);
@@ -121,25 +140,17 @@ public sealed class TextResultWindow : Window
         _loadingPanel.Children.Add(loadingStack);
 
         // 右边：结果文字。
-        //
-        // 高度和垂直对齐要就地压掉：借来的那份输入框皮是照着设置界面里那种一行高的框
-        // 定的（定高 32、内容垂直居中），套到这个要铺满右半边的多行框上就成了一条缝。
-        _textBox = new TextBox
-        {
-            IsReadOnly = true,
-            TextWrapping = TextWrapping.Wrap,
-            AcceptsReturn = true,
-            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-            FontFamily = new FontFamily("Microsoft YaHei UI"),
-            FontSize = 14,
-            Height = double.NaN,
-            VerticalContentAlignment = VerticalAlignment.Stretch,
-            Padding = new Thickness(12),
-            BorderThickness = new Thickness(0),
-            Visibility = Visibility.Collapsed,
-        };
-        _textBox.SetResourceReference(BackgroundProperty, "CardBg");
-        _textBox.SetResourceReference(ForegroundProperty, "Text");
+        _textBox = NewTextBox();
+        _textBox.Visibility = Visibility.Collapsed;
+
+        // 翻译模式下译文上方还有一块原文，两块只读框上下叠着，中间一条可拖的分隔。
+        // 原文只是拿来对读的，默认比译文矮一点（四六开），嫌挤就拖那条分隔。
+        _sourceBox = NewTextBox();
+        _sourcePane = BuildPane(NewPaneHeader("原文"), _sourceBox);
+        _sourcePane.Visibility = Visibility.Collapsed;
+
+        _resultHeader = NewPaneHeader("译文");
+        _resultHeader.Visibility = Visibility.Collapsed;
 
         // 右上角：置顶开关。
         //
@@ -181,20 +192,58 @@ public sealed class TextResultWindow : Window
         rightPanel.SetResourceReference(Border.BackgroundProperty, "CardBg");
         rightPanel.SetResourceReference(Border.BorderBrushProperty, "CardBorder");
 
+        // 译文那一块：小标题 + 结果框（加载动画和结果文字在同一个格子里轮流上台）
+        var resultPane = BuildPane(_resultHeader, _loadingPanel, _textBox);
+
+        // 原文与译文之间那条可拖的分隔。
+        //
+        // 两个元素都直接挂在 rightStack 的这一行里、并列着叠（细线在下、分隔条在上），
+        // 不能为了「细线画在分隔条中间」再套一层 Grid：GridSplitter 只认**直接父级**里
+        // 的相邻两行，套一层之后它看到的是容器自己那一行，PreviousAndNext 就无处可改，
+        // 拖起来毫无反应（探针里量过：高度一个像素都不动）。
+        _splitterLine = new Border
+        {
+            Height = 1,
+            VerticalAlignment = VerticalAlignment.Center,
+            Visibility = Visibility.Collapsed,
+        };
+        _splitterLine.SetResourceReference(Border.BackgroundProperty, "CardBorder");
+
+        _rowSplitter = new GridSplitter
+        {
+            Height = 7,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            VerticalAlignment = VerticalAlignment.Center,
+            ResizeDirection = GridResizeDirection.Rows,
+            ResizeBehavior = GridResizeBehavior.PreviousAndNext,
+            Background = Brushes.Transparent,
+            Visibility = Visibility.Collapsed,
+        };
+
         // 置顶开关单占一行，不浮在文字上面：浮着的话右上角那几个字会被它盖掉，
         // 而那正好是结果的开头
         var rightStack = new Grid();
         rightStack.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        rightStack.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+        // 原文那行默认 0 高：折叠掉的元素照样占星号行的位置，光靠 Visibility 收不干净
+        _sourceRow = new RowDefinition { Height = new GridLength(0) };
+        rightStack.RowDefinitions.Add(_sourceRow);
+        rightStack.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        rightStack.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1.2, GridUnitType.Star) });
 
         Grid.SetRow(_pinBtn, 0);
         rightStack.Children.Add(_pinBtn);
 
-        Grid.SetRow(_loadingPanel, 1);
-        rightStack.Children.Add(_loadingPanel);
+        Grid.SetRow(_sourcePane, 1);
+        rightStack.Children.Add(_sourcePane);
 
-        Grid.SetRow(_textBox, 1);
-        rightStack.Children.Add(_textBox);
+        Grid.SetRow(_splitterLine, 2);
+        rightStack.Children.Add(_splitterLine);
+
+        Grid.SetRow(_rowSplitter, 2);
+        rightStack.Children.Add(_rowSplitter);
+
+        Grid.SetRow(resultPane, 3);
+        rightStack.Children.Add(resultPane);
         rightPanel.Child = rightStack;
 
         // GridSplitter 分隔左右
@@ -208,7 +257,7 @@ public sealed class TextResultWindow : Window
         // 底部按钮
         _copyBtn = new Button
         {
-            Content = CopyLabel,
+            Content = _copyLabel,
             MinWidth = 92,
             Margin = new Thickness(0, 0, 8, 0),
         };
@@ -368,9 +417,101 @@ public sealed class TextResultWindow : Window
         timer.Tick += (_, _) =>
         {
             timer.Stop();
-            _copyBtn.Content = CopyLabel;
+            _copyBtn.Content = _copyLabel;
         };
         return timer;
+    }
+
+    /// <summary>
+    /// 多行只读结果框。
+    ///
+    /// 高度要就地压掉：借来的那份输入框皮照着设置界面里一行高的框定了 Height=32，
+    /// 套到这个要铺满一栏的框上就成了一条缝。模板换成自己的，原因见
+    /// <see cref="BuildTextBoxTemplate"/>。
+    /// </summary>
+    private static TextBox NewTextBox()
+    {
+        var box = new TextBox
+        {
+            IsReadOnly = true,
+            TextWrapping = TextWrapping.Wrap,
+            AcceptsReturn = true,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            FontFamily = new FontFamily("Microsoft YaHei UI"),
+            FontSize = 14,
+            Height = double.NaN,
+            VerticalContentAlignment = VerticalAlignment.Stretch,
+            Padding = new Thickness(12),
+            BorderThickness = new Thickness(0),
+        };
+        box.SetResourceReference(BackgroundProperty, "CardBg");
+        box.SetResourceReference(ForegroundProperty, "Text");
+        box.Template = BuildTextBoxTemplate();
+        return box;
+    }
+
+    /// <summary>
+    /// 结果框自己的模板。
+    ///
+    /// 不复用设置界面那份输入框皮：它把 PART_ContentHost 钉成 VerticalAlignment=Center
+    /// （那是照着一行高的输入框定的），而 VerticalContentAlignment 在模板里被忽略 ——
+    /// 结果就是小标题下面空出一大块、正文浮在半当中。外观上两者本来也没别的差别：
+    /// 结果框无边框、底色和面板同色，那份模板的圆角、悬停、聚焦都用不上。
+    ///
+    /// 顺带把原模板写死的「滚动条永远不出现」放开：两栏并排时，哪一栏下面还有没有内容
+    /// 得能一眼看出来。滚动条本身走的是 SettingsTheme 里那条细的。
+    /// </summary>
+    private static ControlTemplate BuildTextBoxTemplate()
+    {
+        var border = new FrameworkElementFactory(typeof(Border));
+        border.SetValue(Border.BackgroundProperty, new TemplateBindingExtension(BackgroundProperty));
+        border.SetValue(Border.SnapsToDevicePixelsProperty, true);
+
+        var host = new FrameworkElementFactory(typeof(ScrollViewer), "PART_ContentHost");
+        host.SetValue(FrameworkElement.MarginProperty, new TemplateBindingExtension(PaddingProperty));
+        host.SetValue(ScrollViewer.FocusableProperty, false);
+        host.SetValue(
+            ScrollViewer.HorizontalScrollBarVisibilityProperty,
+            new TemplateBindingExtension(ScrollViewer.HorizontalScrollBarVisibilityProperty));
+        host.SetValue(
+            ScrollViewer.VerticalScrollBarVisibilityProperty,
+            new TemplateBindingExtension(ScrollViewer.VerticalScrollBarVisibilityProperty));
+
+        border.AppendChild(host);
+        return new ControlTemplate(typeof(TextBox)) { VisualTree = border };
+    }
+
+    /// <summary>「原文」/「译文」这类小标题，只交代这块是什么，不抢正文的注意力。</summary>
+    private static TextBlock NewPaneHeader(string text)
+    {
+        var label = new TextBlock
+        {
+            Text = text,
+            FontFamily = new FontFamily("Microsoft YaHei UI"),
+            FontSize = 12,
+            Margin = new Thickness(12, 8, 12, 2),
+        };
+        label.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondary");
+        return label;
+    }
+
+    /// <summary>一块内容 = 一行小标题 + 铺满剩余高度的正文。传多个正文时它们叠在同一格里。</summary>
+    private static Grid BuildPane(TextBlock header, params UIElement[] content)
+    {
+        var pane = new Grid();
+        pane.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        pane.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+
+        Grid.SetRow(header, 0);
+        pane.Children.Add(header);
+
+        foreach (var item in content)
+        {
+            Grid.SetRow(item, 1);
+            pane.Children.Add(item);
+        }
+
+        return pane;
     }
 
     /// <summary>更新加载提示文字（如从 "识别中..." 切到 "翻译中..."）。</summary>
@@ -383,6 +524,35 @@ public sealed class TextResultWindow : Window
             _loadingLabel.Text = text;
             _loadingPanel.Visibility = Visibility.Visible;
             _textBox.Visibility = Visibility.Collapsed;
+        });
+    }
+
+    /// <summary>
+    /// 翻译模式才调：把识别出来的原文单独摆一块在译文上面，从这一刻起窗口就是「原文 / 译文」
+    /// 上下两栏，纯识别的窗口一点也不变。
+    ///
+    /// 为什么不把原文塞进译文框里（原来「没装模型」那条分支就是这么干的）：那样两段文字
+    /// 混在同一个滚动区里，读到一半分不清哪句是识别、哪句是翻译；而且译文一换（切换目标
+    /// 语种）就得连原文一起重排。
+    /// </summary>
+    public void ShowSource(string text)
+    {
+        if (_closed) return;
+        Dispatcher.Invoke(() =>
+        {
+            if (_closed) return;
+
+            _sourceBox.Text = text;
+            _sourcePane.Visibility = Visibility.Visible;
+            // 折叠只收内容，星号行照样占着高度，所以行高也得一起给回来
+            _sourceRow.Height = new GridLength(SourceWeight, GridUnitType.Star);
+            _splitterLine.Visibility = Visibility.Visible;
+            _rowSplitter.Visibility = Visibility.Visible;
+            _resultHeader.Visibility = Visibility.Visible;
+
+            // 两块文字摆在一起之后「复制」就说不清是复制哪一块了，而它复制的一直是译文
+            _copyLabel = "复制译文";
+            if (Equals(_copyBtn.Content, DefaultCopyLabel)) _copyBtn.Content = _copyLabel;
         });
     }
 
