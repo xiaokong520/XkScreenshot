@@ -23,6 +23,8 @@ public enum ToolbarCommand
     Cancel,
     /// <summary>从当前选区开始长截图。</summary>
     Scroll,
+    /// <summary>把当前选区录成 GIF。</summary>
+    Record,
     /// <summary>识别选区内的文字。</summary>
     Ocr,
     /// <summary>识别并翻译选区内的文字。</summary>
@@ -77,6 +79,7 @@ public sealed class ToolbarLayer : FrameworkElement
         new(Icons.Undo, "撤销  Ctrl+Z", ToolKind.None, ToolbarCommand.Undo),
         new(Icons.Redo, "重做  Ctrl+Y", ToolKind.None, ToolbarCommand.Redo),
         new(Icons.Scroll, "长截图  L", ToolKind.None, ToolbarCommand.Scroll),
+        new(Icons.Record, "录制 GIF  R", ToolKind.None, ToolbarCommand.Record),
         new(Icons.ScanLine, "文字识别  O", ToolKind.None, ToolbarCommand.Ocr),
         new(Icons.Languages, "翻译  G", ToolKind.None, ToolbarCommand.Translate),
         new(Icons.Pin, "贴图  Ctrl+T", ToolKind.None, ToolbarCommand.Pin),

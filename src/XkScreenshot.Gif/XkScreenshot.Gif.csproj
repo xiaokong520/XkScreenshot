@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>XkScreenshot.Gif</RootNamespace>
+    <!-- 抓帧走 GDI、编码走裸 byte[]，不碰 WPF：整条录制与编码都能在后台线程上跑 -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\XkScreenshot.Core\XkScreenshot.Core.csproj" />
+    <!-- RegionGrabber（DIBSection + BitBlt + 光标）与长截图共用一份 -->
+    <ProjectReference Include="..\XkScreenshot.Capture\XkScreenshot.Capture.csproj" />
+  </ItemGroup>
+
+</Project>

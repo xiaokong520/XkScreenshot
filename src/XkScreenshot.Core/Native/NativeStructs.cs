@@ -94,6 +94,30 @@ public struct BITMAPINFO
     public uint bmiColors2;
 }
 
+/// <summary>当前鼠标指针。GIF 录制要把光标补进画面，见 RegionGrabber.DrawCursor。</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct CURSORINFO
+{
+    public uint cbSize;
+    public uint flags;
+    public IntPtr hCursor;
+    public POINT ptScreenPos;
+}
+
+/// <summary>
+/// 光标的位图与热点。xHotspot/yHotspot 是热点在指针位图里的位置 ——
+/// 画的时候要减掉，否则整只指针会偏出去一截。
+/// </summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct ICONINFO
+{
+    public int fIcon;
+    public uint xHotspot;
+    public uint yHotspot;
+    public IntPtr hbmMask;
+    public IntPtr hbmColor;
+}
+
 public enum MonitorDpiType
 {
     Effective = 0,

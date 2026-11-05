@@ -22,6 +22,22 @@ public static class NativeMethods
     [DllImport("user32.dll")]
     public static extern bool SetCursorPos(int x, int y);
 
+    [DllImport("user32.dll")]
+    public static extern bool GetCursorInfo(ref CURSORINFO pci);
+
+    public const uint CURSOR_SHOWING = 0x00000001;
+
+    /// <summary>借出光标的位图与热点。两张位图用完必须 DeleteObject，它不是我们建的。</summary>
+    [DllImport("user32.dll")]
+    public static extern bool GetIconInfo(IntPtr hIcon, out ICONINFO piconinfo);
+
+    /// <summary>把图标/光标画到 DC 上。cx/cy 传 0 = 用系统图标尺寸。</summary>
+    [DllImport("user32.dll")]
+    public static extern bool DrawIconEx(IntPtr hdc, int xLeft, int yTop, IntPtr hIcon,
+        int cxWidth, int cyWidth, uint istepIfAniCur, IntPtr hbrFlickerFreeDraw, uint diFlags);
+
+    public const uint DI_NORMAL = 0x0003;
+
     /// <summary>
     /// 某个鼠标键/键此刻按着没有（低 15 位），以及「上次问过之后按过没有」（最低位）。
     ///
@@ -172,6 +188,21 @@ public static class NativeMethods
 
     /// <summary>鼠标移动导致光标要重画时来这条。贴图用它换旋转光标（见 SetCursor）。</summary>
     public const int WM_SETCURSOR = 0x0020;
+
+    // ---------------- winmm ----------------
+
+    /// <summary>
+    /// 把系统定时器分辨率临时抬到 <paramref name="period"/> 毫秒。
+    ///
+    /// 默认的 15.6ms 粒度下，GIF 录制要的 20~30fps（33~50ms 一拍）会被 Sleep/WaitOne
+    /// 拉成 50~65ms，帧间隔忽长忽短 —— 播放出来就是「一顿一顿」。录制期间抬到 1ms，
+    /// 结束后必须 <see cref="TimeEndPeriod"/> 还回去，否则会一直抬高全系统的唤醒频率。
+    /// </summary>
+    [DllImport("winmm.dll", EntryPoint = "timeBeginPeriod")]
+    public static extern uint TimeBeginPeriod(uint period);
+
+    [DllImport("winmm.dll", EntryPoint = "timeEndPeriod")]
+    public static extern uint TimeEndPeriod(uint period);
 
     // ---------------- gdi32 ----------------
 

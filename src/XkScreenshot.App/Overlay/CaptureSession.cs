@@ -314,6 +314,9 @@ public sealed class CaptureSession : IDisposable
     /// <summary>用户请求从当前选区开始长截图。参数是选区在虚拟屏幕上的物理像素坐标。</summary>
     public event Action<PixelRect>? ScrollRequested;
 
+    /// <summary>用户请求把当前选区录成 GIF。参数同上。</summary>
+    public event Action<PixelRect>? GifRequested;
+
     /// <summary>需要跟用户说一句的事（智能打码没找到东西、在线识别失败之类），由外面弹成提示。</summary>
     public event Action<string>? Notice;
 
@@ -1354,6 +1357,19 @@ public sealed class CaptureSession : IDisposable
         if (Selection.IsEmpty) return;
         FlushStyleEdit();
         ScrollRequested?.Invoke(Selection);
+    }
+
+    /// <summary>
+    /// 开始 GIF 录制。选区为空时什么都不做，理由同长截图：不知道拍哪一块。
+    ///
+    /// 录制拍的是**实时屏幕**，不是手上这张冻屏 —— 所以这里不能像截图那样先用
+    /// <see cref="RenderResult"/> 裁一张图，覆盖层一关就交给抓帧线程去了。
+    /// </summary>
+    public void RequestGif()
+    {
+        if (Selection.IsEmpty) return;
+        FlushStyleEdit();
+        GifRequested?.Invoke(Selection);
     }
 
     /// <summary>

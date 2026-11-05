@@ -45,6 +45,7 @@
     <ProjectReference Include="..\XkScreenshot.Pin\XkScreenshot.Pin.csproj" />
     <ProjectReference Include="..\XkScreenshot.Annotate\XkScreenshot.Annotate.csproj" />
     <ProjectReference Include="..\XkScreenshot.Scroll\XkScreenshot.Scroll.csproj" />
+    <ProjectReference Include="..\XkScreenshot.Gif\XkScreenshot.Gif.csproj" />
     <ProjectReference Include="..\XkScreenshot.Ocr\XkScreenshot.Ocr.csproj" />
     <ProjectReference Include="..\XkScreenshot.Translate\XkScreenshot.Translate.csproj" />
     <ProjectReference Include="..\XkScreenshot.Privacy\XkScreenshot.Privacy.csproj" />

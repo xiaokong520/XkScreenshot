@@ -633,6 +633,7 @@ public sealed class OverlayWindow : Window
             case ToolbarCommand.Copy: _session.Confirm(CaptureAction.Copy); break;
             case ToolbarCommand.Save: _session.Confirm(CaptureAction.Save); break;
             case ToolbarCommand.Scroll: _session.RequestScroll(); break;
+            case ToolbarCommand.Record: _session.RequestGif(); break;
             case ToolbarCommand.Ocr: _session.Confirm(CaptureAction.Ocr); break;
             case ToolbarCommand.Translate: _session.Confirm(CaptureAction.Translate); break;
             case ToolbarCommand.Cancel: _session.Escape(); break;
@@ -861,6 +862,11 @@ public sealed class OverlayWindow : Window
 
             case Key.L:
                 _session.RequestScroll();
+                break;
+
+            // R = Record。G 已经给了翻译、O 给了识别，字母里就剩 R 既空着又说得通
+            case Key.R when !ctrl:
+                _session.RequestGif();
                 break;
 
             case Key.O:

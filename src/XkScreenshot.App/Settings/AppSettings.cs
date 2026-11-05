@@ -7,6 +7,7 @@ using XkScreenshot.App.Overlay;
 using XkScreenshot.Core.Hotkeys;
 using XkScreenshot.Core.Llm;
 using XkScreenshot.Core.Native;
+using XkScreenshot.Gif;
 using XkScreenshot.Privacy;
 using XkScreenshot.Scroll;
 
@@ -151,6 +152,35 @@ public sealed class AppSettings
     /// </summary>
     public bool RestorePins { get; set; }
 
+    // ---------------- GIF 录制 ----------------
+
+    /// <summary>
+    /// 录制帧率。默认 10：界面演示够顺，文件也不至于大到发不出去。
+    ///
+    /// 帧率几乎是文件大小的线性杠杆 —— 同样的操作录 20 帧/秒，体积大致是 10 帧/秒的两倍，
+    /// 而 GIF 的延迟以 10ms 为单位，20fps（5cs）再往上也没有更细的时间分辨率了。
+    /// </summary>
+    public int GifFps { get; set; } = GifOptions.DefaultFps;
+
+    /// <summary>一次录制最长多少秒。到点自动停并保存前面的部分。</summary>
+    public int GifMaxSeconds { get; set; } = GifOptions.DefaultMaxSeconds;
+
+    /// <summary>
+    /// 录制时把鼠标指针画进画面。
+    ///
+    /// 默认开：会去录 GIF 的场合多半是演示操作，看不见点在哪儿就少了一半信息。
+    /// 只录界面变化的人可以关掉，画面会干净一些。
+    /// </summary>
+    public bool GifCaptureCursor { get; set; } = true;
+
+    /// <summary>
+    /// 画质档位：原始尺寸/256 色、1024/64 色、720/32 色。
+    ///
+    /// 默认「标准」而不是「原始」：GIF 的 LZW 对视频、照片几乎压不动，1080p 十秒就能到
+    /// 十几兆，默认档先把尺寸和颜色各收一档，界面演示基本看不出差别。
+    /// </summary>
+    public GifQuality GifQuality { get; set; } = GifQuality.Balanced;
+
     public bool RunAtStartup { get; set; }
 
     /// <summary>以管理员权限运行。切换它要重启整个进程 —— 令牌在进程启动时就定死了。</summary>
@@ -217,6 +247,10 @@ public sealed class AppSettings
 
     /// <summary>长截图起手用的参数。Sanitized 会把越界的值拉回来。</summary>
     public ScrollOptions ToScrollOptions() => new(ScrollMode, ScrollMaxHeight);
+
+    /// <summary>录制起手用的参数。同样在出口处夹一次，手改坏配置不会录出一堆 0 帧。</summary>
+    public GifOptions ToGifOptions()
+        => new GifOptions(GifFps, GifMaxSeconds, GifCaptureCursor, GifQuality).Sanitized();
 
     /// <summary>
     /// 程序根目录。跟着程序走、又不该塞进 %APPDATA% 的东西都放它下面：

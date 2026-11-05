@@ -19,6 +19,7 @@ using Microsoft.Win32;
 using XkScreenshot.App.Overlay;
 using XkScreenshot.App.Ui;
 using XkScreenshot.Core.Hotkeys;
+using XkScreenshot.Gif;
 using XkScreenshot.Ocr;
 using XkScreenshot.Scroll;
 using XkScreenshot.Translate;
@@ -72,6 +73,23 @@ public sealed class SettingsWindow : Window
         (ThemeMode.Dark, "暗色"),
     ];
 
+    /// <summary>
+    /// 帧率可选的档。全都落在 GIF 延迟的整数刻度上：15fps = 6.7→7cs、30fps = 3cs……
+    /// 10 以下留给「只求看清步骤」的演示，20 以上给视频、拖拽这类连续动作。
+    /// </summary>
+    private static readonly int[] GifFpsChoices = [5, 8, 10, 15, 20, 25, 30];
+
+    /// <summary>
+    /// 画质档位的显示名。括号里写清楚代价：用户选「小文件」时应该知道字会变糊、
+    /// 颜色会变少，而不是录完才发现看不清。
+    /// </summary>
+    private static readonly (GifQuality Quality, string Label)[] GifQualities =
+    [
+        (GifQuality.Original, "原尺寸 · 256 色（质量优先）"),
+        (GifQuality.Balanced, "标准（最长边 1024 · 64 色）"),
+        (GifQuality.Small, "小文件（最长边 720 · 32 色）"),
+    ];
+
     private readonly AppSettings _draft;
 
     /// <summary>当前这一套皮是深是浅。改主题时当场重算，不是只读一次。</summary>
@@ -111,6 +129,12 @@ public sealed class SettingsWindow : Window
     private readonly ToggleButton _showHints = new();
     private readonly ToggleButton _elementMode = new();
     private readonly ToggleButton _restorePins = new();
+
+    // GIF 录制
+    private readonly ComboBox _gifQuality = new() { Width = 220 };
+    private readonly ComboBox _gifFps = new() { Width = 168 };
+    private readonly TextBox _gifMaxSeconds = new() { Width = 96, MaxLength = 3 };
+    private readonly ToggleButton _gifCursor = new();
 
     // 智能打码
     private readonly ToggleButton _privacyEmail = new();
@@ -330,10 +354,22 @@ public sealed class SettingsWindow : Window
             }
         };
 
+        _gifMaxSeconds.PreviewTextInput += (_, e) =>
+        {
+            foreach (char c in e.Text)
+            {
+                if (char.IsAsciiDigit(c)) continue;
+                e.Handled = true;
+                return;
+            }
+        };
+
         foreach (var (_, label) in Actions) _defaultAction.Items.Add(label);
         foreach (var (_, label) in Themes) _theme.Items.Add(label);
         _scrollMode.Items.Add("自动");
         _scrollMode.Items.Add("手动");
+        foreach (var (_, label) in GifQualities) _gifQuality.Items.Add(label);
+        foreach (int fps in GifFpsChoices) _gifFps.Items.Add($"{fps} 帧/秒");
         _ocrMode.Items.Add("离线");
         _ocrMode.Items.Add("在线");
         _privacyMode.Items.Add("离线");
@@ -344,6 +380,7 @@ public sealed class SettingsWindow : Window
         _apiProtocol.Items.Add("Anthropic");
         foreach (var toggle in new[]
                  { _saveWithoutPrompt, _showToasts, _showHints, _elementMode, _restorePins,
+                   _gifCursor,
                    _runAtStartup, _runAsAdmin,
                    _privacyEmail, _privacyPhone, _privacyIdCard, _privacyBankCard, _privacyIp,
                    _privacySecret, _privacyAddress, _privacyAvatar, _privacyName })
@@ -524,6 +561,13 @@ public sealed class SettingsWindow : Window
             Card(Icons.MoveVertical, "长截图最大高度", null,
                 Line(_scrollMaxHeight, Suffix("像素（1000–60000）"))));
 
+        // 单开一页而不是塞进「截图」：那一页已经有八张卡，再加几张就要滚动着找设置了
+        AddPage(Icons.Record, "录制",
+            Card(Icons.Record, "画质",null,_gifQuality),
+            Card(Icons.Record, "帧率",null,_gifFps),
+            Card(Icons.Timer,"最长时长", null,Line(_gifMaxSeconds, Suffix("秒（2–120）"))),
+            Card(Icons.Cursor,"录制光标",null,_gifCursor));
+
         AddPage(Icons.ScanLine, "识别 / 翻译",
             Card(Icons.ScanText, "OCR 工作模式",
                 "离线：PaddleOCR ONNX（约 17 MB）；在线：调用大模型识别。", _ocrMode),
@@ -549,23 +593,16 @@ public sealed class SettingsWindow : Window
 
         AddPage(Icons.ShieldCheck, "隐私打码",
             Card(Icons.Sliders, "识别方式",
-                "离线：文字、头像、名字全部本地识别。在线：把整张截图交给在线模型识别隐私区域"
-                + "（会发送图片，不需要本地模型），坐标由模型估算。", _privacyMode),
-            Card(Icons.Info, "邮箱", "截图时按 P，或选中马赛克工具后点选项行里的盾牌，"
-                + "自动给下面打开的几类打上马赛克。"
-                + "文字识别用本地 PaddleOCR，要先在「识别 / 翻译」页下载模型。", _privacyEmail),
+                "离线：使用本地OCR。在线：使用识别/翻译栏中配置的API", _privacyMode),
+            Card(Icons.Info,"邮箱", null, _privacyEmail),
             Card(Icons.Info, "手机号", null, _privacyPhone),
-            Card(Icons.Info, "身份证号", "只认校验码对得上的，订单号之类的长数字不会被误伤。", _privacyIdCard),
-            Card(Icons.Info, "银行卡号", "只认通过 Luhn 校验的。", _privacyBankCard),
-            Card(Icons.Info, "IP 地址", "内网和外网 IP 都会认；技术截图里要展示 IP 时记得先关掉。", _privacyIp),
-            Card(Icons.Key, "密钥与令牌", "API Key、GitHub Token、JWT，以及「密码：」后面的内容。", _privacySecret),
-            Card(Icons.Info, "详细地址",
-                "「省 + 市 + 区」再带街道门牌的邮寄地址，定位卡片、快递单上最常见。"
-                + "只说「在哪个区」的句子不会动。", _privacyAddress),
-            Card(Icons.Camera, "头像", "真人照片和列表里成排出现的头像。", _privacyAvatar),
-            Card(Icons.Type, "名字",
-                "「发件人：」这类标签后面、@ 后面、头像旁边的名字。"
-                + "离线模式还会用内置分词词库再找一遍正文里提到的人名，比如「跟李雷说一下」。", _privacyName));
+            Card(Icons.Info, "身份证号", null,_privacyIdCard),
+            Card(Icons.Info, "银行卡号",null,_privacyBankCard),
+            Card(Icons.Info, "IP 地址",null, _privacyIp),
+            Card(Icons.Key, "密钥与令牌",null, _privacySecret),
+            Card(Icons.Info, "详细地址",null, _privacyAddress),
+            Card(Icons.Camera, "头像",null, _privacyAvatar),
+            Card(Icons.Type, "名字", null,_privacyName));
 
         AddPage(Icons.Folder, "保存",
             StackedCard(Icons.Folder, "默认目录",
@@ -1284,6 +1321,12 @@ public sealed class SettingsWindow : Window
         _scrollMode.SelectedIndex = s.ScrollMode == ScrollMode.Auto ? 0 : 1;
         _scrollMaxHeight.Text = s.ScrollMaxHeight.ToString(CultureInfo.InvariantCulture);
 
+        _gifFps.SelectedIndex = GifFpsIndexFor(s.GifFps);
+        int quality = Array.FindIndex(GifQualities, q => q.Quality == s.GifQuality);
+        _gifQuality.SelectedIndex = quality < 0 ? 1 : quality;
+        _gifMaxSeconds.Text = s.GifMaxSeconds.ToString(CultureInfo.InvariantCulture);
+        _gifCursor.IsChecked = s.GifCaptureCursor;
+
         int index = Array.FindIndex(Actions, a => a.Action == s.DefaultAction);
         _defaultAction.SelectedIndex = index < 0 ? 0 : index;
     }
@@ -1921,7 +1964,31 @@ public sealed class SettingsWindow : Window
             _scrollMaxHeight.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out int maxHeight)
             ? Math.Clamp(maxHeight, 1000, 60000) : ScrollOptions.Standard.MaxHeight;
 
+        _draft.GifFps = GifFpsChoices[Math.Max(0, _gifFps.SelectedIndex)];
+        _draft.GifQuality = GifQualities[
+            Math.Clamp(_gifQuality.SelectedIndex, 0, GifQualities.Length - 1)].Quality;
+        _draft.GifMaxSeconds = int.TryParse(
+            _gifMaxSeconds.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out int gifSeconds)
+            ? Math.Clamp(gifSeconds, GifOptions.MinSeconds, GifOptions.MaxSecondsLimit)
+            : GifOptions.DefaultMaxSeconds;
+        _draft.GifCaptureCursor = _gifCursor.IsChecked == true;
+
         return true;
+    }
+
+    /// <summary>
+    /// 配置里的帧率落到最近的档位。手改过配置（比如写了 12）时，界面上得有一项是选中的 ——
+    /// 让下拉框空着，用户会以为这一项没设。
+    /// </summary>
+    private static int GifFpsIndexFor(int fps)
+    {
+        int best = 0;
+        for (int i = 1; i < GifFpsChoices.Length; i++)
+        {
+            if (Math.Abs(GifFpsChoices[i] - fps) < Math.Abs(GifFpsChoices[best] - fps)) best = i;
+        }
+
+        return best;
     }
 
     /// <summary>

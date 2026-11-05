@@ -1,4 +1,5 @@
 using System.Windows.Media.Imaging;
+using XkScreenshot.Capture;
 using XkScreenshot.Core.Geometry;
 using XkScreenshot.Core.Monitors;
 

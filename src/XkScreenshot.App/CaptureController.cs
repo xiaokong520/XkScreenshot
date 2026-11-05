@@ -6,11 +6,13 @@ using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
+using XkScreenshot.App.Gif;
 using XkScreenshot.App.Overlay;
 using XkScreenshot.App.Scroll;
 using XkScreenshot.App.Settings;
 using XkScreenshot.Capture;
 using XkScreenshot.Core.Geometry;
+using XkScreenshot.Gif;
 using XkScreenshot.Privacy;
 using XkScreenshot.Scroll;
 
@@ -25,6 +27,7 @@ public sealed class CaptureController
     private readonly IScreenCapture _capture;
     private readonly List<OverlayWindow> _overlays = [];
     private readonly ScrollCaptureController _scroll = new();
+    private readonly GifCaptureController _gif = new();
     private CaptureSession? _session;
 
     /// <summary>上一次装出来的历史画面。来回翻同两条时省掉反复解码。</summary>
@@ -43,9 +46,18 @@ public sealed class CaptureController
         _scroll.Completed += OnScrollCompleted;
         _scroll.Ended += OnScrollEnded;
         _scroll.Notice += message => Notice?.Invoke(message);
+        _gif.Completed += result =>
+        {
+            GifCaptured?.Invoke(result);
+            // 录制缓冲可能是几百兆，这一趟的引用到这儿才真正断掉
+            Runtime.MemoryTrim.Schedule();
+        };
+        _gif.Ended += () => Runtime.MemoryTrim.Schedule();
+        _gif.Notice += message => Notice?.Invoke(message);
+        _gif.Hint += message => Hint?.Invoke(message);
     }
 
-    public bool IsActive => _session is not null || _scroll.IsRunning;
+    public bool IsActive => _session is not null || _scroll.IsRunning || _gif.IsRunning;
 
     /// <summary>
     /// 下一次会话的起手状态。设置改完直接换掉这一份即可 ——
@@ -55,6 +67,9 @@ public sealed class CaptureController
 
     /// <summary>长截图的参数。设置界面改完直接换掉这一份。</summary>
     public ScrollOptions ScrollOptions { get; set; } = ScrollOptions.Standard;
+
+    /// <summary>GIF 录制的参数。设置界面改完直接换掉这一份。</summary>
+    public GifOptions GifOptions { get; set; } = GifOptions.Standard;
 
     /// <summary>智能打码用的检测器。PaddleOCR 没装时为 null，按 P 会提示先去下载。</summary>
     public PrivacyDetector? Privacy { get; set; }
@@ -70,6 +85,9 @@ public sealed class CaptureController
 
     /// <summary>截图完成，参数是烧好标注的成品与用户选的去向。</summary>
     public event Action<CaptureResult>? Captured;
+
+    /// <summary>一段 GIF 录完并编码好了。保存由 App 那层做 —— 这里只负责出画面。</summary>
+    public event Action<GifResult>? GifCaptured;
 
     /// <summary>有需要告知用户但不算错误的事情（比如长截图到上限停了）。</summary>
     public event Action<string>? Notice;
@@ -98,6 +116,7 @@ public sealed class CaptureController
         _session.Confirmed += OnConfirmed;
         _session.Cancelled += Cancel;
         _session.ScrollRequested += OnScrollRequested;
+        _session.GifRequested += OnGifRequested;
         _session.Notice += message => Hint?.Invoke(message);
 
         foreach (var frame in snapshot.Frames)
@@ -248,6 +267,21 @@ public sealed class CaptureController
     /// <summary>程序退出时把还开着的长截图收掉。</summary>
     public void AbortScroll() => _scroll.Abort();
 
+    /// <summary>
+    /// 覆盖层上按了 R 或点了录制按钮：关掉覆盖层，从这块选区开始抓实时画面。
+    ///
+    /// 和长截图不同，这里**不留冻屏**：GIF 要的是接下来的屏幕上发生了什么，
+    /// 手上这张冻屏只是框选时的参考图，录进去就成了开场先静止一帧。
+    /// </summary>
+    private void OnGifRequested(PixelRect region)
+    {
+        Teardown();
+        _gif.Start(region, GifOptions, Ui.Theme.IsDark(Defaults.Theme));
+    }
+
+    /// <summary>程序退出时把还开着的 GIF 录制收掉。</summary>
+    public void AbortGif() => _gif.Abort();
+
     private void Teardown()
     {
         if (_session is not null)
@@ -255,6 +289,7 @@ public sealed class CaptureController
             _session.Confirmed -= OnConfirmed;
             _session.Cancelled -= Cancel;
             _session.ScrollRequested -= OnScrollRequested;
+            _session.GifRequested -= OnGifRequested;
             _session.Dispose();
             _session = null;
         }

@@ -8,11 +8,13 @@ using System.Windows;
 using System.Windows.Media.Imaging;
 using XkScreenshot.Core.Geometry;
 using XkScreenshot.Core.Monitors;
+using XkScreenshot.App.Gif;
 using XkScreenshot.App.Output;
 using XkScreenshot.App.Overlay;
 using XkScreenshot.App.Settings;
 using XkScreenshot.App.Ui;
 using XkScreenshot.Capture;
+using XkScreenshot.Gif;
 using XkScreenshot.Pin;
 using XkScreenshot.Core.Hotkeys;
 using XkScreenshot.Core.Llm;
@@ -90,6 +92,7 @@ public partial class App : Application
 
         _controller = new CaptureController(new GdiScreenCapture());
         _controller.Captured += OnCaptured;
+        _controller.GifCaptured += OnGifCaptured;
         _controller.Notice += ShowWarning;
         _controller.Hint += message => ShowToast(message, kind: ToastKind.Info);
         _controller.History.Changed += SaveHistory;
@@ -266,6 +269,7 @@ public partial class App : Application
         {
             _controller.Defaults = _settings.ToCaptureDefaults();
             _controller.ScrollOptions = _settings.ToScrollOptions();
+            _controller.GifOptions = _settings.ToGifOptions();
             // 调小了就当场裁掉多余的那几条，不必等下一次截图
             _controller.History.Capacity = _settings.HistoryCapacity;
         }
@@ -853,6 +857,42 @@ public partial class App : Application
     }
 
     /// <summary>
+    /// 一段 GIF 录好了。直接存进「保存」页的目录 —— 录制不像截图，在保存对话框上点一下
+    /// 取消就等于把刚才那一分多钟扔了，所以这里不问「存哪儿」。
+    ///
+    /// 回执也不受「操作完成通知提示」开关管：截图复制完还能再截一张，而录制的成品
+    /// 除了这条回执，没有第二个地方能告诉用户文件叫什么、在哪儿。
+    /// </summary>
+    private void OnGifCaptured(GifResult result)
+    {
+        try
+        {
+            string path = GifSaver.SaveInto(
+                result.Data, _settings.ResolveSaveDirectory(), _settings.ResolveFileNamePrefix());
+
+            string note = result.StopReason switch
+            {
+                GifStopReason.DurationLimit => "到最长时长自动停止 · ",
+                GifStopReason.MemoryLimit => "画面变化太密，缓冲满了 · ",
+                GifStopReason.Failed => "录制中断，已保存前面的部分 · ",
+                _ => string.Empty,
+            };
+
+            string detail = $"{note}{result.Duration.TotalSeconds:0.0} 秒 · {result.Frames} 帧 · "
+                            + $"{result.Width}×{result.Height} · "
+                            + $"{result.Data.Length / 1024.0 / 1024.0:0.0} MB";
+
+            // 点一下就能在资源管理器里看到它 —— 文件名只有时间戳，不点到跟前很难找
+            Toast.Show(_settings.ResolveDark(), "GIF 已保存", detail, result.Bounds,
+                ToastKind.Done, path, () => ImageSaver.Reveal(path));
+        }
+        catch (Exception ex)
+        {
+            ShowWarning("GIF 保存失败：" + ex.Message);
+        }
+    }
+
+    /// <summary>
     /// 贴图右键复制走的是这一条。贴图窗口自己在屏幕上，可它的位置这一层拿不到，
     /// 所以回执只能退到屏幕角落 —— 从覆盖层截完图那条路上来的才贴得着选区。
     /// </summary>
@@ -933,6 +973,7 @@ public partial class App : Application
     protected override void OnExit(ExitEventArgs e)
     {
         _controller?.AbortScroll();
+        _controller?.AbortGif();
         if (!ReferenceEquals(_ocrEngine, _paddle)) (_ocrEngine as IDisposable)?.Dispose();
         _privacy?.Dispose();
         _paddle?.Dispose();

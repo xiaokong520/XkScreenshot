@@ -194,6 +194,18 @@ public static class Icons
         paths: ["M12 2v14", "m7 11 5 5 5-5", "M5 21h14"]);
 
     /// <summary>
+    /// GIF 录制：一个圆里套一个实心点。录音/录像设备上那颗红灯的通用画法。
+    /// 和 <see cref="Scroll"/> 一样是「另一种捕获方式」，在工具条上紧挨着它。
+    /// </summary>
+    public static readonly Geometry Record = Build(
+        ellipses: [(12, 12, 9, 9), (12, 12, 3.2, 3.2)]);
+
+    /// <summary>录制最长时长 —— 一只秒表。</summary>
+    public static readonly Geometry Timer = Build(
+        ellipses: [(12, 14, 8, 8)],
+        paths: ["M10 2h4", "M12 14v-4"]);
+
+    /// <summary>
     /// 自动滚动 —— 两枚下箭头。长截图控制条上表示「不用你管，它自己往下走」。
     ///
     /// 和 <see cref="Scroll"/> 区别开：那个是「进长截图」的入口，只有一枚箭头加底边，
