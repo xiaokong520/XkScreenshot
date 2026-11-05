@@ -99,8 +99,13 @@ public sealed class AppSettings
     /// <summary>留空 = 系统「图片」文件夹。存空串而不是当场解析，换了机器/换了用户配置才不会带着旧路径走。</summary>
     public string SaveDirectory { get; set; } = string.Empty;
 
-    /// <summary>true = 保存时直接落进 <see cref="SaveDirectory"/>，不弹对话框。</summary>
-    public bool SaveWithoutPrompt { get; set; }
+    /// <summary>
+    /// true = 保存时直接落进 <see cref="SaveDirectory"/>，不弹对话框。
+    ///
+    /// 默认开着：目录本来就在设置里定好了，按下「保存」再拦一个对话框问「存哪儿」，
+    /// 问的是同一件事，而截图时手里多半还有别的事在做。要每次自己挑地方的人把它关掉。
+    /// </summary>
+    public bool SaveWithoutPrompt { get; set; } = true;
 
     public string FileNamePrefix { get; set; } = DefaultPrefix;
 
