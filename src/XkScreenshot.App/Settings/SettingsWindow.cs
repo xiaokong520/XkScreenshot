@@ -521,7 +521,7 @@ public sealed class SettingsWindow : Window
             Card(Icons.Palette, "主题颜色",
                 "管设置界面、识别与翻译结果窗口，以及截图时的提示面板和工具栏。", _theme),
             Card(Icons.Bell, "操作完成通知提示",
-                "复制、保存之后在选区旁边闪一下回执，两秒自动消失。", _showToasts),
+                "复制、保存、智能打码之后在选区旁边闪一下回执，两秒自动消失。", _showToasts),
             Card(Icons.Pin, "重启后恢复贴图",
                 "下次打开程序时把上次贴着的图按原样摆回来 —— 位置、大小、旋转角度、透明度都照旧。"
                 + "和「开机自动启动」配合，重启电脑也一样。关掉它存档会被清掉。", _restorePins),

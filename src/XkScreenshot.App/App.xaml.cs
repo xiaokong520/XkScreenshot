@@ -95,6 +95,8 @@ public partial class App : Application
         _controller.GifCaptured += OnGifCaptured;
         _controller.Notice += ShowWarning;
         _controller.Hint += message => ShowToast(message, kind: ToastKind.Info);
+        // 智能打码的结果按「办成了」走：设置里关掉完成提示就不再弹
+        _controller.MaskDone += message => ShowToast(message);
         _controller.History.Changed += SaveHistory;
 
         _pins.CopyRequested += CopyImage;

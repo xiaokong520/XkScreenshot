@@ -317,8 +317,17 @@ public sealed class CaptureSession : IDisposable
     /// <summary>用户请求把当前选区录成 GIF。参数同上。</summary>
     public event Action<PixelRect>? GifRequested;
 
-    /// <summary>需要跟用户说一句的事（智能打码没找到东西、在线识别失败之类），由外面弹成提示。</summary>
+    /// <summary>需要跟用户说一句的事（智能打码跑不了、在线识别失败之类），由外面弹成提示。</summary>
     public event Action<string>? Notice;
+
+    /// <summary>
+    /// 智能打码办完了，报一句结果：打了几处、一处也没找到、或者这些区域早就打过了。
+    ///
+    /// 和 <see cref="Notice"/> 分开走：它属于「操作完成通知」那一类，设置里把回执关掉的人
+    /// 不该每按一次 P 还被弹一句「已打码 3 处」。而跑不了、失败那几句仍旧走 Notice ——
+    /// 那种时候一声不吭，用户只会以为按键没反应。
+    /// </summary>
+    public event Action<string>? MaskDone;
 
     public void UpdateCursor(PixelPoint cursor)
     {
@@ -753,10 +762,16 @@ public sealed class CaptureSession : IDisposable
                 }));
             }
 
-            if (report.Notice is not null) Notice?.Invoke(report.Notice);
-            else if (report.Regions.Count == 0) Notice?.Invoke("未识别到隐私信息，分享前请人工检查");
-            else if (fresh.Count == 0) Notice?.Invoke("识别出的隐私区域已全部打码");
-            else Notice?.Invoke($"已打码 {fresh.Count} 处，可撤销；分享前请检查是否有遗漏");
+            if (report.Notice is { } note)
+            {
+                // 结果类说明（在线模型一处也没标出来）算完成回执，受设置里那个开关管；
+                // 跑不了、跑失败的那几句必须说，否则用户会以为按键没反应
+                if (report.NoticeIsResult) MaskDone?.Invoke(note);
+                else Notice?.Invoke(note);
+            }
+            else if (report.Regions.Count == 0) MaskDone?.Invoke("未识别到隐私信息，分享前请人工检查");
+            else if (fresh.Count == 0) MaskDone?.Invoke("识别出的隐私区域已全部打码");
+            else MaskDone?.Invoke($"已打码 {fresh.Count} 处，可撤销；分享前请检查是否有遗漏");
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)

@@ -82,4 +82,10 @@ public sealed record PrivacyOptions(
 }
 
 /// <summary>一次检测的结果，外加一句需要让用户知道的话（比如在线识别失败退回了本地）。</summary>
-public sealed record PrivacyReport(IReadOnlyList<PrivacyRegion> Regions, string? Notice);
+/// <param name="NoticeIsResult">
+/// 这句话只是「跑完了，结果就是这样」（在线模型一处也没标出来），而不是「没跑成 / 跑得不全」。
+/// 两者在界面上是两种待遇：前者算完成回执，设置里关掉「操作完成通知提示」就不该弹；
+/// 后者是用户正等着的那句话，必须说。
+/// </param>
+public sealed record PrivacyReport(
+    IReadOnlyList<PrivacyRegion> Regions, string? Notice, bool NoticeIsResult = false);

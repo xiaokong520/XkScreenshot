@@ -98,6 +98,12 @@ public sealed class CaptureController
     /// </summary>
     public event Action<string>? Hint;
 
+    /// <summary>
+    /// 截图进行中办成了一件事，报一句结果（智能打码打了几处）。
+    /// 跟 <see cref="Hint"/> 分开：这一句属于「操作完成通知」，设置里可以关掉。
+    /// </summary>
+    public event Action<string>? MaskDone;
+
     public void Start()
     {
         if (IsActive) return;
@@ -118,6 +124,7 @@ public sealed class CaptureController
         _session.ScrollRequested += OnScrollRequested;
         _session.GifRequested += OnGifRequested;
         _session.Notice += message => Hint?.Invoke(message);
+        _session.MaskDone += message => MaskDone?.Invoke(message);
 
         foreach (var frame in snapshot.Frames)
         {

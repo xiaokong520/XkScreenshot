@@ -69,7 +69,8 @@ public sealed class PrivacyDetector : IDisposable
             ct.ThrowIfCancellationRequested();
 
             if (regions.Count == 0)
-                return new PrivacyReport([], "在线模型没有标出隐私区域，分享前请人工检查");
+                return new PrivacyReport(
+                    [], "在线模型没有标出隐私区域，分享前请人工检查", NoticeIsResult: true);
 
             return new PrivacyReport(Merge(regions, pixels.Width, pixels.Height, ct), null);
         }
